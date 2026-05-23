@@ -102,11 +102,12 @@ contract PitchTerminalAccess is Ownable2Step, ReentrancyGuard {
     /// @param _treasury Recipient of access payments. Must be non-zero. Immutable.
     /// @param _price    Initial access price, in PITCH wei. Must satisfy
     ///                  `0 < _price <= MAX_PRICE`.
-    /// @param _owner    Initial owner (Ownable2Step). Must be non-zero.
+    /// @param _owner    Initial owner (Ownable2Step). Non-zero check delegated to
+    ///                  OpenZeppelin `Ownable` which reverts with
+    ///                  `OwnableInvalidOwner(address(0))` before our body runs.
     constructor(IERC20 _pitch, address _treasury, uint256 _price, address _owner) Ownable(_owner) {
         if (address(_pitch) == address(0)) revert ZeroAddress();
         if (_treasury == address(0)) revert ZeroAddress();
-        if (_owner == address(0)) revert ZeroAddress();
         if (_price == 0 || _price > MAX_PRICE) revert InvalidPrice();
 
         PITCH = _pitch;
