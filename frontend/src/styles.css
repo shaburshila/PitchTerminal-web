@@ -1,0 +1,416 @@
+/* PitchTerminal-web — base styles (dark theme, desktop-first). */
+
+:root {
+  --bg: #0e1117;
+  --bg-elev-1: #161b22;
+  --bg-elev-2: #1c2230;
+  --border: #2a3140;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #3a7bff; /* deeper than 4f8cff — gives white text 4.5:1 contrast (WCAG AA) */
+  --accent-hover: #5a92ff;
+  --focus-ring: #6ea0ff;
+  --danger: #ff5c5c;
+  --success: #4caf6e;
+
+  --header-h: 56px;
+  --banner-h: 40px;
+  --footer-h: 32px;
+  --sidebar-w: 260px;
+  --right-w: 320px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  --font-stack:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell,
+    'Helvetica Neue', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-stack);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Shell ---------------------------------------------------------------- */
+
+.pt-shell {
+  display: grid;
+  grid-template-rows: var(--header-h) auto 1fr var(--footer-h);
+  /* `dvh` honors mobile browser URL-bar changes; falls back to vh
+     on older Safari. */
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+}
+
+/* Header --------------------------------------------------------------- */
+
+.pt-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.pt-header__left {
+  justify-self: start;
+}
+
+.pt-header__center {
+  justify-self: center;
+}
+
+.pt-header__right {
+  justify-self: end;
+}
+
+.pt-header__logo {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.4px;
+  color: var(--text);
+}
+
+.pt-net-badge {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+/* Banner --------------------------------------------------------------- */
+
+.pt-banner {
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  height: var(--banner-h);
+}
+
+.pt-banner:empty {
+  /* When empty (premium / no message), collapse the row entirely so the
+     grid doesn't reserve dead space. F0.13 populates the banner and the
+     row springs back to its --banner-h height. */
+  display: none;
+}
+
+/* Main 3-column grid --------------------------------------------------- */
+
+.pt-main {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr var(--right-w);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pt-sidebar,
+.pt-center,
+.pt-right,
+.pt-profile {
+  min-height: 0;
+  overflow: auto;
+}
+
+.pt-sidebar {
+  background: var(--bg-elev-1);
+  border-right: 1px solid var(--border);
+}
+
+.pt-center {
+  background: var(--bg);
+}
+
+.pt-right {
+  background: var(--bg-elev-1);
+  border-left: 1px solid var(--border);
+}
+
+.pt-profile {
+  background: var(--bg);
+  display: none;
+}
+
+/* Mode toggling -------------------------------------------------------- */
+
+body.mode-profile .pt-main {
+  grid-template-columns: 1fr;
+}
+
+body.mode-profile .pt-sidebar,
+body.mode-profile .pt-center,
+body.mode-profile .pt-right {
+  display: none;
+}
+
+body.mode-profile .pt-profile {
+  display: block;
+}
+
+body.mode-dashboard .pt-profile {
+  display: none;
+}
+
+/* Footer --------------------------------------------------------------- */
+
+.pt-footer {
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pt-footer:empty {
+  /* Same logic as banner — collapse until content is added later. */
+  display: none;
+}
+
+/* Buttons -------------------------------------------------------------- */
+
+.pt-btn {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    outline-color 120ms ease;
+}
+
+.pt-btn:hover {
+  background: var(--bg-elev-1);
+  border-color: var(--accent);
+}
+
+/* WCAG 2.4.7 — keyboard focus visibility. Two-pixel ring stays clear of
+   the button border, and `outline-offset` ensures it doesn't merge with
+   the existing border on dark surfaces. */
+.pt-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pt-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.pt-btn--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* Degrade on narrow viewports — keep usable, not pretty. */
+@media (max-width: 1024px) {
+  .pt-main {
+    grid-template-columns: 200px 1fr 260px;
+  }
+}
+
+@media (max-width: 768px) {
+  .pt-main {
+    grid-template-columns: 1fr;
+  }
+  .pt-sidebar,
+  .pt-right {
+    display: none;
+  }
+}
+
+/* Sidebar token lists (F0.5) ------------------------------------------- */
+
+.pt-sidebar__inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pt-sidebar__tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.pt-sidebar__tab {
+  cursor: pointer;
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.pt-sidebar__tab:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.pt-sidebar__tab[aria-selected='true'] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.pt-sidebar__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pt-sidebar__filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 50px; /* tabs row height */
+  z-index: 1;
+}
+
+.pt-sidebar__search,
+.pt-sidebar__role,
+.pt-sidebar__period {
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.pt-sidebar__search:focus-visible,
+.pt-sidebar__role:focus-visible,
+.pt-sidebar__period:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pt-sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pt-sidebar__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'symbol price'
+    'meta   change';
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pt-sidebar__row:hover {
+  background: var(--bg-elev-2);
+}
+
+.pt-sidebar__row[aria-selected='true'] {
+  background: var(--bg-elev-2);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.pt-sidebar__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.pt-sidebar__row .symbol {
+  grid-area: symbol;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pt-sidebar__row .meta {
+  grid-area: meta;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pt-sidebar__row .price {
+  grid-area: price;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  text-align: right;
+}
+
+.pt-sidebar__row .change {
+  grid-area: change;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.pt-sidebar__row .change.positive {
+  color: var(--success);
+}
+
+.pt-sidebar__row .change.negative {
+  color: var(--danger);
+}
+
+.pt-sidebar__empty {
+  padding: 16px 12px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 13px;
+}
