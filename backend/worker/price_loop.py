@@ -25,6 +25,7 @@ pad (no dynamic types), so we can build the calldata by hand without
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -37,7 +38,7 @@ from shared.eth import multicall3_aggregate
 from shared.log import get_logger
 from shared.notify import notify
 from shared.price import market_price
-from worker import _w3
+from worker import _w3, operator_alerts
 
 # Cross-tick in-memory snapshot for delta detection. Worker is single-process,
 # so a module-level dict is sufficient (and avoids a DB round-trip per tick to
@@ -46,6 +47,11 @@ from worker import _w3
 # treated as "changed", which is fine (the first NOTIFY just announces the
 # whole snapshot to any subscribers that came in earlier).
 _PREV_PRICES: dict[str, tuple[int, int]] = {}
+
+# Wall-clock (unix seconds) of the most recent successful price tick. 0 means
+# "never updated"; operator_alerts.record_price_stale ignores 0 to avoid
+# alerting on a cold worker. Updated only when we actually wrote market_state.
+_LAST_PRICE_UPDATE_TS: float = 0.0
 
 log = get_logger("worker.price_loop")
 
@@ -282,6 +288,7 @@ def _upsert_market_state(
 def tick() -> None:
     """One refresh of the entire ``market_state`` table."""
 
+    global _LAST_PRICE_UPDATE_TS
     try:
         tokens = _load_tokens()
         if not tokens:
@@ -381,8 +388,20 @@ def tick() -> None:
                 notify("pt_prices", json.dumps(changed[i : i + CHUNK]))
 
         log.info("price_loop.tick", updated=updated, changed=len(changed))
+        if updated > 0:
+            _LAST_PRICE_UPDATE_TS = time.time()
+            operator_alerts.record_price_fresh()
+        else:
+            # No rows updated this tick (no eligible tokens at all is handled
+            # by the early returns above — reaching here means we ran calls
+            # but nothing landed in market_state). Check staleness if we've
+            # successfully updated at some point in the past.
+            operator_alerts.record_price_stale(time.time(), _LAST_PRICE_UPDATE_TS)
+        operator_alerts.record_tick_success("price_loop")
     except Exception:
         log.exception("price_loop.tick_failed")
+        operator_alerts.record_tick_failure("price_loop")
+        operator_alerts.record_price_stale(time.time(), _LAST_PRICE_UPDATE_TS)
 
 
 __all__ = ["tick"]

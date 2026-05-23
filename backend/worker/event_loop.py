@@ -27,7 +27,7 @@ from shared.db import get_conn
 from shared.events import scan_logs
 from shared.log import get_logger
 from shared.notify import notify
-from worker import _w3, state
+from worker import _w3, operator_alerts, state
 
 log = get_logger("worker.event_loop")
 
@@ -176,8 +176,10 @@ def tick() -> None:
             )
 
         state.set_int_key("last_scanned_block", head)
+        operator_alerts.record_tick_success("event_loop")
     except Exception:
         log.exception("event_loop.tick_failed")
+        operator_alerts.record_tick_failure("event_loop")
 
 
 __all__ = ["tick"]

@@ -4,16 +4,38 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import patch
 
 import psycopg
 import pytest
 
 from app import create_app
+from shared import access as access_mod
 from shared import jwt as jwt_mod
 
 _COUNTRY = "0x" + "11" * 20
 _PLAYER = "0x" + "22" * 20
 _WALLET = "0x" + "ab" * 20
+_CONTRACT = "0x" + "ee" * 20
+
+
+@contextmanager
+def _premium(*, has_access: bool):
+    """Force ``is_premium`` to return ``has_access`` without touching RPC.
+
+    Replaces the legacy ``PREMIUM_STUB_BYPASS`` env switch — see B0.12.
+    """
+
+    access_mod.reset_cache()
+    with (
+        patch.object(access_mod, "_get_contract_address", return_value=_CONTRACT),
+        patch.object(access_mod, "_rpc_has_access", return_value=has_access),
+    ):
+        try:
+            yield
+        finally:
+            access_mod.reset_cache()
 
 
 @pytest.fixture()
@@ -102,23 +124,23 @@ class TestAccessControl:
         assert resp.status_code == 401
         assert resp.get_json()["code"] == "auth.unauthenticated"
 
-    def test_authed_but_no_premium_returns_402(self, app, monkeypatch) -> None:
-        monkeypatch.delenv("PREMIUM_STUB_BYPASS", raising=False)
+    def test_authed_but_no_premium_returns_402(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get("/api/v1/profile")
+        with _premium(has_access=False):
+            resp = client.get("/api/v1/profile")
         assert resp.status_code == 402
         assert resp.get_json()["code"] == "access.payment_required"
 
 
 class TestEmptyProfile:
-    """Authed + bypass but the wallet has zero trades."""
+    """Authed + premium granted but the wallet has zero trades."""
 
-    def test_empty_envelope(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_empty_envelope(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get("/api/v1/profile")
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
         assert resp.status_code == 200
         body = resp.get_json()
         # Top-level keys per spec §6.1.
@@ -146,8 +168,7 @@ class TestEmptyProfile:
 class TestProfileAggregates:
     """Wallet has activity on both a player and a country token."""
 
-    def test_open_position_and_realized(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_open_position_and_realized(self, app) -> None:
         # On _PLAYER: buy 2, sell 1 (held: 1). On _COUNTRY: buy 5 (held: 5).
         _insert_event(100, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 2 * 10**17)
         _insert_event(101, 0, _PLAYER, _WALLET, "sell", 3 * 10**18, 10**18, 10**17)
@@ -155,7 +176,8 @@ class TestProfileAggregates:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get("/api/v1/profile")
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
         assert resp.status_code == 200
         body = resp.get_json()
 
@@ -170,8 +192,7 @@ class TestProfileAggregates:
         share_sum = sum(p["sharePct"] for p in body["positions"])
         assert share_sum == pytest.approx(100.0, abs=0.2)
 
-    def test_trades_pagination(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_trades_pagination(self, app) -> None:
         # Insert 5 wallet trades; request limit=2 → expect nextCursor + items=2.
         for i in range(5):
             _insert_event(
@@ -180,17 +201,18 @@ class TestProfileAggregates:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get("/api/v1/profile?tradesLimit=2")
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert len(body["trades"]["items"]) == 2
-        assert body["trades"]["limit"] == 2
-        assert body["trades"]["nextCursor"] is not None
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile?tradesLimit=2")
+            assert resp.status_code == 200
+            body = resp.get_json()
+            assert len(body["trades"]["items"]) == 2
+            assert body["trades"]["limit"] == 2
+            assert body["trades"]["nextCursor"] is not None
 
-        # Follow the cursor — should yield the next 2.
-        resp2 = client.get(
-            f"/api/v1/profile?tradesLimit=2&tradesCursor={body['trades']['nextCursor']}"
-        )
+            # Follow the cursor — should yield the next 2.
+            resp2 = client.get(
+                f"/api/v1/profile?tradesLimit=2&tradesCursor={body['trades']['nextCursor']}"
+            )
         body2 = resp2.get_json()
         assert len(body2["trades"]["items"]) == 2
         # Returned in DESC order; second page's first item must be older than the first
@@ -200,10 +222,10 @@ class TestProfileAggregates:
             < body["trades"]["items"][-1]["timestamp"]
         )
 
-    def test_bad_cursor_returns_400(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_bad_cursor_returns_400(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get("/api/v1/profile?tradesCursor=!!!bogus!!!")
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile?tradesCursor=!!!bogus!!!")
         assert resp.status_code == 400
         assert resp.get_json()["code"] == "validation.bad_request"

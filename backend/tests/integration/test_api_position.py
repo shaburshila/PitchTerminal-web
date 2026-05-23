@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import patch
 
 import psycopg
 import pytest
 
 from app import create_app
+from shared import access as access_mod
 from shared import jwt as jwt_mod
 
 # Test fixtures: a self-sufficient country token and a player under it.
@@ -16,6 +19,25 @@ _COUNTRY = "0x" + "11" * 20
 _PLAYER = "0x" + "22" * 20
 _WALLET = "0x" + "ab" * 20
 _OTHER = "0x" + "cd" * 20
+_CONTRACT = "0x" + "ee" * 20
+
+
+@contextmanager
+def _premium(*, has_access: bool):
+    """Force ``is_premium`` to return ``has_access`` without touching RPC.
+
+    Replaces the legacy ``PREMIUM_STUB_BYPASS`` env switch — see B0.12.
+    """
+
+    access_mod.reset_cache()
+    with (
+        patch.object(access_mod, "_get_contract_address", return_value=_CONTRACT),
+        patch.object(access_mod, "_rpc_has_access", return_value=has_access),
+    ):
+        try:
+            yield
+        finally:
+            access_mod.reset_cache()
 
 
 @pytest.fixture()
@@ -92,47 +114,47 @@ def _insert_event(
 
 
 class TestAccessControl:
-    """Auth + premium gate (using the stub) — covers 401 and 402 branches."""
+    """Auth + premium gate — covers 401 and 402 branches."""
 
     def test_no_cookie_returns_401(self, app) -> None:
         resp = app.test_client().get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 401
         assert resp.get_json()["code"] == "auth.unauthenticated"
 
-    def test_authed_but_no_premium_returns_402(self, app, monkeypatch) -> None:
-        monkeypatch.delenv("PREMIUM_STUB_BYPASS", raising=False)
+    def test_authed_but_no_premium_returns_402(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
+        with _premium(has_access=False):
+            resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 402
         body = resp.get_json()
         assert body["code"] == "access.payment_required"
 
-    def test_premium_bypass_returns_200(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_premium_granted_returns_200(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 200
 
 
 class TestEnvelope:
     """Shape of the response under different activity states."""
 
-    def test_unknown_token_404(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_unknown_token_404(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
         unknown = "0x" + "00" * 20
-        resp = client.get(f"/api/v1/tokens/{unknown}/position")
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/tokens/{unknown}/position")
         assert resp.status_code == 404
         assert resp.get_json()["code"] == "tokens.unknown"
 
-    def test_no_activity_returns_inactive_block(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_no_activity_returns_inactive_block(self, app) -> None:
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 200
         body = resp.get_json()
         assert body == {
@@ -141,8 +163,7 @@ class TestEnvelope:
             "hasActivity": False,
         }
 
-    def test_with_activity_returns_full_block(self, app, monkeypatch) -> None:
-        monkeypatch.setenv("PREMIUM_STUB_BYPASS", "1")
+    def test_with_activity_returns_full_block(self, app) -> None:
         # Buy 1 token for 1 base (with 0.05 fee), sell 0.5 tokens for 0.6 base.
         _insert_event(100, 0, _PLAYER, _WALLET, "buy", 10**18, 10**18, 5 * 10**16)
         _insert_event(101, 0, _PLAYER, _WALLET, "sell", 6 * 10**17, 5 * 10**17, 3 * 10**16)
@@ -151,7 +172,8 @@ class TestEnvelope:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 200
         body = resp.get_json()
         assert body["configured"] is True

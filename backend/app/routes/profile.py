@@ -26,9 +26,9 @@ from typing import Any
 
 from flask import Blueprint, g, jsonify, request
 
+from app.deps import require_premium
 from app.errors import abort_with_problem
 from app.pagination import clamp_limit, decode_cursor, encode_cursor
-from app.routes._premium_stub import require_premium_stub
 from shared.db import fetch_all
 from shared.price import to_display_units
 from shared.types import Event
@@ -251,7 +251,7 @@ def _build_trade_item(ev: Event, meta: dict[str, Any]) -> dict[str, Any]:
 
 
 @bp.get("/api/v1/profile")
-@require_premium_stub
+@require_premium
 def get_profile() -> Any:
     """Portfolio-wide view for the authenticated wallet (spec §6.1)."""
 

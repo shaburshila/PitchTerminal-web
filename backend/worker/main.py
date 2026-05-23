@@ -30,6 +30,7 @@ from worker import (
     backfill,
     event_loop,
     nonces,
+    operator_alerts,
     price_loop,
     seed_tokens,
 )
@@ -73,8 +74,10 @@ def run() -> None:
     except Exception:
         log.exception("worker.seed_tokens_failed")
 
+    backfill_complete = False
     try:
         backfill.run_if_needed()
+        backfill_complete = True
     except Exception:
         log.exception("worker.backfill_failed")
 
@@ -82,6 +85,11 @@ def run() -> None:
         access_bootstrap.run_if_needed()
     except Exception:
         log.exception("worker.access_bootstrap_failed")
+
+    try:
+        operator_alerts.announce_worker_start(backfill_complete=backfill_complete)
+    except Exception:
+        log.exception("worker.boot_alert_failed")
 
     log.info("worker.loop_begin", tick_interval_sec=TICK_INTERVAL_SEC)
     while not _shutdown_requested:

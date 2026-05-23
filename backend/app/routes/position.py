@@ -17,8 +17,8 @@ from typing import Any
 
 from flask import Blueprint, g, jsonify
 
+from app.deps import require_premium
 from app.errors import abort_with_problem
-from app.routes._premium_stub import require_premium_stub
 from shared.db import fetch_all, fetch_one
 from shared.pnl import wallet_position
 from shared.types import Event
@@ -179,12 +179,12 @@ def _build_my_wallet(token: str, wallet: str) -> dict[str, Any]:
 
 
 @bp.get("/api/v1/tokens/<token>/position")
-@require_premium_stub
+@require_premium
 def get_position(token: str) -> Any:
     """Per-token ``myWallet`` block for the authenticated session (spec §4.4)."""
 
     addr = _normalize_token_or_404(token)
-    wallet = g.address  # set by require_auth via require_premium_stub
+    wallet = g.address  # set by require_auth via require_premium
     body = _build_my_wallet(addr, wallet)
     return jsonify(body)
 
