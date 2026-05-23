@@ -11,6 +11,7 @@ import { onAccountChange } from './wallet.js';
 import { getConfig, ApiError, getAccess } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
+import { mountProfile } from './profile.js';
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -46,6 +47,26 @@ function bootstrap() {
     },
   });
 
+  // F0.15: Profile view is mounted lazily on first "View Profile" click and
+  // re-loaded on subsequent activations. Clicking a token inside profile
+  // switches back to the dashboard with that token selected.
+  let profileHandle = null;
+  function activateProfile() {
+    if (profileHandle) {
+      profileHandle.reload();
+    } else {
+      profileHandle = mountProfile(layout.profile, {
+        onTokenSelect: (token) => {
+          if (!token?.address) return;
+          layout.setMode('dashboard');
+          chart.setToken(token);
+          bottom.setToken(token.address);
+        },
+      });
+    }
+    layout.setMode('profile');
+  }
+
   // F0.9/F0.10: header wallet area. We need `/config` for the WC projectId
   // before mounting so the picker shows/hides the WC entry deterministically.
   // If `/config` fails, fall back to injected-only.
@@ -67,7 +88,7 @@ function bootstrap() {
         }
         mountWalletChip(walletArea, {
           wcProjectId,
-          onViewProfile: () => layout.setMode('profile'),
+          onViewProfile: activateProfile,
         });
       });
   }

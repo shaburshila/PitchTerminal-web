@@ -221,6 +221,38 @@ export function getRef(code) {
   return apiFetch(`/ref/${encodeURIComponent(code)}`);
 }
 
+/**
+ * GET /ref/me — current handle of the connected wallet. AUTH.
+ * Returns `{code, wallet, claimedAt}` on 200; throws ApiError 404
+ * `referral.not_found` when the user has no handle, 401 when no session.
+ */
+export function getRefMe() {
+  return apiFetch('/ref/me');
+}
+
+/**
+ * PUT /ref/me — atomically claim/replace the user's handle. AUTH.
+ *
+ * @param {string|null} code  New code, or `null`/empty to release.
+ * @returns {Promise<unknown>} 200 → `{code, wallet, claimedAt}`. 204 → null.
+ *   Throws ApiError: 422 `referral.invalid_format`, 422 `referral.reserved`,
+ *   409 `referral.taken`, 401 `auth.unauthenticated`.
+ */
+export function putRefMe(code) {
+  return apiFetch('/ref/me', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code ?? null }),
+  });
+}
+
+/**
+ * DELETE /ref/me — release the user's handle (idempotent, 204). AUTH.
+ */
+export function deleteRefMe() {
+  return apiFetch('/ref/me', { method: 'DELETE' });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Profile (PREMIUM)
 // ─────────────────────────────────────────────────────────────────────────────

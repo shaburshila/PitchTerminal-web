@@ -928,3 +928,253 @@ body.mode-dashboard .pt-profile {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* Profile view (F0.15) ------------------------------------------------- */
+
+.pt-profile__wrap {
+  padding: 16px;
+  overflow: auto;
+  height: 100%;
+}
+
+.pt-profile__status {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.pt-profile__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pt-profile__card {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.pt-profile__card[data-test-id="profile-summary"],
+.pt-profile__card[data-test-id="profile-value-chart"],
+.pt-profile__card[data-test-id="profile-positions"],
+.pt-profile__card[data-test-id="profile-closed"],
+.pt-profile__card[data-test-id="profile-trades"],
+.pt-profile__card[data-test-id="profile-orders"] {
+  grid-column: 1 / -1;
+}
+
+.pt-profile__card-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.pt-profile__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.pt-profile__stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.pt-profile__stat-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+.pt-profile__stat-value.positive,
+.pt-profile__bw .positive,
+.pt-profile__table td.positive {
+  color: var(--success);
+}
+
+.pt-profile__stat-value.negative,
+.pt-profile__bw .negative,
+.pt-profile__table td.negative {
+  color: var(--danger);
+}
+
+.pt-profile__bw {
+  margin-top: 10px;
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.pt-profile__alloc-totals {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pt-profile__alloc-group-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.pt-profile__alloc-list,
+.pt-profile__balances {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pt-profile__alloc-list li,
+.pt-profile__balances li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.pt-profile__chart-host {
+  width: 100%;
+  height: 220px;
+}
+
+.pt-profile__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pt-profile__table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+}
+
+.pt-profile__table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pt-profile__token-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+
+.pt-profile__token-link:hover {
+  text-decoration: underline;
+}
+
+.pt-profile__pager {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.pt-profile__empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+/* Profile referral section (F0.12b) ----------------------------------- */
+
+.pt-referral {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pt-referral__title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.pt-referral__link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pt-referral__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pt-referral__url {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  background: var(--bg-elev-1);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+}
+
+.pt-referral__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pt-referral__status {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pt-referral__status--err {
+  color: var(--danger, #e25b5b);
+}
+
+.pt-modal--referral .pt-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pt-modal__field {
+  display: flex;
+  flex-direction: column;
+}
+
+.pt-modal__input {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+}
+
+.pt-modal__input--err {
+  border-color: var(--danger, #e25b5b);
+}
+
+.pt-modal__error {
+  color: var(--danger, #e25b5b);
+  font-size: 12px;
+}
