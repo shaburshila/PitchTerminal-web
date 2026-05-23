@@ -1,0 +1,14 @@
+flask==3.0.*
+gunicorn==22.*
+gevent==24.*
+psycogreen==1.0.*
+psycopg[binary]==3.2.*
+psycopg_pool==3.*
+web3==7.*
+eth-account==0.13.*
+pyjwt==2.*
+flask-limiter==3.*
+structlog==24.*
+python-dotenv==1.*
+alembic==1.13.*
+siwe==4.*
