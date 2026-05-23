@@ -4,6 +4,8 @@ import { mountSidebar } from './sidebar.js';
 import { mountChart } from './chart.js';
 import { mountBottomTabs } from './components/bottom/index.js';
 import { openStream } from './sse.js';
+import { mountWalletChip } from './ui/wallet-chip.js';
+import { getConfig } from './api.js';
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -31,6 +33,22 @@ function bootstrap() {
       bottom.setToken(token.address);
     },
   });
+
+  // F0.9/F0.10: header wallet area. We need `/config` for the WC projectId
+  // before mounting so the picker shows/hides the WC entry deterministically.
+  // If `/config` fails, fall back to injected-only.
+  const walletArea = layout.header.querySelector('[data-test-id="wallet-area"]');
+  if (walletArea instanceof HTMLElement) {
+    getConfig()
+      .catch(() => null)
+      .then((cfg) => {
+        const wcProjectId = cfg?.walletConnect?.projectId ?? '';
+        mountWalletChip(walletArea, {
+          wcProjectId,
+          onViewProfile: () => layout.setMode('profile'),
+        });
+      });
+  }
 
   if (typeof globalThis.EventSource === 'function') {
     openStream({

@@ -2,6 +2,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mountSidebar } from '../src/sidebar.js';
+import { _resetForTests as resetWatchlist, WATCHLIST_LIMIT } from '../src/watchlist.js';
 
 // ── Test fixtures ────────────────────────────────────────────────────────
 //
@@ -107,6 +108,8 @@ describe('mountSidebar', () => {
 
   beforeEach(() => {
     document.body.replaceChildren();
+    localStorage.clear();
+    resetWatchlist();
     container = document.createElement('aside');
     container.dataset.testId = 'sidebar';
     document.body.appendChild(container);
@@ -355,5 +358,80 @@ describe('mountSidebar', () => {
     await flushAsync();
     const empty = container.querySelector('[data-test-id="sidebar-empty"]');
     expect(empty.hidden).toBe(false);
+  });
+
+  // ── F0.8 watchlist integration ──────────────────────────────────────────
+
+  it('renders a star button on every row (empty/off state)', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    const stars = container.querySelectorAll('[data-test-id="sidebar-star"]');
+    expect(stars.length).toBe(3);
+    expect(stars[0].getAttribute('aria-pressed')).toBe('false');
+    expect(stars[0].textContent).toBe('☆');
+  });
+
+  it('clicking a star toggles the row into the watchlist without selecting it', async () => {
+    const api = makeApi(defaultPayload());
+    const onTokenSelect = vi.fn();
+    const handle = mountSidebar(container, { apiClient: api, onTokenSelect });
+    await handle.refresh();
+
+    const star = container.querySelector('[data-test-id="sidebar-star"]');
+    star.click();
+    expect(onTokenSelect).not.toHaveBeenCalled();
+
+    // After re-render the star reflects watched state.
+    const refreshed = container.querySelector('[data-test-id="sidebar-star"]');
+    expect(refreshed.textContent).toBe('★');
+    expect(refreshed.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('"only favorites" toggle filters list to watched rows', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    // Star Pulisic (sorted at index 1: Mbappé first).
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // Mbappé is rows[0], Pulisic rows[1] (sorted by changePct.all DESC).
+    rows[1].querySelector('[data-test-id="sidebar-star"]').click();
+
+    const favBtn = container.querySelector('[data-test-id="sidebar-fav-toggle"]');
+    favBtn.click();
+
+    const visible = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    expect(visible.length).toBe(1);
+    expect(visible[0].dataset.tokenAddress).toBe('0xaaa1');
+    expect(favBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('overflow add (> WATCHLIST_LIMIT) shows a toast and does not enlarge list', async () => {
+    // Pre-fill localStorage to the cap.
+    const tokens = [];
+    for (let i = 0; i < WATCHLIST_LIMIT; i++) {
+      tokens.push('0x' + i.toString(16).padStart(40, '0'));
+    }
+    localStorage.setItem('pt:watchlist', JSON.stringify({ tokens }));
+    resetWatchlist();
+
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    // The 3 sample tokens aren't in the prefilled list — starring one should
+    // be rejected.
+    const star = container.querySelector('[data-test-id="sidebar-star"]');
+    star.click();
+
+    const toast = document.querySelector('[data-test-id="toast"]');
+    expect(toast).not.toBeNull();
+    expect(toast.dataset.kind).toBe('warn');
+    expect(toast.textContent).toMatch(/полнен/i);
+
+    // Star did NOT flip on.
+    const after = container.querySelector('[data-test-id="sidebar-star"]');
+    expect(after.textContent).toBe('☆');
   });
 });

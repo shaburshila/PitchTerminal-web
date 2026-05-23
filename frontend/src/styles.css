@@ -362,15 +362,75 @@ body.mode-dashboard .pt-profile {
 
 .pt-sidebar__row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 20px 1fr auto;
   grid-template-areas:
-    'symbol price'
-    'meta   change';
+    'star symbol price'
+    'star meta   change';
   gap: 2px 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background-color 120ms ease;
+}
+
+.pt-sidebar__star {
+  grid-area: star;
+  align-self: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 2px;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease;
+}
+
+.pt-sidebar__star:hover {
+  color: var(--accent);
+}
+
+.pt-sidebar__star.is-on {
+  color: #f4c430; /* warm yellow — distinct from accent + readable on dark */
+}
+
+.pt-sidebar__star:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pt-sidebar__fav-toggle {
+  cursor: pointer;
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.pt-sidebar__fav-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.pt-sidebar__fav-toggle[aria-pressed='true'],
+.pt-sidebar__fav-toggle.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.pt-sidebar__fav-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .pt-sidebar__row:hover {
@@ -692,4 +752,139 @@ body.mode-dashboard .pt-profile {
 
 .pt-chart__status[hidden] {
   display: none;
+}
+
+/* Toast (F0.8) --------------------------------------------------------- */
+
+.pt-toast-host {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none; /* host transparent — children re-enable */
+  max-width: 360px;
+}
+
+.pt-toast {
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+
+.pt-toast--warn {
+  border-color: #d4a017;
+  color: #f4c430;
+}
+
+.pt-toast--error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Header wallet chip (F0.9 / F0.10) ----------------------------------- */
+
+.pt-wallet-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.pt-wallet-chip:hover {
+  border-color: var(--accent);
+}
+
+.pt-wallet-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pt-wallet-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.pt-wallet-chip__dot--wrong {
+  background: var(--danger);
+}
+
+.pt-wallet-chip__switch {
+  margin-left: 6px;
+  font-family: var(--font-stack);
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--danger);
+  color: #fff;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pt-wallet-chip__switch:hover {
+  background: #e04a4a;
+}
+
+.pt-wallet-chip__switch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pt-wallet-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  z-index: 100;
+  font-family: var(--font-stack);
+}
+
+.pt-wallet-dropdown[hidden] {
+  display: none;
+}
+
+.pt-wallet-dropdown__item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pt-wallet-dropdown__item:hover {
+  background: var(--bg-elev-1);
+}
+
+.pt-wallet-dropdown__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
