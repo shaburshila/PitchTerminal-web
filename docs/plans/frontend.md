@@ -267,40 +267,174 @@
 
 ---
 
-### F0.12 — Pay flow (approve + buyAccess)
-**Что:** оплата 1 PITCH разблокирует premium.
+### F0.12 — Pay flow (approve + buyAccess(referrer))
+**Что:** оплата с учётом двухсторонней реферальной программы; покупатель платит
+`price * (1 - buyerDiscountBps/10000)` при наличии валидного реферрера.
 
 **Действия:**
 - `src/access.js`:
   - При `hasAccess=false` показывать pay-баннер + кнопку.
   - Pay flow:
-    1. Прочитать `accessPriceWei` из `/config`.
-    2. Прочитать `allowance(pitch, owner, accessContract)` через viem.
-    3. Если `allowance < price`:
-       - **Если allowance > 0 и != price**: сначала `pitch.approve(accessContract, 0)`,
-         потом `pitch.approve(accessContract, price)` (две попапа).
+    1. **Defensive re-fetch**: `GET /api/v1/config?fresh=1` (см. api-spec §3.2) —
+       получить свежие `accessPriceWei`, `buyerDiscountBps`, `referralBps` на
+       случай только что прилетевшего `setPrice` / `setReferralSplit`. **Без
+       этого** — риск гонки с устаревшими данными в кэше.
+    2. Определить `referrer`:
+       - Прочитать `localStorage.referralWallet` (см. F0.X ref-link handling).
+       - Если адрес == текущий wallet или == адрес Access-контракта (из `/config`)
+         → silent skip, `referrer = address(0)`.
+       - Иначе → используем сохранённый адрес.
+    3. Подсчёт сумм для UI:
+       - `hasValidRef = referrer != 0x0…` (после silent-skip)
+       - `buyerPayWei = hasValidRef ? price * (10000 - buyerDiscountBps) / 10000 : price`
+       - Показать в окне оплаты разбивку: «Цена: X PITCH · Реферал-скидка:
+         −Y PITCH (если есть) · К оплате: Z PITCH».
+    4. Прочитать `allowance(pitch, owner, accessContract)` через viem.
+    5. Если `allowance < buyerPayWei`:
+       - **Если allowance > 0 и != buyerPayWei**: сначала `pitch.approve(accessContract, 0)`,
+         потом `pitch.approve(accessContract, buyerPayWei)` (две попапа).
          Это защищает от USDT-like токенов; PITCH сейчас — стандартный ERC20,
          но не закладываемся на это.
-       - **Если allowance == 0**: один `pitch.approve(accessContract, price)`.
-    4. `accessContract.buyAccess()` (попап).
-    5. Дождаться receipt.
-    6. `getAccess(fresh=true)` — обходит кэш, моментальная разблокировка.
-    7. Reconnect SSE (теперь с каналом orders) — см. F0.13.
+       - **Если allowance == 0**: один `pitch.approve(accessContract, buyerPayWei)`.
+    6. `accessContract.buyAccess(referrer)` (попап) — передаём адрес или
+       `0x0000…0000` если реферрера нет.
+    7. Дождаться receipt.
+    8. `getAccess(fresh=true)` — обходит кэш, моментальная разблокировка.
+    9. Reconnect SSE (теперь с каналом orders) — см. F0.13.
 - Окно оплаты:
-  - Цена.
+  - Полная цена, скидка (если есть), итог к оплате.
+  - Краткое инфо о реферрере: «Поделился с тобой: 0xabc…7f9 (alex42)» (если
+    был ref-handle — показать его рядом с адресом).
   - Дисклеймер (см. functional-spec §9).
   - Ссылка на Uniswap (если нет PITCH).
   - Ссылка «Скачать портативную версию».
 
 **DoD:**
-- E2E: connect → signIn → видит баннер → click «Pay» → MetaMask approve → buy →
-  через 5с premium разблокирован.
-- Если PITCH < 1 → показывает «Get PITCH on Uniswap» с предзаполненным
-  Uniswap URL.
+- E2E без реферрера: connect → signIn → видит баннер → click «Pay» → MetaMask
+  approve на полную `price` → buy(`address(0)`) → через 5с premium разблокирован.
+- E2E с валидным реферрером: открыть страницу с `?ref=0xVALID` → localStorage
+  записан → Pay → окно показывает скидку → approve на `price * 0.75` → buy(ref) →
+  on-chain: ref получает `price * 0.25`, treasury получает `price * 0.5`.
+- E2E с self-ref: `?ref=<own_wallet>` → localStorage записан → Pay → silent skip
+  на фронте, окно показывает полную цену → tx с `address(0)`.
+- E2E с контракт-ref: `?ref=<access_contract_addr>` → silent skip → полная цена.
+- Если PITCH < `buyerPayWei` → показывает «Get PITCH on Uniswap» с
+  предзаполненным Uniswap URL.
 
-**Зависит от:** F0.11, B0.11, C0.5.
+**Зависит от:** F0.11, F0.Xa (ref-link handling), B0.8 (`/config?fresh=1`),
+B0.11, C0.5.
 
 **Integration checkpoint:** IC-0.4.
+
+---
+
+### F0.12a — Реферальные ссылки: парсинг URL + резолв + localStorage
+**Что:** обработка `?ref=` параметра при первом визите.
+
+**Действия:**
+- `src/referral.js`:
+  - `parseRefFromUrl() -> string | null` — `new URLSearchParams(location.search).get('ref')?.trim().toLowerCase()`.
+  - `resolveRef(raw) -> string | null`:
+    - Если `raw` matches `^0x[a-f0-9]{40}$` → возвращает `raw` (адрес в lowercase).
+    - Если `raw` matches `^[a-z0-9_-]{4,32}$` → `GET /api/v1/ref/{raw}`:
+      - 200 → возвращает `wallet`.
+      - 404 → возвращает `null`, пишет в `localStorage.referralUnresolved`
+        (для отладки/UX «эта ссылка невалидна»).
+    - Иначе → `null` (не пытаемся ходить в API на странных строках).
+  - На бутстрапе приложения (до отрисовки):
+    1. `raw = parseRefFromUrl()`.
+    2. Если `raw == null` — выход (используем то, что уже в localStorage).
+    3. Иначе — асинхронно: `wallet = await resolveRef(raw)`. Если резолвилось —
+       `localStorage.setItem('referralWallet', wallet)` и `localStorage.setItem('referralRaw', raw)`.
+    4. **НЕ удалять `?ref=` из URL** — пользователь может скопировать и
+       поделиться дальше.
+  - `getEffectiveRef(currentWallet, accessContractAddr) -> string` — возвращает
+    `referralWallet` из localStorage с применением silent-skip правил (== own
+    wallet или == access contract → `0x0…0`).
+- Использование в F0.12 pay-flow (см. выше).
+- Тесты:
+  - Smoke: `?ref=0xABC123…` → localStorage.referralWallet = lowercase address.
+  - `?ref=alex42` → mock API → localStorage = wallet.
+  - `?ref=unknown` → 404 → no write, but `referralUnresolved` set.
+  - `?ref=Невалидное` → silent ignore (regex не сошёлся).
+
+**DoD:**
+- Открыть `https://localhost/?ref=0xVALID` → localStorage.referralWallet записан.
+- Открыть `?ref=alex42` (claim'нут в БД) → запрос к `/api/v1/ref/alex42` → wallet
+  в localStorage.
+- Visit `?ref=alex42` → потом visit `?ref=bob99` → второй переписывает (last wins).
+- Без `?ref` — localStorage не трогается.
+
+**Зависит от:** F0.1, F0.2 (API client), B0.11b.
+
+---
+
+### F0.12b — UI claim/release реферального handle (в профиле)
+**Что:** UI для регистрации читаемого handle в профиле пользователя.
+
+**Действия:**
+- `src/profile-referral.js` — секция в Profile view (`F0.15`):
+  - Показывает текущий handle (если есть): «Твоя реферальная ссылка:
+    `https://pitchterminal.app/?ref=alex42`» + кнопка copy.
+  - Если нет handle — показывает `https://pitchterminal.app/?ref=0xUSER` +
+    кнопка «Получить читаемое имя» (открывает модалку).
+  - Модалка claim:
+    - Инпут с валидацией live (regex `^[a-z0-9_-]{4,32}$`, no leading/trailing,
+      not in reserved-список — клиент-side подсказка, сервер всё равно
+      перепроверит).
+    - Кнопка «Зарезервировать» → `PUT /api/v1/ref/me` body `{code}`:
+      - 200 → закрыть модалку, обновить UI секции.
+      - 409 `referral.taken` → показать «Это имя уже занято».
+      - 422 `referral.reserved` / `referral.invalid_format` → подсветить инпут.
+  - Кнопка «Освободить handle» (если есть) → `DELETE /api/v1/ref/me` → 204 → UI
+    переключается на показ адреса.
+  - Кнопка «Сменить handle» — открывает ту же модалку, при подтверждении
+    делает `PUT` (атомарная замена на стороне API).
+- На старте профиля — `GET /api/v1/ref/me` → 200 показать handle, 404 →
+  показать «нет handle».
+
+**DoD:**
+- Connected user → открыть профиль → секция «Реферальная ссылка» видна.
+- Claim alex42 → ссылка переключилась.
+- Попробовать занять `api` (reserved) → ошибка в UI.
+- Сменить на bob99 → атомарная замена, ссылка обновилась.
+- Освободить → ссылка вернулась к адресу.
+
+**Зависит от:** F0.11 (SIWE), F0.15 (Profile), B0.11b.
+
+---
+
+### F0.12c — SSE-канал config (реактивное обновление цены / скидок)
+**Что:** живое обновление UI при изменении on-chain параметров.
+
+**Действия:**
+- В `src/sse.js` (см. F0.3) добавить handler канала `event: config`:
+  ```js
+  source.addEventListener('config', e => {
+      const snap = JSON.parse(e.data);
+      configStore.merge({
+          accessPriceWei: snap.accessPriceWei,
+          buyerDiscountBps: snap.buyerDiscountBps,
+          referralBps: snap.referralBps,
+      });
+      // re-render баннера / окна оплаты, если оно открыто
+  });
+  ```
+- Дедупликация: хранить `lastConfigTxHash` в configStore; игнорировать
+  событие, если `snap.txHash === lastConfigTxHash` (защита от повторных
+  scan'ов worker'а).
+- При первой загрузке `/config` (не SSE) — записать в store как baseline.
+- При обрыве/реконнекте SSE — фронт делает `GET /api/v1/config` для catch-up
+  (на случай пропущенного `event: config`).
+
+**DoD:**
+- Открыть приложение в браузере с DevTools.
+- Симуляция: owner-кошелёк делает `setPrice(2e18)` на тестнете.
+- В течение ~10 с в DevTools видно `event: config` с новым `accessPriceWei`,
+  баннер цены меняется без перезагрузки.
+- Аналогично для `setReferralSplit`.
+
+**Зависит от:** F0.3 (SSE client), B0.9.
 
 ---
 

@@ -104,19 +104,22 @@
 **Действия:**
 - `cd backend && alembic init migrations`.
 - `alembic.ini` — `sqlalchemy.url = ${DATABASE_URL}`.
-- `migrations/env.py` — читать env vars, configure Alembic.
+- `migrations/env.py` — читать env vars, configure Alembic. Нормализация
+  `postgresql://` → `postgresql+psycopg://` (проект использует psycopg v3).
 - `migrations/versions/0001_initial.py` — портирует SQL из `db-schema.sql`:
   - CREATE TYPE для всех ENUM'ов.
-  - CREATE TABLE для всех таблиц.
+  - CREATE TABLE для всех таблиц (включая `referral_codes`).
   - Все индексы (включая частичные).
-  - Все CONSTRAINT'ы.
+  - Все CONSTRAINT'ы (включая `referral_codes.code` regex + leading/trailing).
 - Сравнить с `db-schema.sql` — расхождений быть не должно.
 
 **DoD:**
 - `alembic upgrade head` на пустой БД проходит без ошибок.
 - `alembic downgrade base` корректно откатывается.
-- Все таблицы из `db-schema.sql` существуют (`\dt` в psql).
+- Все таблицы из `db-schema.sql` существуют (`\dt` в psql), включая
+  `referral_codes`.
 - ENUM значения совпадают (`\dT+ token_kind` etc.).
+- Идемпотентность: `upgrade → downgrade → upgrade` снова работает чисто.
 
 **Зависит от:** B0.2.
 
@@ -170,7 +173,7 @@
 
 ---
 
-### B0.6 — Worker: event_loop + price_loop (без NOTIFY ещё)
+### B0.6 — Worker: event_loop + price_loop + access_event_loop (без NOTIFY ещё)
 **Что:** циклы worker'а, пишут в БД, без SSE-пуша пока.
 
 **Действия:**
@@ -178,9 +181,11 @@
   ```python
   def run():
       backfill.run_if_needed()
+      access_bootstrap.run_if_needed()  # инициализация app_state.access_config
       while True:
           price_loop.tick()
           event_loop.tick()
+          access_event_loop.tick()  # PriceChanged + ReferralSplitUpdated
           nonces.cleanup()
           time.sleep(5)
   ```
@@ -195,13 +200,32 @@
   - `scan_logs(w3, [player_hook, country_hook], last+1, head - REORG_LAG_BLOCKS)`.
   - INSERT events с `ON CONFLICT (tx_hash, log_index) DO NOTHING`.
   - Обновляет `last_scanned_block`.
+- `worker/access_event_loop.py:tick` — **индексатор PitchTerminalAccess**:
+  - Читает `app_state.access_last_scanned_block` (отдельный курсор; первый старт
+    = `ACCESS_DEPLOY_BLOCK` из env).
+  - `scan_logs(w3, [access_contract], last+1, head - REORG_LAG_BLOCKS)`.
+  - Декодирует события `PriceChanged(uint256)` и
+    `ReferralSplitUpdated(uint16, uint16)`. Игнорирует прочие
+    (`AccessPurchased`, `Granted/Revoked`) — они не нужны для `/config`-снимка.
+  - На каждое событие: читает текущие `price()`, `buyerDiscountBps()`,
+    `referralBps()` контракта через **один Multicall** и UPSERT'ит снимок в
+    `app_state.access_config` (см. db-schema.sql) — формат
+    `{accessPriceWei, buyerDiscountBps, referralBps, blockNumber, txHash}`.
+  - Идемпотентно: повторное событие с тем же `txHash` → no-op.
+- `worker/access_bootstrap.py:run_if_needed` — если `app_state.access_config`
+  отсутствует, читает все три значения с контракта (один Multicall) и пишет
+  снимок с `blockNumber = head`, `txHash = null`. Запускается один раз на старте.
 - `worker/nonces.py:cleanup` — `DELETE FROM auth_nonces WHERE created_at < now() - interval '10 minutes'`.
 - Errors → log + продолжить (не падать).
 
 **DoD:**
 - При первом запуске worker заполняет `market_state` за < 30 с.
 - На пустой `events`-таблице запускается одноразовый бэкфилл (B0.7).
+- `app_state.access_config` существует после `access_bootstrap`, содержит
+  валидные `price/buyerDiscountBps/referralBps`.
 - `psql ... -c "SELECT * FROM market_state LIMIT 5"` показывает живые цены.
+- Симуляция `setPrice(2e18)` через owner-ключ на тестнете → в течение 5 с
+  `app_state.access_config.accessPriceWei` обновляется до `2000000000000000000`.
 
 **Зависит от:** B0.4, B0.5.
 
@@ -244,7 +268,15 @@
   - Подключает структурные логи.
   - Регистрирует error-handler → RFC 7807 (`app/errors.py`).
 - `app/routes/health.py` — `GET /api/v1/health` (§9).
-- `app/routes/config.py` — `GET /api/v1/config` (§3.2).
+- `app/routes/config.py` — `GET /api/v1/config` (§3.2):
+  - Базово отдаёт значения из `app_state.access_config` (источник истины,
+    обновляется worker'ом по событиям `PriceChanged` / `ReferralSplitUpdated`,
+    см. B0.6). При отсутствии записи — fallback на честный RPC-вызов с записью
+    в `app_state`.
+  - Поддерживает query-param `?fresh=1` (rate-limit 10/мин/IP, см. §11
+    api-spec) — обход кэша, читает свежее значение из `app_state.access_config`.
+  - Поля: `accessPriceWei`, `buyerDiscountBps`, `referralBps` (+ остальные
+    статические из §3.2).
 - `app/routes/tokens.py`:
   - `GET /api/v1/tokens` (§4.1).
   - `GET /api/v1/tokens/{token}/chart?tf=` (§4.2).
@@ -256,7 +288,10 @@
 
 **DoD:**
 - `curl /api/v1/health` → 200 со схемой §9.
-- `curl /api/v1/config` → 200 со схемой §3.2.
+- `curl /api/v1/config` → 200 со схемой §3.2 (включая `buyerDiscountBps` +
+  `referralBps`).
+- `curl /api/v1/config?fresh=1` → 200; вызов читает из `app_state.access_config`
+  без RPC.
 - `curl /api/v1/tokens` → 200, лист из 192 токенов.
 - `curl /api/v1/tokens/0xINVALID/chart` → 404 `tokens.unknown` в формате
   problem+json.
@@ -268,24 +303,37 @@
 
 ---
 
-### B0.9 — SSE `/api/v1/stream` (FREE channels prices+events) + NOTIFY pub/sub
+### B0.9 — SSE `/api/v1/stream` (FREE channels prices+events+config) + NOTIFY pub/sub
 **Что:** SSE-поток с pub/sub через Postgres LISTEN/NOTIFY.
 
 **Действия:**
 - `shared/notify.py`:
   - `notify(channel, payload)` — `pg_notify(...)`.
   - `Listener` класс — открывает LISTEN-соединение, async-yield'ит сообщения.
-- В `worker/price_loop.py` и `event_loop.py`:
+- В `worker/price_loop.py`, `event_loop.py`, `access_event_loop.py`:
   - После UPSERT в market_state — `notify("pt_prices", json.dumps([addresses]))`
     (см. db-schema.sql NOTIFY section).
   - После INSERT events — `notify("pt_events", json.dumps([ids]))`.
+  - После UPSERT `app_state.access_config` — `notify("pt_config",
+    json.dumps(snapshot))` с тем же payload, что хранится в `app_state` плюс
+    `updatedAt` (unix sec) — это **полный snapshot**, читать `app_state` API
+    после NOTIFY не нужно.
 - `app/sse.py:stream()`:
   - `GET /api/v1/stream`:
-    - Подписывается на `pt_prices`, `pt_events` (orders позже).
-    - На каждое NOTIFY читает соответствующие записи из БД, формирует SSE-event.
+    - Подписывается на `pt_prices`, `pt_events`, `pt_config` (orders позже —
+      premium, в фазе 2).
+    - На каждое NOTIFY:
+      - `pt_prices` / `pt_events` — читает соответствующие записи из БД,
+        формирует SSE-event.
+      - `pt_config` — payload уже содержит всё нужное; ретранслирует как
+        `event: config` без дополнительного чтения БД.
     - Heartbeat каждые 25 сек.
   - Авторизация: куки приходят автоматически с EventSource; если не premium —
-    канал orders не отправляется (фильтр на сервере).
+    канал orders не отправляется (фильтр на сервере). Канал `config`
+    auth-нейтрален и отправляется всем подключённым.
+- Инвалидация `/config`-кэша на стороне API: каждый API-процесс при
+  получении NOTIFY `pt_config` сбрасывает свой in-memory кэш `/config` (см.
+  B0.8) — следующий не-`fresh=1` запрос увидит свежие значения сразу.
 
 **DoD:**
 - Открыть `curl -N http://localhost:5000/api/v1/stream` → видеть keepalive
@@ -293,6 +341,10 @@
 - Совершить on-chain сделку (тестовую) → в течение 5 с прилетает
   `event: events`.
 - При изменении цен — `event: prices` с массивом адресов.
+- Симуляция `setPrice(2e18)` или `setReferralSplit(1000, 4000)` → в течение
+  5–10 с прилетает `event: config` со свежим snapshot'ом. После этого
+  `curl /api/v1/config` (без `fresh=1`) сразу возвращает новые значения
+  (кэш инвалидирован).
 
 **Зависит от:** B0.8.
 
@@ -348,8 +400,8 @@
 - `app/routes/access.py:get_access`:
   - `GET /api/v1/access[?fresh=1]` (§5.1).
   - `fresh=1` — обход кэша, rate-limit 5/мин/address.
-- В config endpoint добавить `accessPriceWei` (читается из контракта,
-  кэшируется на 60с).
+- `accessPriceWei`, `buyerDiscountBps`, `referralBps` в `/config` уже читаются
+  из `app_state.access_config` (см. B0.8), здесь добавлять не нужно.
 
 **DoD:**
 - `curl --cookie ...` для свежего адреса → `hasAccess: false, source: "none"`.
@@ -358,6 +410,72 @@
 - Rate-limit на fresh работает.
 
 **Зависит от:** B0.10, C0.5 (контракт задеплоен — нужен `ACCESS_CONTRACT` env).
+
+---
+
+### B0.11b — Реферальные коды (handle-резолв)
+**Что:** 4 эндпоинта для opt-in читаемых handle согласно
+[../api-spec.md](../api-spec.md) §5.2 + таблица `referral_codes`
+(см. db-schema.sql, уже создана в B0.3 миграцией 0001).
+
+**Действия:**
+- `shared/referral.py`:
+  - `RESERVED_CODES: frozenset[str]` — литерал в коде:
+    `{"api", "admin", "app", "www", "static", "ref", "auth", "me", "mine",
+    "null", "undefined", "config", "stream", "health", ...}` + базовый
+    profanity-список на en/ru. Регулярно лучше не пересматривать (изменения
+    через PR + redeploy).
+  - `validate_code(code) -> None | ProblemDetail`:
+    - Проверка regex `^[a-z0-9_-]{4,32}$`, leading/trailing не `-`/`_`,
+      не в `RESERVED_CODES`.
+    - Возвращает структуру ошибки или None.
+  - `resolve(code) -> str | None` — `SELECT owner_address FROM referral_codes
+    WHERE code = $1` (case-sensitive после нормализации). Lowercase'ит вход
+    перед запросом.
+- `app/routes/referral.py`:
+  - `GET /api/v1/ref/{code}` (FREE, §5.2.1): валидация формата → 404
+    `referral.not_found` если не сошёлся (без 422 — упрощает фронт);
+    `SELECT` → 200 `{code, wallet}` или 404. Cache-Control `public, max-age=60`
+    для 200, `no-store` для 404. Rate-limit 120/мин/IP.
+  - `GET /api/v1/ref/me` (AUTH, §5.2.2): `SELECT * FROM referral_codes WHERE
+    owner_address = g.address` → 200 со `{code, wallet, claimedAt}` или 404
+    `referral.not_found`. Rate-limit 30/мин/address.
+  - `PUT /api/v1/ref/me` (AUTH, §5.2.3): body `{code: str | null}`.
+    - `code: null` или пустое тело → как DELETE (см. ниже).
+    - Иначе: `validate_code(code)`:
+      - regex/leading/trailing fail → 422 `referral.invalid_format`.
+      - reserved → 422 `referral.reserved`.
+    - Если ок — атомарно в одной транзакции:
+      `DELETE FROM referral_codes WHERE owner_address = g.address;
+      INSERT INTO referral_codes (code, owner_address) VALUES ($1, $2);`
+    - Конфликт `unique violation` на `code` PK (другой кошелёк уже занял) →
+      409 `referral.taken`. Race-free благодаря postgres-уровневому индексу.
+    - Успех → 200 `{code, wallet, claimedAt}`. Rate-limit 5/час/address.
+  - `DELETE /api/v1/ref/me` (AUTH, §5.2.4): идемпотентно. `DELETE FROM
+    referral_codes WHERE owner_address = g.address`. Всегда 204 (даже если
+    ничего не удалилось). Rate-limit 5/час/address.
+- Тесты (`tests/api/test_referral.py`):
+  - Resolve 0x-формат (frontend не ходит в API — но если кто-то всё же пошёл,
+    проверь behaviour: вероятно 404, потому что 0x-адрес не подходит под
+    `[a-z0-9_-]{4,32}`).
+  - Resolve unknown code → 404.
+  - Resolve claimed code → 200.
+  - Claim happy path + claim под уже занятый code (другим кошельком) → 409.
+  - Claim код, который занят САМИМ собой → no-op атомарно (DELETE+INSERT) → 200.
+  - Reserved code → 422.
+  - Invalid format (короткий, leading `-`, кириллица, > 32) → 422.
+  - DELETE без claim → 204. DELETE c claim → 204 + GET /me → 404.
+  - Rate-limits через `flask-limiter`.
+
+**DoD:**
+- Все 4 эндпоинта возвращают коды и форматы по §5.2.
+- Race condition test: два одновременных PUT /me с одинаковым code от разных
+  адресов → один 200, второй 409 (постгрес уникальный индекс).
+- Reserved + profanity отвергаются 422.
+
+**Зависит от:** B0.10 (AUTH), B0.3 (миграция с таблицей `referral_codes`).
+
+**Integration checkpoint:** IC-0.X с Frontend F0.X (claim-UI).
 
 ---
 

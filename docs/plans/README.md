@@ -61,14 +61,20 @@
 Infra:    I0.1 ─► I0.2 ─► I0.3 ─► I0.4 ─► I0.5 ─► I0.6 ─► I0.7
             │       │                       │
             ▼       ▼                       ▼
-Backend:  B0.1 ─► B0.2 ─► B0.3 ─► B0.4 ─► B0.5 ─► B0.6 ─► B0.7 ─► B0.8 ─► B0.9 ─► B0.10 ─► B0.11 ─► B0.12 ─► B0.13 ─► B0.14
-                                                                              │
-                                                                              ▼
+Backend:  B0.1 ─► B0.2 ─► B0.3 ─► B0.4 ─► B0.5 ─► B0.6 ─► B0.7 ─► B0.8 ─► B0.9 ─► B0.10 ─► B0.11 ─► B0.11b ─► B0.12 ─► B0.13 ─► B0.14
+                                                                                       │
+                                                                                       ▼
 Contracts:  C0.1 ─► C0.2 ─► C0.3 ─► C0.4 ─────────────► C0.5
                                                           │
                                                           ▼
-Frontend:  F0.1 ─► F0.2 ─► F0.3 ─► F0.4 ─► F0.5 ─► F0.6 ─► F0.7 ─► F0.8 ─► F0.9 ─► F0.10 ─► F0.11 ─► F0.12 ─► F0.13 ─► F0.14 ─► F0.15
+Frontend:  F0.1 ─► F0.2 ─► F0.3 ─► F0.4 ─► F0.5 ─► F0.6 ─► F0.7 ─► F0.8 ─► F0.9 ─► F0.10 ─► F0.11 ─► F0.12 ─► F0.12a ─► F0.12b ─► F0.12c ─► F0.13 ─► F0.14 ─► F0.15
 ```
+
+Где:
+- **B0.11b** — 4 эндпоинта `/api/v1/ref/*` (handle claim/resolve) + reserved-список.
+- **F0.12a** — парсинг `?ref=` из URL, резолв через API, localStorage.
+- **F0.12b** — UI claim/release handle в профиле (модалка, валидация).
+- **F0.12c** — подписка на SSE-канал `event: config` (реактивное обновление цены/скидок).
 
 **Жёсткие dependencies (cross-agent):**
 
@@ -79,7 +85,10 @@ Frontend:  F0.1 ─► F0.2 ─► F0.3 ─► F0.4 ─► F0.5 ─► F0.6 ─�
 | F0.2 | B0.7 (`/config`, `/health`) | Фронт без API не нужен |
 | F0.10 | B0.7 (`/config` отдаёт WC project ID) | Wallet connect нужен `chainId` и адреса |
 | F0.11 | B0.10 (SIWE endpoints) | Подпись без проверки на сервере бесполезна |
-| F0.12 | C0.5 (Access задеплоен) + B0.11 (`/access`) | Оплата невозможна без контракта и эндпоинта |
+| F0.12 | C0.5 (Access задеплоен) + B0.11 (`/access`) + B0.8 (`/config?fresh=1`) + F0.12a (ref localStorage) | Оплата невозможна без контракта, эндпоинта и зарезолвленного referrer |
+| F0.12a | B0.11b (`/api/v1/ref/{code}`) | Резолв handle → wallet через API |
+| F0.12b | F0.11 (SIWE) + B0.11b (`PUT/DELETE /ref/me`) | Claim handle требует auth + соответствующий эндпоинт |
+| F0.12c | F0.3 (SSE client) + B0.9 (SSE config канал) | Подписка требует уже работающего SSE-клиента и канала на бэке |
 | F0.13 | B0.12 (`@require_premium`) | Soft-lock UI должен соответствовать серверной проверке |
 | Все B0.7+ | I0.4 (Caddy) перед integration testing | Без same-origin не отладишь cookie |
 
@@ -127,6 +136,8 @@ Contracts: —
 | **IC-0.2** | После B0.8 + F0.3 | SSE поток: prices/events приходят в браузер, фронт обновляет график без перезагрузки | Координатор |
 | **IC-0.3** | После B0.10 + F0.11 | SIWE end-to-end: подключение → подпись → JWT-cookie → `/access` отдаёт `false` | Координатор |
 | **IC-0.4** | После C0.5 + B0.11 + F0.12 | Тестовый платёж 1 PITCH → `hasAccess=true` → premium-зона разблокирована | Координатор + Contracts (deploy verify) |
+| **IC-0.4a** | После B0.11b + F0.12a + F0.12b | Реферал-флоу e2e: claim handle (alex42) → ссылка `?ref=alex42` → новый пользователь видит skid'у в pay-flow → on-chain ref получает 25%, treasury 50%, buyer заплатил 75% | Координатор + Backend + Frontend |
+| **IC-0.4b** | После B0.9 + F0.12c | Config sync: owner `setReferralSplit(1000,4000)` → ≤10с фронт получает `event: config` → баннер обновился без рефреша | Координатор + Backend + Frontend |
 | **IC-0.5** | После B0.13 + F0.13 + F0.15 | `/profile` отдаёт данные, premium-зона работает, soft-lock-баннер для не-premium | Координатор |
 | **IC-0.6** | DoD фазы 0 | Все пункты [../conventions.md](../conventions.md) §12 фазы 0 | Координатор |
 | **IC-1.1** | После F1.3 | Market-swap end-to-end: quote → approve → buy → receipt → UI | Координатор + ультра-ревью контракта pitchwc |

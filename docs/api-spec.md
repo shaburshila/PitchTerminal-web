@@ -12,7 +12,7 @@
 2. [Аутентификация](#2-аутентификация)
 3. [Конфиг и публичные эндпоинты](#3-конфиг-и-публичные-эндпоинты)
 4. [Токены и рыночные данные](#4-токены-и-рыночные-данные)
-5. [Доступ и платежи](#5-доступ-и-платежи)
+5. [Доступ и платежи](#5-доступ-и-платежи) (включая §5.2 реферальные коды)
 6. [Профиль и позиции](#6-профиль-и-позиции)
 7. [Лимит-ордера](#7-лимит-ордера)
 8. [SSE-поток](#8-sse-поток)
@@ -100,6 +100,10 @@ Same-origin: фронт и API живут на одном домене (Caddy); 
 | `orders.bad_quote_token` | 422 | `quoteToken` не соответствует ожидаемой quote-валюте пары |
 | `orders.slippage_too_high` | 422 | `slippageBps` > `MAX_SLIPPAGE_BPS` |
 | `orders.expired` | 422 | `expiry` уже прошёл при создании |
+| `referral.not_found` | 404 | Code не зарегистрирован |
+| `referral.invalid_format` | 422 | Code не соответствует `^[a-z0-9_-]{4,32}$` или начинается/кончается на `-`/`_` |
+| `referral.reserved` | 422 | Code в reserved-списке (`api`, `admin`, …) |
+| `referral.taken` | 409 | Code уже claim'нут другим кошельком |
 | `validation.bad_request` | 400 | Generic — формат поля не пройден |
 | `rate_limit.exceeded` | 429 | См. `Retry-After` |
 | `server.internal` | 500 | Непредвиденная ошибка |
@@ -282,6 +286,8 @@ Bootstrap-конфиг фронта. Доступ FREE.
     "limitOrderExecutor": "0x..."
   },
   "accessPriceWei": "1000000000000000000",
+  "buyerDiscountBps": 2500,
+  "referralBps": 2500,
   "walletConnect": {
     "projectId": "abc123..."
   },
@@ -297,8 +303,23 @@ Bootstrap-конфиг фронта. Доступ FREE.
 }
 ```
 
-Адреса — lowercase. `limitOrderTtlPresets` — секунды; 0 = «без срока». Эндпоинт
-кэшируется на 60 секунд на стороне API; меняется только при ре-деплое контрактов.
+Адреса — lowercase. `limitOrderTtlPresets` — секунды; 0 = «без срока».
+`buyerDiscountBps` — текущая скидка покупателю в bps от полной цены при покупке
+через валидного реферрера; `referralBps` — текущая доля реферрера в bps от
+полной цены. Сумма `buyerDiscountBps + referralBps ≤ 5000`. Оба значения
+вместе с `accessPriceWei` читаются из снимка `app_state.access_config` (worker
+индексирует события `PriceChanged` / `ReferralSplitUpdated` от
+`PitchTerminalAccess` и обновляет снимок + NOTIFY `pt_config`, см. §8.3).
+
+**Кэш и invalidation:** эндпоинт кэшируется на 60 секунд на стороне API.
+**Когда worker детектит on-chain изменение** (`setPrice` или
+`setReferralSplit`) — кэш инвалидируется немедленно через LISTEN `pt_config`,
+и одновременно изменение пушится в SSE-канал `config`.
+
+**Query-param `?fresh=1`** — обходит кэш и читает свежее значение из
+`app_state.access_config`. Используется фронтом непосредственно перед
+`buyAccess` для защиты от гонки с только что прилетевшим `setPrice`.
+Rate-limit: 10 / минута / IP.
 
 ---
 
@@ -522,6 +543,92 @@ PnL подключённого кошелька по конкретному то
   истёкший TTL; в ответе `checkedAt` — старый.
 
 **Rate-limit с `fresh=1`:** 5 / минута / address.
+
+### 5.2 Реферальные коды
+
+Opt-in читаемый handle, который при подстановке в `?ref=` резолвится в адрес
+владельца и передаётся в `buyAccess(referrer)`. Доступен любому залогиненному
+(не требует premium — наоборот, новые пользователи должны мочь шарить ссылку
+до оплаты).
+
+#### 5.2.1 `GET /api/v1/ref/{code}`
+
+Резолв `code → wallet`. Доступ FREE.
+
+**Path:**
+- `code` — строка, до 32 символов. Если формат невалиден — 404 (не 422), чтобы
+  фронт не должен был дублировать regex.
+
+**Ответ 200:**
+```json
+{
+  "code": "alex42",
+  "wallet": "0x71ecd1a09380ca46cca741bc48d04c556674756f"
+}
+```
+
+**Ошибки:**
+- 404 `referral.not_found` — code не зарегистрирован или формат невалидный.
+
+**Cache-Control:** `public, max-age=60` для 200, `no-store` для 404.
+
+#### 5.2.2 `GET /api/v1/ref/me`
+
+Текущий handle подключённого кошелька. Доступ AUTH.
+
+**Ответ 200:**
+```json
+{
+  "code": "alex42",
+  "wallet": "0x71ecd1a09380ca46cca741bc48d04c556674756f",
+  "claimedAt": 1709000000
+}
+```
+
+**Ошибки:**
+- 404 `referral.not_found` — пользователь ничего не claim'ал.
+
+#### 5.2.3 `PUT /api/v1/ref/me`
+
+Атомарно создать/сменить/освободить свой handle. Доступ AUTH.
+
+**Body (создание/смена):**
+```json
+{ "code": "alex42" }
+```
+
+**Body (освобождение):**
+```json
+{ "code": null }
+```
+или пустое тело (`Content-Length: 0`).
+
+**Семантика:** один кошелёк = один handle. Сервер выполняет
+`DELETE WHERE owner=… ; INSERT (code, owner)` в одной транзакции под уникальным
+индексом — race с одновременным claim'ом другого пользователя резолвится
+postgres'ом как 409.
+
+**Ответ 200** (после создания/смены):
+```json
+{
+  "code": "alex42",
+  "wallet": "0x71ecd1a09380ca46cca741bc48d04c556674756f",
+  "claimedAt": 1709000000
+}
+```
+
+**Ответ 204** — после освобождения (`code: null`).
+
+**Ошибки:**
+- 422 `referral.invalid_format` — не подходит под `^[a-z0-9_-]{4,32}$` или
+  начинается/кончается на `-`/`_`.
+- 422 `referral.reserved` — code в reserved-списке.
+- 409 `referral.taken` — code уже claim'нут другим кошельком.
+
+#### 5.2.4 `DELETE /api/v1/ref/me`
+
+UX-шорткат, эквивалентный `PUT /api/v1/ref/me` с пустым телом. Доступ AUTH.
+**Идемпотентно:** 204 в любом случае (нет handle → тоже 204).
 
 ---
 
@@ -881,6 +988,34 @@ payload = JSON-массив новых `event_id`'ов; API-процесс чи�
 Шлётся только при наличии новых сделок (массив всегда непустой). Фронт фильтрует
 по текущему выбранному токену.
 
+**`event: config`** — реактивное обновление полей `/api/v1/config`, изменяющихся
+on-chain. Шлётся всем подключённым клиентам (auth-нейтрально, как и сам `/config`).
+Триггер: worker детектит событие `PriceChanged` или `ReferralSplitUpdated` от
+`PitchTerminalAccess` → обновляет `app_state.access_config` → NOTIFY `pt_config`
+с payload-снимком новых значений → каждый API-процесс LISTEN'ит и рассылает SSE.
+
+```json
+{
+  "accessPriceWei": "2000000000000000000",
+  "buyerDiscountBps": 2500,
+  "referralBps": 2500,
+  "updatedAt": 1709000100,
+  "blockNumber": 12345678,
+  "txHash": "0x..."
+}
+```
+
+Поля совпадают с подмножеством `/api/v1/config` — фронт мёрджит в свой
+in-memory конфиг и перерисовывает баннер с ценой / скидкой / реферал-долей.
+`blockNumber` + `txHash` — для дедупликации (если воркер пере-сканирует диапазон
+блоков, одно и то же изменение приходит дважды, фронт игнорирует по `txHash`).
+
+**Defensive re-fetch на pay-click:** даже с SSE push фронт **обязан** делать
+`GET /api/v1/config?fresh=1` непосредственно перед формированием tx `buyAccess`
+— на случай разрыва SSE / реконнекта без догона / гонки с только что прилетевшим
+`setPrice`. См. §3.2 — поддержать query-param `?fresh=1` (обход кэша, чтение из
+свежей on-chain выборки worker'а через `app_state.access_config`).
+
 **`event: orders`** (premium) — изменения статусов ордеров пользователя:
 ```json
 {
@@ -1003,6 +1138,12 @@ payload = JSON-массив новых `event_id`'ов; API-процесс чи�
 | `POST /api/v1/auth/logout` | — | — | — |
 | `GET /api/v1/access?fresh=1` | 5 / мин | address | `Retry-After` |
 | `GET /api/v1/access` (cached) | 60 / мин | address | — |
+| `GET /api/v1/config?fresh=1` | 10 / мин | IP | `Retry-After` |
+| `GET /api/v1/config` (cached) | 60 / мин | IP | — |
+| `GET /api/v1/ref/{code}` | 120 / мин | IP | — |
+| `GET /api/v1/ref/me` | 30 / мин | address | — |
+| `PUT /api/v1/ref/me` | 5 / час | address | `Retry-After` |
+| `DELETE /api/v1/ref/me` | 5 / час | address | `Retry-After` |
 | `POST /api/v1/orders` | 30 / час | address | `Retry-After` |
 | `DELETE /api/v1/orders/{id}` | 30 / мин | address | — |
 | `PUT /api/v1/orders/armed` | 10 / мин | address | — |

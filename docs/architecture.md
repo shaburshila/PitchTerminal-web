@@ -197,19 +197,37 @@ Solidity в проекте.
 
 ### 5.1 PitchTerminalAccess
 
-Контракт доступа (≈50 строк):
+Контракт доступа (≈80 строк):
 
-- `buyAccess()` — `pitch.transferFrom(msg.sender, treasury, price)`, ставит
-  `paid[msg.sender] = true`. Деньги идут **сразу в treasury**, контракт ничего не хранит
-  (минимальная поверхность атаки, метод `withdraw` не нужен). Требует предварительного
-  `approve` ровно на `price` → 2 попапа в кошельке.
+- `buyAccess(address referrer)` — ставит `paid[msg.sender] = true`. Деньги идут
+  **сразу в treasury** (и реферреру при наличии), контракт ничего не хранит
+  (минимальная поверхность атаки, метод `withdraw` не нужен).
+  **Двухсторонний реферал**: при валидном реферрере покупатель получает скидку
+  `buyerDiscountBps` (default 25%) от `price`, реферрер получает кешбэк
+  `referralBps` (default 25%) от `price`, treasury — остаток (default 50%).
+  Без реферрера / self-ref / self-contract — покупатель платит полный `price`,
+  treasury получает полный `price`. Требует предварительного `approve` на сумму
+  фактического платежа → 2 попапа в кошельке. Детали — [contracts.md](contracts.md) §1.
 - `hasAccess(addr) view` → `paid || whitelisted`.
 - `grantAccess` / `grantBatch` / `revokeAccess` — onlyOwner whitelist для бесплатного
   доступа (друзья, тестеры, giveaway).
-- `setPrice`, `transferOwnership` — onlyOwner. `price` настраиваемый (курс PITCH плавает).
+- `setPrice`, `setReferralSplit(buyerDiscountBps, referralBps)`,
+  `transferOwnership` — onlyOwner. `price` настраиваемый (курс PITCH плавает).
+  `setReferralSplit` атомарно обновляет обе доли с require'ом
+  `buyerDiscountBps + referralBps ≤ MAX_TOTAL_REFERRAL_BPS = 5000` (treasury
+  всегда получает ≥ 50%). Kill-switch: `setReferralSplit(0, 0)` без редеплоя.
 
 Контракт — **оракул, а не охранник**: он отвечает «есть ли доступ», но соблюдение этого
 ответа — на сервере (жёсткие функции) и клиенте (мягкие).
+
+**Sync config → frontend.** События `PriceChanged` и `ReferralSplitUpdated` индексируются
+worker'ом, который обновляет снимок `app_state.access_config` и публикует
+`NOTIFY pt_config`. API инвалидирует /config-кэш по этому NOTIFY и рассылает SSE-событие
+`config` всем подключённым клиентам (auth-нейтрально). Фронт мёрджит новые значения
+в свой in-memory конфиг и перерисовывает баннер цены. Дополнительно фронт делает
+`GET /config?fresh=1` непосредственно перед `buyAccess` — defensive против гонки с
+только что прилетевшим `setPrice`. См. [api-spec.md](api-spec.md) §3.2, §8.3 и
+[db-schema.sql](db-schema.sql) NOTIFY-секцию.
 
 ### 5.2 LimitOrderExecutor
 

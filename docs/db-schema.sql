@@ -132,6 +132,16 @@ CREATE TABLE app_state (
 -- Ожидаемые ключи (worker инициализирует при первом старте):
 --   'last_scanned_block' → { "block": 12345678 }
 --   'backfill_status'    → { "complete": true } | { "complete": false, "progressBlock": ... }
+--   'access_config'      → {
+--                            "accessPriceWei": "1000000000000000000",
+--                            "buyerDiscountBps": 2500,
+--                            "referralBps": 2500,
+--                            "blockNumber": 46167000,
+--                            "txHash": "0x..."
+--                          }
+--      Снимок текущих on-chain полей /api/v1/config. Обновляется worker'ом
+--      на каждом PriceChanged / ReferralSplitUpdated от PitchTerminalAccess.
+--      Источник истины для /api/v1/config?fresh=1 (без RPC-вызова в горячем пути).
 --
 -- Версия схемы канонически живёт в Alembic'е (таблица alembic_version), здесь
 -- не дублируется.
@@ -216,6 +226,29 @@ CREATE TABLE user_settings (
 );
 
 -- =============================================================================
+-- referral_codes — opt-in читаемые handle для реферальных ссылок
+-- =============================================================================
+--
+-- Любой пользователь может claim'нуть один уникальный code и шарить
+-- https://pitchterminal.app/?ref=<code>. Frontend резолвит code → wallet через
+-- GET /api/v1/ref/{code} и передаёт wallet в buyAccess(address referrer).
+-- Code независим от факта оплаты — claim доступен любому connected'у.
+-- Reserved-список (api, admin, www, me, …) — на API-уровне, не в БД.
+
+CREATE TABLE referral_codes (
+    code           TEXT        PRIMARY KEY
+                               CHECK (code ~ '^[a-z0-9_-]{4,32}$'
+                                      AND code !~ '^[-_]'
+                                      AND code !~ '[-_]$'),
+    owner_address  CHAR(42)    NOT NULL UNIQUE
+                               CHECK (owner_address ~ '^0x[0-9a-f]{40}$'),
+    claimed_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- UNIQUE (owner_address) — один кошелёк = один code. Смена code = атомарный
+-- DELETE+INSERT в одной транзакции под PUT /api/v1/ref/me (race-safe).
+
+-- =============================================================================
 -- telegram_links — chat_id ↔ wallet (добавляется в фазе 3)
 -- =============================================================================
 
@@ -265,6 +298,17 @@ CREATE TABLE telegram_link_tokens (
 --                  Пример: "1234".
 --                  API читает ордер, определяет владельца и шлёт SSE только
 --                  его активным соединениям.
+--
+--   'pt_config'  — payload = JSON-снимок изменившихся on-chain полей
+--                  /api/v1/config (см. api-spec.md §8.3 'event: config').
+--                  Пример: {"accessPriceWei":"2000000000000000000",
+--                           "buyerDiscountBps":2500,"referralBps":2500,
+--                           "blockNumber":12345678,"txHash":"0x..."}.
+--                  Триггер: worker детектит PriceChanged или
+--                  ReferralSplitUpdated от PitchTerminalAccess → пишет
+--                  свежий снимок в app_state.access_config → NOTIFY.
+--                  API инвалидирует /config-кэш и рассылает SSE всем
+--                  подключённым (auth-нейтрально).
 --
 -- Postgres NOTIFY payload имеет лимит ~8000 байт; если массив рискует превысить
 -- — worker дробит на несколько NOTIFY (приоритет: каждое сообщение само по себе

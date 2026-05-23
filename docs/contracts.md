@@ -15,51 +15,131 @@
 ## 1. `PitchTerminalAccess`
 
 Контракт доступа: разовая оплата 1 PITCH разблокирует premium навсегда; on-chain
-источник истины для статуса доступа.
+источник истины для статуса доступа. **Двухсторонняя реферальная программа**:
+при покупке через валидного реферрера покупатель получает скидку
+(`buyerDiscountBps`, по умолчанию 25%), реферрер получает кешбэк
+(`referralBps`, по умолчанию 25%), treasury получает остаток (по умолчанию 50%).
+Все три доли отсчитываются от полной `price`. Без валидного реферрера — покупатель
+платит полный `price`, treasury получает полный `price`, скидки нет.
 
 ### Состояние
 - `IERC20 pitch` — **immutable**, токен PITCH.
 - `address treasury` — **immutable**, кошелёк-получатель выручки.
-- `uint256 price` — цена доступа (настраиваемая).
+- `uint256 price` — полная цена доступа (настраиваемая).
+- `uint16 buyerDiscountBps` — текущая скидка покупателю в bps от `price`
+  (настраиваемая совместно с `referralBps`).
+- `uint16 referralBps` — текущая доля реферрера в bps от `price`
+  (настраиваемая совместно с `buyerDiscountBps`).
 - `address owner` — админ.
 - `mapping(address => bool) paid` — оплатившие.
 - `mapping(address => bool) whitelisted` — выданный бесплатный доступ.
 
+Инвариант: `buyerDiscountBps + referralBps <= MAX_TOTAL_REFERRAL_BPS = 5000`.
+Treasury всегда получает минимум 50% от полной `price` — защита от
+компрометации owner-ключа (req H).
+
+Контракт **не накапливает токены**: и реферал-доля, и доля treasury уходят
+прямыми `safeTransferFrom` от buyer'а — без `withdraw`-функции и без удержания
+средств на контракте. Это сохраняет требование «минимальная поверхность атаки».
+
 ### Конструктор
-`(IERC20 pitch, address treasury, uint256 price, address owner)` — с проверками на
-zero-address и `price > 0`.
+`(IERC20 pitch, address treasury, uint256 price, uint16 buyerDiscountBps,
+uint16 referralBps, address owner)` — проверки: zero-address (`pitch`, `treasury`,
+`owner`), `0 < price ≤ MAX_PRICE`, `buyerDiscountBps + referralBps ≤
+MAX_TOTAL_REFERRAL_BPS`.
 
 ### Функции
-- `buyAccess()` — требует `!hasAccess(msg.sender)`; `safeTransferFrom(msg.sender,
-  treasury, price)`; `paid[msg.sender]=true`; emit `AccessPurchased`.
-- `hasAccess(address) view → bool` = `paid || whitelisted`. Геттеры `paid`, `whitelisted`.
+- `buyAccess(address referrer)` — требует `!hasAccess(msg.sender)`.
+  Если `referrer != address(0) && referrer != msg.sender && referrer != address(this)`
+  (валидный реферрер):
+  `buyerPaid = price * (10000 - buyerDiscountBps) / 10000`,
+  `referralAmount = price * referralBps / 10000`,
+  `treasuryAmount = buyerPaid - referralAmount`
+  (= `price * (10000 - buyerDiscountBps - referralBps) / 10000`).
+  Если `referralAmount > 0`:
+  `safeTransferFrom(msg.sender, referrer, referralAmount)`,
+  `safeTransferFrom(msg.sender, treasury, treasuryAmount)`.
+  Если `referralAmount == 0` (owner выставил `referralBps = 0`, kill-switch):
+  только `safeTransferFrom(msg.sender, treasury, buyerPaid)` — скидка покупателю
+  сохраняется, реферрер ничего не получает, `referrer` в событии — `address(0)`.
+
+  Иначе (zero-address, self-ref или self-contract — невалидный реферрер):
+  `safeTransferFrom(msg.sender, treasury, price)` одним вызовом; скидки нет,
+  `referralAmount = 0`, `buyerPaid = price`, `referrer` в событии — `address(0)`.
+
+  В любом случае: `paid[msg.sender] = true` ставится **до** трансферов (CEI),
+  emit `AccessPurchased(msg.sender, refForEvent, buyerPaid, referralAmount)`.
+
+  Self-ref и self-contract — **silent skip** (не revert), чтобы случайный
+  self-link или ссылка-грифа `?ref=ACCESS_CONTRACT_ADDR` не ломали UX и не
+  приводили к потере 50% платежа в чёрную дыру.
+- `hasAccess(address) view → bool` = `paid || whitelisted`. Геттеры `paid`,
+  `whitelisted`, `buyerDiscountBps`, `referralBps`.
 - onlyOwner: `grantAccess(address)`, `grantBatch(address[])`, `revokeAccess(address)`,
-  `setPrice(uint256)`, `transferOwnership` / `acceptOwnership` (двухшаговый).
+  `setPrice(uint256)`, `setReferralSplit(uint16, uint16)`, `transferOwnership` /
+  `acceptOwnership` (двухшаговый).
   `grantBatch` ограничен `MAX_BATCH = 100` адресов за вызов (защита от
   out-of-gas — owner делит больший whitelist на несколько tx).
   `setPrice` имеет верхнюю границу `MAX_PRICE = 100e18` (100 PITCH) — защита от
   компрометации owner-ключа: атакующий не может сделать доступ нереалистично
-  дорогим. Лимит явно зашит как `immutable` константа.
+  дорогим. Лимит явно зашит как `constant`.
+  `setReferralSplit(uint16 newDiscountBps, uint16 newReferralBps)` — атомарно
+  обновляет обе доли; require'ит `newDiscountBps + newReferralBps ≤
+  MAX_TOTAL_REFERRAL_BPS`. **Атомарность важна**: позволяет переключиться,
+  например, с (10%, 40%) на (40%, 10%) одним вызовом — отдельные сеттеры
+  потребовали бы временного нарушения инварианта в середине. Kill-switch —
+  `setReferralSplit(0, 0)` (без редеплоя).
 
 ### События
-`AccessPurchased(address indexed user)`, `AccessGranted(address indexed user)`,
-`AccessRevoked(address indexed user)`, `PriceChanged(uint256 newPrice)`,
+`AccessPurchased(address indexed user, address indexed referrer, uint256 buyerPaid, uint256 referralAmount)`
+— единое событие на покупку. `buyerPaid` — сколько реально заплатил покупатель
+(== `price` без реферала, == `price * (1 - discount/10000)` с реферрером).
+`referralAmount` — сколько ушло реферреру (0 если реферрера не было или
+`referralBps = 0`). Treasury получил `buyerPaid - referralAmount` — выводимо
+из лога. Поля `referrer = address(0) && referralAmount = 0` означают «без
+реферала» (zero-address-аргумент, self-ref или self-contract); при этом
+`buyerPaid == price`.
+`AccessGranted(address indexed user)`, `AccessRevoked(address indexed user)`,
+`PriceChanged(uint256 newPrice)`,
+`ReferralSplitUpdated(uint16 newBuyerDiscountBps, uint16 newReferralBps)`,
 `OwnershipTransferred(...)`.
 
 ### Требования безопасности
-- **A. CEI** — `paid[msg.sender]=true` устанавливается **до** `safeTransferFrom`; плюс
-  `nonReentrant` на `buyAccess`.
+- **A. CEI** — `paid[msg.sender] = true` устанавливается **до** любых
+  `safeTransferFrom` (включая реферал-выплату); плюс `nonReentrant` на `buyAccess`.
 - **B.** Движение токенов — только через **`SafeERC20`** (`safeTransferFrom`).
 - **C.** Передача прав — **`Ownable2Step`** (двухшаговая), не одношаговая.
-- **D.** Конструктор валидирует zero-address (`pitch`, `treasury`, `owner`) и `price > 0`.
+- **D.** Конструктор валидирует zero-address (`pitch`, `treasury`, `owner`),
+  `price > 0`, `buyerDiscountBps + referralBps ≤ MAX_TOTAL_REFERRAL_BPS`.
 - **E.** Контракт **не `payable`**, без `receive()` — работает только с PITCH-ERC20.
+  Не накапливает токены: реферал и treasury получают свои доли прямыми трансферами
+  от buyer'а.
 - **F.** Допущение: PITCH — стандартный токен без fee-on-transfer (зафиксировано).
-- **G. Bounded `setPrice`** — `MAX_PRICE = 100e18` (100 PITCH) `immutable`. `setPrice`
+- **G. Bounded `setPrice`** — `MAX_PRICE = 100e18` (100 PITCH) `constant`. `setPrice`
   обязан `require(newPrice > 0 && newPrice <= MAX_PRICE)`. Защита от компрометации
   owner-ключа: атакующий не может сделать доступ нереалистично дорогим (DoS) или
   бесплатным.
+- **H. Bounded `setReferralSplit`** — `MAX_TOTAL_REFERRAL_BPS = 5000` (50%) `constant`.
+  Сумма `buyerDiscountBps + referralBps` не может превысить этот потолок ни в
+  конструкторе, ни в `setReferralSplit`. Гарантирует: treasury всегда получает
+  **минимум 50%** от полной `price` даже при компрометации owner-ключа.
+  Owner не может перенаправить более половины полной цены (как реферреру, так и в
+  виде скидки покупателю, или их комбинации).
+- **I. Rounding-инвариант** — для любых `price ∈ (0, MAX_PRICE]`,
+  `discount ∈ [0, MAX_TOTAL_REFERRAL_BPS]`, `ref ∈ [0, MAX_TOTAL_REFERRAL_BPS]`
+  с `discount + ref ≤ MAX_TOTAL_REFERRAL_BPS`: для валидного реферрера
+  `referralAmount + treasuryAmount == buyerPaid`; для невалидного —
+  `treasuryAmount == price`. Никаких «потерянных wei» (treasury всегда получает
+  остаток от buyer'ского платежа). Покрыто Foundry fuzz-тестом.
+- **J. Self-ref + self-contract не revert** — `referrer == msg.sender` ИЛИ
+  `referrer == address(this)` обрабатывается как «нет реферала» (silent skip).
+  Self-ref: иначе случайный self-link → revert → потеря fee для пользователя.
+  Self-contract: защита от грифинга через ссылку `?ref=ACCESS_CONTRACT_ADDR` —
+  без проверки 50% каждого платежа уходили бы на адрес контракта без rescue
+  (чёрная дыра).
 - `treasury` **immutable** — owner его менять не может: при компрометации owner-ключа
-  платежи нельзя перенаправить (owner управляет whitelist и ценой, но не средствами).
+  платежи нельзя перенаправить (owner управляет whitelist, ценой и долей реферала,
+  но не средствами).
 
 ## 2. `LimitOrderExecutor`
 

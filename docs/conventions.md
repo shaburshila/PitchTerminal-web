@@ -352,6 +352,7 @@ processor, обходящий event-dict и применяющий redaction п�
 
 | Переменная | Где | Назначение |
 |---|---|---|
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | docker compose (postgres-init) | Init credentials для контейнера БД. На проде ОБЯЗАТЕЛЬНО непустые (см. plans/infra.md §I0.6). |
 | `DATABASE_URL` | api, worker | `postgresql://user:pass@host:5432/db` |
 | `JWT_SECRET` | api | HS256 секрет, ≥32 случайных байта |
 | `RPC_URL` | worker, api | Primary RPC (Alchemy) |
@@ -386,6 +387,19 @@ processor, обходящий event-dict и применяющий redaction п�
   адрес Multicall3 на всех EVM-сетях; константа в `shared/eth.py`.
 | `ORDER_COOLDOWN_SEC` | worker | default 60 — пауза между попытками execute одного ордера после revert (см. api-spec.md §7.1) |
 | `RECEIPT_TIMEOUT_SEC` | worker | default 120 — после этого подвисшая executing-tx переподаётся с тем же nonce и повышенным газом (replacement-tx) |
+| `ACCESS_DEPLOY_BLOCK` | worker | Стартовый блок для access_event_loop (индексатор PriceChanged + ReferralSplitUpdated). Default 0 = «использовать head при первом запуске» (access_bootstrap зафиксирует ID). Заполняется после деплоя PitchTerminalAccess (см. plans/contracts.md C0.5). |
+
+**Deploy-only** (читаются только forge-скриптами на машине разработчика, **НЕ** runtime — backend их не загружает):
+
+| Переменная | Где | Назначение |
+|---|---|---|
+| `TREASURY` | forge script DeployAccess | Адрес-получатель выручки (immutable после деплоя). |
+| `OWNER` | forge script DeployAccess | Адрес owner (Ownable2Step). Управляет ценой, реферал-split'ом, whitelist'ом. |
+| `ACCESS_PRICE` | forge script DeployAccess | Начальная цена доступа в wei. Default `1000000000000000000` (1 PITCH). |
+| `ACCESS_BUYER_DISCOUNT_BPS` | forge script DeployAccess | Начальная скидка покупателю в bps. Default 2500 (25%). Сумма с `ACCESS_REFERRAL_BPS` не превышает 5000. |
+| `ACCESS_REFERRAL_BPS` | forge script DeployAccess | Начальный кешбэк реферреру в bps. Default 2500 (25%). |
+| `BASESCAN_KEY` | forge verify | API-key для verify на Basescan. |
+| `RPC_URL_BASE_MAINNET` | forge script / forge verify | RPC для деплоя (может отличаться от runtime `RPC_URL`). |
 
 `.env.example` отражает структуру со значениями-заглушками; ни одного реального
 секрета.

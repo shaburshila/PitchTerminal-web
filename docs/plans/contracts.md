@@ -61,28 +61,49 @@
 
 ### C0.2 — `PitchTerminalAccess.sol`
 **Что:** реализовать контракт доступа согласно [../contracts.md](../contracts.md) §1.
+**Двухсторонняя реферальная программа** (Model C): скидка покупателю + кешбэк реферреру.
 
 **Действия:**
 - `contracts/src/PitchTerminalAccess.sol`:
-  - Constructor: `(IERC20 pitch, address treasury, uint256 price, address owner)` —
-    все non-zero, `price > 0`. `pitch` и `treasury` — `immutable`.
-  - `mapping(address => bool) public paid`, `mapping(address => bool) public whitelisted`.
-  - `function buyAccess() external nonReentrant`:
+  - Constructor: `(IERC20 pitch, address treasury, uint256 price, uint16 buyerDiscountBps, uint16 referralBps, address owner)`
+    — все non-zero, `price > 0`,
+    `buyerDiscountBps + referralBps ≤ MAX_TOTAL_REFERRAL_BPS`. `pitch` и `treasury`
+    — `immutable`. Дефолтные значения при деплое: `buyerDiscountBps = 2500`,
+    `referralBps = 2500` (25%/25%).
+  - State: `uint16 public buyerDiscountBps`, `uint16 public referralBps`,
+    `mapping(address => bool) public paid`, `mapping(address => bool) public whitelisted`.
+  - `function buyAccess(address referrer) external nonReentrant`:
     - Require `!hasAccess(msg.sender)`.
     - `paid[msg.sender] = true` (CEI — set state до transfer).
-    - `pitch.safeTransferFrom(msg.sender, treasury, price)`.
-    - emit `AccessPurchased(msg.sender)`.
+    - Валидный реферрер (≠ `address(0)`, ≠ `msg.sender`, ≠ `address(this)`):
+      `buyerPaid = price * (10000 - buyerDiscountBps) / 10000`;
+      `referralAmount = price * referralBps / 10000`;
+      `treasuryAmount = buyerPaid - referralAmount`;
+      если `referralAmount > 0` — два `safeTransferFrom` (buyer → referrer, buyer → treasury);
+      если `referralAmount == 0` (kill-switch кешбэка, скидка сохраняется) — один трансфер
+      `buyerPaid` в treasury, в событии `referrer = address(0)`.
+    - Невалидный реферрер (silent skip): `safeTransferFrom(msg.sender, treasury, price)` —
+      полная цена, скидки нет.
+    - emit `AccessPurchased(msg.sender, refForEvent, buyerPaid, referralAmount)`.
   - `function hasAccess(address u) public view returns (bool) => paid[u] || whitelisted[u]`.
-  - onlyOwner: `grantAccess(address)`, `grantBatch(address[] calldata)` —
-    `require(addrs.length <= 100, "batch too large")`, `revokeAccess(address)`,
-    `setPrice(uint256 newPrice)` — `require(newPrice > 0)`.
+  - onlyOwner:
+    - `grantAccess(address)`, `grantBatch(address[] calldata)` —
+      `require(addrs.length <= MAX_BATCH = 100)`, `revokeAccess(address)`.
+    - `setPrice(uint256 newPrice)` — `require(newPrice > 0 && newPrice <= MAX_PRICE)`.
+    - `setReferralSplit(uint16 newBuyerDiscountBps, uint16 newReferralBps)` —
+      `require(sum <= MAX_TOTAL_REFERRAL_BPS)`. **Атомарный** rebalance обеих долей.
+      Kill-switch — `setReferralSplit(0, 0)`.
   - `Ownable2Step` (OZ) — двухшаговая передача прав.
   - Контракт **не payable**, нет `receive()`/`fallback()`.
-- `MAX_PRICE = 100e18` (100 PITCH) `immutable` — `setPrice(newPrice)` обязан
-  `require(newPrice > 0 && newPrice <= MAX_PRICE)`. Защита от компрометации
-  owner-ключа.
+- Константы: `MAX_PRICE = 100e18` (100 PITCH), `MAX_BATCH = 100`,
+  `MAX_TOTAL_REFERRAL_BPS = 5000` (50%). Гарантирует treasury ≥ 50% даже при
+  компрометации owner-ключа.
 - Использовать только `SafeERC20`.
-- События — все из [../contracts.md](../contracts.md) §1.
+- События: `AccessPurchased(address indexed user, address indexed referrer, uint256 buyerPaid, uint256 referralAmount)`,
+  `AccessGranted(address)`, `AccessRevoked(address)`, `PriceChanged(uint256)`,
+  `ReferralSplitUpdated(uint16, uint16)`, `OwnershipTransferred(...)`.
+- Ошибки: `ZeroAddress`, `InvalidPrice`, `InvalidReferralSplit`, `AlreadyHasAccess`,
+  `BatchTooLarge`.
 
 **DoD:**
 - `forge build` без warnings.
@@ -92,31 +113,51 @@
 ---
 
 ### C0.3 — Тесты PitchTerminalAccess
-**Что:** Foundry-тесты, близко к 100% веток.
+**Что:** Foundry-тесты, **100% line + branch + function** для контракта Access.
 
 **Действия:**
-- `contracts/test/PitchTerminalAccess.t.sol`:
-  - Setup: deploy `MockPitch` (простой ERC20 с premint), затем `PitchTerminalAccess`.
-  - Тест-кейсы:
-    - `buyAccess` happy path → `hasAccess` = true, событие.
-    - `buyAccess` без `approve` → revert.
-    - `buyAccess` дважды → revert на втором.
-    - `buyAccess` whitelisted → revert (уже доступ).
-    - `grantAccess` onlyOwner: чужой → revert.
-    - `grantBatch` ≤ 100 — работает; 101 → revert.
-    - `revokeAccess` — `hasAccess` снова false (если не оплачено).
-    - `setPrice` — onlyOwner, цена 0 → revert, цена > MAX_PRICE → revert.
-    - `Ownable2Step` — `transferOwnership` ставит pending; новый овнер делает
-      `acceptOwnership`; до acceptance старый остаётся.
-    - Reentrancy: тест с reentrant ERC20 (mock) → `nonReentrant` ловит.
-    - Конструктор zero-address — revert.
-  - Coverage: `forge coverage` показывает ≥ 95% строк, 100% веток
-    (Access — маленький, реально 100%).
-- `contracts/test/mocks/MockPitch.sol` — обычный ERC20 + reentrant-vector method.
+- `contracts/test/PitchTerminalAccess.t.sol` + моки в `contracts/test/mocks/`.
+  - Setup: deploy `MockPitch` (простой ERC20 с premint), затем `PitchTerminalAccess`
+    с дефолтным split `(2500, 2500)`.
+  - Тест-кейсы (минимум):
+    - **Конструктор**: zero-address для каждого аргумента, price 0/выше MAX,
+      `buyerDiscountBps + referralBps` 0/равен MAX/выше MAX, обе доли 0.
+    - **`buyAccess` no-ref**: happy path с `address(0)` → buyer платит полную `price`,
+      treasury получает полную, событие `(user, address(0), price, 0)`.
+    - **`buyAccess` valid referrer**: split 25/25 → buyer тратит 0.75e18, ref получает
+      0.25e18, treasury 0.5e18, событие `(user, ref, 0.75e18, 0.25e18)`.
+    - **`buyAccess` only discount** (split 5000/0): buyer тратит 0.5e18, ref 0,
+      treasury 0.5e18, событие с `referrer = address(0)`.
+    - **`buyAccess` only kickback** (split 0/5000): buyer тратит 1e18, ref 0.5e18,
+      treasury 0.5e18.
+    - **Silent-skip ветки**: `referrer = msg.sender` → full price, no discount.
+      `referrer = address(this)` → full price, no discount. Событие с `address(0)`.
+    - **Атомарность реферал-сплита**: buyer имеет balance = 0.6e18, approve 1e18,
+      split (2500, 2500) — первый transfer (ref) проходит «концептуально», второй
+      (treasury) revert → вся tx откатывается, paid не выставлен, ref-баланс не изменён.
+    - **`buyAccess` без `approve` / двойной buy / whitelisted user** → revert.
+    - **Whitelist**: `grantAccess`/`grantBatch` (≤MAX, >MAX revert)/`revokeAccess`,
+      onlyOwner.
+    - **`setPrice`**: onlyOwner, 0 / > MAX_PRICE → revert, ровно MAX ок, влияет на
+      последующие покупки.
+    - **`setReferralSplit`**: onlyOwner, sum 0+0 ок, ровно MAX_TOTAL ок, sum >
+      MAX_TOTAL revert, влияет на последующие покупки. Атомарный rebalance:
+      переключение (1000, 4000) → (4000, 1000) одним вызовом.
+    - **`Ownable2Step`** двухшаговая.
+    - **Reentrancy**: тест с `MockReentrantERC20` → `nonReentrant` ловит.
+    - **Fuzz**: `testFuzz_RoundingInvariant(uint256 price, uint16 discountBps, uint16 refBps)`
+      с `bound`'ами на диапазоны → `referralAmount + treasuryAmount == buyerPaid`
+      для валидного реферрера; `treasuryAmount == price` для невалидного.
+  - Coverage: **100% line + 100% branch + 100% function** для
+    `src/PitchTerminalAccess.sol` (контракт маленький, реально достижимо).
+- `contracts/test/mocks/MockPitch.sol` — стандартный OZ-based ERC20 с premint.
+- `contracts/test/mocks/MockReentrantERC20.sol` — стенд для reentrancy-теста.
 
 **DoD:**
 - `forge test -vv` все зелёные.
-- `forge coverage` ≥ 95% line, 100% branch для `PitchTerminalAccess`.
+- `forge coverage --report summary` → 100% line/branch/function для
+  `src/PitchTerminalAccess.sol`.
+- `forge fmt --check` чисто.
 
 ---
 
@@ -125,14 +166,24 @@
 
 **Действия:**
 - `contracts/script/DeployAccess.s.sol`:
-  - Читает `PITCH_TOKEN`, `TREASURY`, `OWNER`, `ACCESS_PRICE` из env.
-  - Деплоит, эмитит адрес в лог.
-  - Опционально: post-deploy assertion (`address(access).code.length > 0`, owner == OWNER).
+  - Читает `PITCH_TOKEN`, `TREASURY`, `OWNER`, `ACCESS_PRICE`,
+    `ACCESS_BUYER_DISCOUNT_BPS` (default 2500), `ACCESS_REFERRAL_BPS` (default 2500)
+    из env.
+  - Деплоит конструктор с 6 аргументами:
+    `(PITCH_TOKEN, TREASURY, ACCESS_PRICE, ACCESS_BUYER_DISCOUNT_BPS, ACCESS_REFERRAL_BPS, OWNER)`.
+  - Sanity: `require(ACCESS_BUYER_DISCOUNT_BPS + ACCESS_REFERRAL_BPS <= 5000)` до деплоя
+    (иначе сам конструктор ревертится, но дешевле упасть до broadcast'а).
+  - Эмитит адрес в лог.
+  - Опционально: post-deploy assertion (`address(access).code.length > 0`,
+    `owner == OWNER`, `buyerDiscountBps == ACCESS_BUYER_DISCOUNT_BPS`,
+    `referralBps == ACCESS_REFERRAL_BPS`).
 
 **DoD:**
 - `forge script script/DeployAccess.s.sol --rpc-url $RPC_URL --account ledger --sender 0x<owner>`
   с dry-run работает.
 - `--broadcast` на тестнете деплоит контракт (Sepolia OK для проверки).
+- Post-deploy: `cast call $ACCESS "buyerDiscountBps()(uint16)"` возвращает 2500,
+  `cast call $ACCESS "referralBps()(uint16)"` возвращает 2500.
 
 ---
 
