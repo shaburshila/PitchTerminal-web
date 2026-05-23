@@ -25,6 +25,9 @@ from app.limits import init_limiter
 from app.routes import auth as auth_routes
 from app.routes import config as config_routes
 from app.routes import health as health_routes
+from app.routes import position as position_routes
+from app.routes import profile as profile_routes
+from app.routes import referral as referral_routes
 from app.routes import stream as stream_routes
 from app.routes import tokens as tokens_routes
 from shared.db import init_pool
@@ -73,6 +76,9 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
     app.register_blueprint(tokens_routes.bp)
     app.register_blueprint(stream_routes.bp)
     app.register_blueprint(auth_routes.bp)
+    app.register_blueprint(referral_routes.bp)
+    app.register_blueprint(profile_routes.bp)
+    app.register_blueprint(position_routes.bp)
 
     return app
 
