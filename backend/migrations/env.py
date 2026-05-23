@@ -33,6 +33,11 @@ if not _database_url:
         "DATABASE_URL is not set. Put it in repo-root .env or backend/.env, "
         "e.g. DATABASE_URL=postgresql://pt:pt@localhost:5432/pt"
     )
+# Project ships psycopg v3, not psycopg2 — pin SQLAlchemy to the right driver.
+# Accept either bare ``postgresql://`` or already-qualified
+# ``postgresql+psycopg://`` URLs from .env.
+if _database_url.startswith("postgresql://"):
+    _database_url = "postgresql+psycopg://" + _database_url[len("postgresql://") :]
 config.set_main_option("sqlalchemy.url", _database_url)
 
 # Logging configuration from alembic.ini.

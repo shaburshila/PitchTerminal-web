@@ -133,6 +133,7 @@ class Config:
     reorg_lag_blocks: int
     order_cooldown_sec: int
     receipt_timeout_sec: int
+    access_deploy_block: int  # start block for access_event_loop (0 = current head)
 
     # ─── Logging ─────────────────────────────────────────────────────────
     log_level: str
@@ -189,6 +190,10 @@ def _load() -> Config:
         reorg_lag_blocks=_int("REORG_LAG_BLOCKS", 5),
         order_cooldown_sec=_int("ORDER_COOLDOWN_SEC", 60),
         receipt_timeout_sec=_int("RECEIPT_TIMEOUT_SEC", 120),
+        # Block from which the access_event_loop starts scanning PriceChanged /
+        # ReferralSplitUpdated. Default 0 means "use head at first start"
+        # (access_bootstrap will pin it then).
+        access_deploy_block=_int("ACCESS_DEPLOY_BLOCK", 0),
         # Logging
         log_level=_optional("LOG_LEVEL", "INFO").upper(),
         # gevent detection (worker uses sync-flask; api uses gunicorn-gevent)

@@ -221,6 +221,26 @@ def upgrade() -> None:
         """
     )
 
+    # referral_codes --------------------------------------------------------
+    # Opt-in human-readable handle for referral links (see docs/api-spec.md §5.2,
+    # docs/db-schema.sql `referral_codes`). One handle per wallet (UNIQUE
+    # owner_address). Atomic PUT semantics via the unique index — concurrent
+    # claims of the same code by different wallets resolve as one 201 + one 409
+    # at the Postgres level.
+    op.execute(
+        """
+        CREATE TABLE referral_codes (
+            code           TEXT        PRIMARY KEY
+                                       CHECK (code ~ '^[a-z0-9_-]{4,32}$'
+                                              AND code !~ '^[-_]'
+                                              AND code !~ '[-_]$'),
+            owner_address  CHAR(42)    NOT NULL UNIQUE
+                                       CHECK (owner_address ~ '^0x[0-9a-f]{40}$'),
+            claimed_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """
+    )
+
     # telegram_links --------------------------------------------------------
     op.execute(
         """
@@ -253,6 +273,7 @@ def downgrade() -> None:
     # self-refs via DEFERRABLE FK, so a straight DROP works.
     op.execute("DROP TABLE IF EXISTS telegram_link_tokens;")
     op.execute("DROP TABLE IF EXISTS telegram_links;")
+    op.execute("DROP TABLE IF EXISTS referral_codes;")
     op.execute("DROP TABLE IF EXISTS user_settings;")
     op.execute("DROP TABLE IF EXISTS auth_nonces;")
     op.execute("DROP TABLE IF EXISTS limit_orders;")

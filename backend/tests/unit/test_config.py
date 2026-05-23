@@ -25,10 +25,19 @@ def _reload_with_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> ob
         "GAS_MULTIPLIER",
         "REORG_LAG_BLOCKS",
         "LOG_LEVEL",
+        "ACCESS_DEPLOY_BLOCK",
     ]:
         monkeypatch.delenv(k, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
+
+    # `shared.config` calls `load_dotenv()` at import time. If a local backend/.env
+    # exists (developer machine convenience), the reload would re-populate vars we
+    # just cleared. Stub `load_dotenv` to a no-op for the duration of the test so the
+    # env injected via monkeypatch is the only source of truth.
+    import dotenv as _dotenv
+
+    monkeypatch.setattr(_dotenv, "load_dotenv", lambda *a, **kw: False)
 
     # Force reimport.
     if "shared.config" in sys.modules:
