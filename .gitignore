@@ -44,5 +44,5 @@ limit_orders.json
 .idea/
 .vscode/
 
-# Claude Code local settings (personal permission allowlist)
-.claude/settings.local.json
+# Claude Code (личные настройки, не выгружаем в репо)
+.claude/
