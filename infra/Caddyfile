@@ -1,0 +1,64 @@
+# PitchTerminal-web — Caddy конфиг (локальная разработка)
+#
+# В проде включится HTTPS через Let's Encrypt + домен из env. Сейчас файл
+# рассчитан на локальный запуск: bind на :80, без TLS.
+#
+# Маршруты:
+#   /api/*   → reverse_proxy api:8000 (SSE-friendly буферизация выключена)
+#   /*       → static SPA из /srv/frontend (volume на ../frontend/dist)
+#
+# Rate-limit (caddy-ratelimit от mholt): глобальный лимит на /api/* —
+# 600 событий / минуту на IP. См. https://github.com/mholt/caddy-ratelimit
+
+{
+	# Безопасность — отключаем admin API (он биндится на localhost внутри
+	# контейнера, но мы всё равно не используем динамический реконфиг).
+	admin off
+
+	# В локалке HTTPS не нужен — порт публикуется как :80. В проде эта строка
+	# должна быть убрана / заменена на блок для конкретного домена.
+	auto_https off
+
+	# rate_limit — не встроенный директив, нужно явное упорядочивание.
+	order rate_limit before basicauth
+}
+
+:80 {
+	# ── API под /api/* ─────────────────────────────────────────────────────
+	handle /api/* {
+		# Глобальный rate-limit (600/мин на IP) — действует только для /api/*.
+		rate_limit {
+			zone api_global {
+				key {remote_host}
+				events 600
+				window 1m
+			}
+		}
+
+		reverse_proxy api:8000 {
+			# SSE-friendly: не буферизовать ответ, не таймаутить долгие коннекты.
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				# read_buffer тоже маленький, чтобы события не залипали.
+				read_buffer 4KB
+			}
+		}
+	}
+
+	# ── SPA fallback ───────────────────────────────────────────────────────
+	# Любой не-/api/ запрос — отдаём статику фронта; SPA-роутинг через
+	# try_files на index.html.
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Логи в stdout — Docker подбирает.
+	log {
+		output stdout
+		format json
+	}
+}

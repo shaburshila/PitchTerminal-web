@@ -1,0 +1,115 @@
+# PitchTerminal-web — base Docker Compose stack
+#
+# Сервисы, базовые для прод и локалки. Локалка добавляет
+# docker-compose.override.yml (auto-merge через `docker compose`).
+#
+# Env берётся из:
+#   1) переменных окружения текущей shell-сессии;
+#   2) ../env (корневой .env проекта) — см. `--env-file` в scripts/dev-up.sh.
+# Значения по умолчанию (через ${VAR:-default}) — только для dev. В проде
+# обязателен .env с реальными значениями.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pt}
+      POSTGRES_DB: ${POSTGRES_DB:-pt}
+      # Стабильная локаль для индексов / collation
+      LANG: C.UTF-8
+    volumes:
+      - pt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pt} -d ${POSTGRES_DB:-pt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # В base-конфиге порт НЕ публикуется наружу — Postgres доступен только
+    # внутри docker network (по DNS-имени `postgres`). Локалка пробрасывает
+    # порт через override.yml.
+
+  # ── Backend API ─────────────────────────────────────────────────────────
+  # Сервис собирается из ../backend/Dockerfile. В фазе 0 это stub — поднимать
+  # его необязательно (поднимется, упадёт на отсутствующих модулях app/, и
+  # с restart: unless-stopped будет ретраить). Подробно — см. docs/plans/infra.md §I0.3.
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: pt-backend:latest
+    container_name: pt-api
+    # CMD из Dockerfile запускает gunicorn (gevent worker, 0.0.0.0:8000).
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # Переопределяем хост — внутри docker network postgres доступен по DNS-имени.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # curl уже установлен в runtime-слое Dockerfile.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Background worker (price/event poller, limit-order executor) ────────
+  # Тот же образ, что и api, но другая команда.
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: pt-backend:latest
+    container_name: pt-worker
+    command: ["python", "run_worker.py"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Reverse proxy + SPA static ──────────────────────────────────────────
+  # Кастомный Caddy с rate_limit (см. infra/caddy/Dockerfile + infra/Caddyfile).
+  # Том на ../frontend/dist выдаёт статику фронта. На проде заменяется на
+  # домен + auto HTTPS (Let's Encrypt).
+  # ВНИМАНИЕ: env_file НЕ пробрасывается — Caddy не должен иметь доступа к
+  # JWT_SECRET / KEEPER_PRIVATE_KEY / TELEGRAM_WEBHOOK_SECRET. Если нужны
+  # переменные для маршрутизации — добавлять явно через `environment:`.
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: pt-caddy:latest
+    container_name: pt-caddy
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PT_CADDY_HTTP_PORT:-80}:80"
+      # 443 публикуется только в проде — в override.local НЕ добавляем.
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  pt_pgdata:
+    name: pt_pgdata
+  caddy_data:
+    name: pt_caddy_data
+  caddy_config:
+    name: pt_caddy_config
