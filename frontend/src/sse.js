@@ -23,6 +23,12 @@
  *   - Connection-limit (429) recovery — surfaced via `onError`.
  *   - Catch-up REST fetches after reconnect — fired from `onReconnect`.
  *
+ * The `config` channel additionally merges every accepted (non-deduplicated)
+ * snapshot into the shared `config-store` module — see F0.12c. UI components
+ * can subscribe to that store directly without each one wiring an `onConfig`
+ * handler. The `onConfig` callback is still invoked for callers that want
+ * the raw payload (e.g. logging, pay-flow re-render hints).
+ *
  * `Last-Event-ID` note: native EventSource automatically sends the last seen
  * event id on its OWN reconnect attempts (CONNECTING-state retries). Manual
  * reconnects from this module open a brand-new EventSource and therefore do
@@ -75,6 +81,8 @@
  * @property {() => number} reconnectAttempts
  *   Current consecutive-failure count (zeroed on successful open).
  */
+
+import { merge as mergeConfig } from './config-store.js';
 
 const CHANNELS = ['prices', 'events', 'config', 'orders'];
 
@@ -150,6 +158,19 @@ export function openStream(handlers = {}, options = {}) {
       }
       if (payload.txHash) {
         lastConfigTxHash = payload.txHash;
+      }
+      // Merge into shared store first — subscribers (banner, pay-flow modal)
+      // pick up the new values reactively. Then fire the callback for any
+      // imperative consumer (logging, debug overlay, …).
+      try {
+        mergeConfig({
+          accessPriceWei: payload.accessPriceWei,
+          buyerDiscountBps: payload.buyerDiscountBps,
+          referralBps: payload.referralBps,
+          txHash: payload.txHash,
+        });
+      } catch (err) {
+        console.error('openStream: configStore merge failed:', err);
       }
       safeInvoke(handlers.onConfig, payload);
     } else if (channel === 'orders') {

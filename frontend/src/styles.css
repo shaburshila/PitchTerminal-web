@@ -888,3 +888,43 @@ body.mode-dashboard .pt-profile {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
+
+/* ── Sign-in modal (F0.11) ─────────────────────────────────────────────── */
+.pt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.pt-modal {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  max-width: 420px;
+  width: calc(100% - 32px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.pt-modal__title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pt-modal__body {
+  margin: 0 0 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pt-modal__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

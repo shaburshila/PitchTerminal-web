@@ -5,7 +5,12 @@ import { mountChart } from './chart.js';
 import { mountBottomTabs } from './components/bottom/index.js';
 import { openStream } from './sse.js';
 import { mountWalletChip } from './ui/wallet-chip.js';
-import { getConfig } from './api.js';
+import { showSignInModal } from './ui/signin-modal.js';
+import { ensureSignedIn } from './siwe.js';
+import { onAccountChange } from './wallet.js';
+import { getConfig, ApiError, getAccess } from './api.js';
+import { bootstrapReferral } from './referral.js';
+import { merge as mergeConfig } from './config-store.js';
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -13,6 +18,13 @@ function bootstrap() {
     console.error('PitchTerminal: #app root element not found');
     return;
   }
+  // F0.12a: parse `?ref=` and resolve it asynchronously. Fire-and-forget —
+  // pay-flow reads `localStorage.referralWallet` lazily, and the user is
+  // overwhelmingly unlikely to click "Pay" in the few hundred ms it takes
+  // to resolve a handle.
+  bootstrapReferral().catch(() => {
+    /* already swallowed inside, but guard against future refactors */
+  });
   const layout = mountLayout(root);
 
   const chartZone = document.createElement('div');
@@ -43,12 +55,61 @@ function bootstrap() {
       .catch(() => null)
       .then((cfg) => {
         const wcProjectId = cfg?.walletConnect?.projectId ?? '';
+        // F0.12c: seed the config-store with the baseline values from REST so
+        // subscribers (price banner, pay-flow) have data BEFORE the first SSE
+        // `event: config` arrives.
+        if (cfg) {
+          mergeConfig({
+            accessPriceWei: cfg.accessPriceWei ?? null,
+            buyerDiscountBps: cfg.buyerDiscountBps ?? null,
+            referralBps: cfg.referralBps ?? null,
+          });
+        }
         mountWalletChip(walletArea, {
           wcProjectId,
           onViewProfile: () => layout.setMode('profile'),
         });
       });
   }
+
+  // F0.11: after a successful wallet connect, ensure we have a valid backend
+  // session. If `/access` returns 200 the cookie is still valid (refresh /
+  // re-connect during 72h TTL) and we skip the SIWE popup; on 401 we open the
+  // modal. We don't auto-popup on any other status (5xx / network) — let the
+  // user retry via wallet menu when backend recovers.
+  let lastSignedInAddress = null;
+  let modalOpen = false;
+  onAccountChange((acc) => {
+    if (!acc.isConnected || !acc.address) {
+      lastSignedInAddress = null;
+      return;
+    }
+    if (acc.address === lastSignedInAddress || modalOpen) return;
+    modalOpen = true;
+    getAccess()
+      .then(() => {
+        modalOpen = false;
+        lastSignedInAddress = acc.address;
+      })
+      .catch((err) => {
+        if (!(err instanceof ApiError) || err.status !== 401) {
+          modalOpen = false;
+          return;
+        }
+        showSignInModal({
+          onSuccess: () => {
+            modalOpen = false;
+            lastSignedInAddress = acc.address;
+          },
+          onCancel: () => {
+            modalOpen = false;
+          },
+        });
+      });
+  });
+  // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
+  // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).
+  void ensureSignedIn;
 
   if (typeof globalThis.EventSource === 'function') {
     openStream({
@@ -64,6 +125,24 @@ function bootstrap() {
         if (trades.length === 0) return;
         bottom.pushTrades(trades);
         for (const trade of trades) chart.applyTrade(trade);
+      },
+      // F0.12c: after a manual reconnect the worker may have already emitted
+      // an `event: config` we missed while disconnected. Re-fetch `/config`
+      // and merge — the store dedups by value so an unchanged snapshot is a
+      // no-op.
+      onReconnect: () => {
+        getConfig()
+          .then((cfg) => {
+            if (!cfg) return;
+            mergeConfig({
+              accessPriceWei: cfg.accessPriceWei ?? null,
+              buyerDiscountBps: cfg.buyerDiscountBps ?? null,
+              referralBps: cfg.referralBps ?? null,
+            });
+          })
+          .catch(() => {
+            /* transient — next SSE config event (or next reconnect) recovers */
+          });
       },
     });
   }

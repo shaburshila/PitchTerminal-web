@@ -208,6 +208,20 @@ export function getAccess({ fresh = false } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Referral
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /ref/:code — resolve a referral handle to a wallet address. FREE.
+ * Throws ApiError 404 for unknown/invalid codes (server treats malformed
+ * codes as 404 too — see api-spec §5.2.1).
+ * @param {string} code
+ */
+export function getRef(code) {
+  return apiFetch(`/ref/${encodeURIComponent(code)}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Profile (PREMIUM)
 // ─────────────────────────────────────────────────────────────────────────────
 
