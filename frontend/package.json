@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -20,8 +24,10 @@
     "vite": "^8.0.14"
   },
   "devDependencies": {
-    "eslint": "^8.57.1",
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9",
     "eslint-plugin-import": "^2.32.0",
+    "globals": "^17.6.0",
     "happy-dom": "^20.9.0",
     "prettier": "^3.8.3",
     "vitest": "^4.1.7"
