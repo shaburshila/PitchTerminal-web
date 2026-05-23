@@ -1,0 +1,9 @@
+No files changed, compilation skipped
+
+Ran 3 tests for test/integration/AnvilFork.t.sol:AnvilForkTest
+[PASS] test_Fork_BuyAccess_NoReferrer() (gas: 91907)
+[PASS] test_Fork_BuyAccess_WithReferrer() (gas: 150670)
+[PASS] test_Fork_SetReferralSplit_AppliesToNextPurchase() (gas: 157711)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 4.01s (2.36s CPU time)
+
+Ran 1 test suite in 4.01s (4.01s CPU time): 3 tests passed, 0 failed, 0 skipped (3 total tests)

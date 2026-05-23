@@ -6,6 +6,8 @@
 # Python
 venv/
 .venv/
+audit-venv/
+audit-venv-myth/
 __pycache__/
 *.pyc
 *.pyo
@@ -29,6 +31,8 @@ contracts/foundry.lock
 
 # Docker / build
 *.log
+# ...but keep audit logs tracked
+!audit-results/*.log
 
 # Runtime data caches — regenerated on startup, local/personal, not for git
 events_cache.json
