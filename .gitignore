@@ -1,10 +1,34 @@
 # Secrets / environment
 .env
+.env.*
+!.env.example
 
 # Python
 venv/
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+backend/_legacy.py
+
+# Node / Vite
+node_modules/
+frontend/dist/
+.pnpm-store/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/         # forge install — переустанавливается командой `forge install` в CI/dev
+contracts/foundry.lock
+
+# Docker / build
+*.log
 
 # Runtime data caches — regenerated on startup, local/personal, not for git
 events_cache.json
@@ -15,3 +39,10 @@ limit_orders.json
 *.png
 # ...but keep the README screenshot tracked
 !docs/screenshot.png
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code local settings (personal permission allowlist)
+.claude/settings.local.json
