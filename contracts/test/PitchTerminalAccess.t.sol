@@ -1024,19 +1024,13 @@ contract PitchTerminalAccessTest is Test {
         assertEq(access.pendingOwner(), address(contractOwner));
 
         // The contract accepts ownership via its forwarder.
-        contractOwner.call(
-            address(access),
-            abi.encodeWithSelector(access.acceptOwnership.selector)
-        );
+        contractOwner.call(address(access), abi.encodeWithSelector(access.acceptOwnership.selector));
 
         assertEq(access.owner(), address(contractOwner));
         assertEq(access.pendingOwner(), address(0));
 
         // Sanity: the contract can now exercise owner-only powers.
-        contractOwner.call(
-            address(access),
-            abi.encodeWithSelector(access.setPrice.selector, 2e18)
-        );
+        contractOwner.call(address(access), abi.encodeWithSelector(access.setPrice.selector, 2e18));
         assertEq(access.price(), 2e18);
     }
 

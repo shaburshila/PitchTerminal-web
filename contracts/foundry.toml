@@ -13,3 +13,10 @@ script = "script"
 line_length = 100
 tab_width = 4
 bracket_spacing = true
+
+# Explicit verifier config for Base mainnet — `forge verify-contract` /
+# `forge script ... --verify` auto-detects the right Etherscan endpoint
+# from this block, so the workflow stays single-shot on mainnet deploy.
+# BASESCAN_KEY is the deploy-only env var; see docs/conventions.md §9.
+[etherscan]
+base = { key = "${BASESCAN_KEY}", url = "https://api.basescan.org/api", chain = 8453 }
