@@ -206,8 +206,8 @@ ABI в `abis/`.
 
 **Предусловия (ОБЯЗАТЕЛЬНО):**
 
-1. **DIY security audit** пройден (внешний firm-audit отложен post-MVP, см.
-   `docs/todo-post-mvp.md`). Минимальный чек-лист:
+1. **Security audit** пройден (in-house, без внешнего аудитора). Минимальный
+   чек-лист:
    - `slither contracts/src/PitchTerminalAccess.sol` — статический анализ,
      no high-severity findings. False-positives (e.g. `reentrancy-events`)
      обосновываются в `docs/security-checklist.md`.
