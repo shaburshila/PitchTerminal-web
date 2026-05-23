@@ -164,9 +164,25 @@ class TestBuildPoints:
             _ev(block=1, ts=1000, log_index=1),
         ]
         points = build_points(events)
-        # We can't inspect log_index in Points, but build_points must not raise
-        # and must return all three deterministically.
         assert len(points) == 3
+        # lightweight-charts requires strictly-increasing time. Each event in
+        # the same block must get a unique sub-second offset derived from
+        # log_index — never identical times.
+        times = [p["time"] for p in points]
+        assert times == sorted(times)
+        assert len(set(times)) == 3
+        # Concrete offsets: ts + log_index * 0.001.
+        assert times[0] == 1000.0  # log_index=0
+        assert times[1] == 1000.001  # log_index=1
+        assert times[2] == 1000.002  # log_index=2
+
+    def test_time_is_float_with_subsecond_offset(self) -> None:
+        # Single event with non-zero log_index produces a float time
+        # (avoids lightweight-charts crash on duplicate Y-axis values).
+        events = [_ev(block=1, ts=2000, log_index=7)]
+        points = build_points(events)
+        assert isinstance(points[0]["time"], float)
+        assert points[0]["time"] == 2000.007
 
 
 # Coverage hook: exercise the typeddict (no real assertions needed).

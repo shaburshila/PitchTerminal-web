@@ -7,6 +7,7 @@ truncated before each test.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -116,8 +117,14 @@ def test_all_addresses_lowercase() -> None:
 
 def test_dry_run_does_not_write() -> None:
     counts = seed_tokens.seed(_TOKENS_JSON, dry_run=True)
-    assert counts.inserted_countries == 0
-    assert counts.inserted_players == 0
+    # Dry-run reports "would-insert" counts so the operator sees what would
+    # happen on a real run.
+    assert counts.dry_run is True
+    assert counts.inserted_countries == 48
+    assert counts.inserted_players == 144
+    assert counts.skipped_countries == 0
+    assert counts.skipped_players == 0
+    assert "[dry-run]" in counts.as_log_line()
 
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM tokens")
@@ -154,3 +161,40 @@ def test_seed_rejects_invalid_role() -> None:
     }
     with pytest.raises(ValueError, match="invalid role"):
         seed_tokens.seed_from_data(bad)
+
+
+def test_seed_rejects_duplicate_player_address() -> None:
+    bad = {
+        "countries": [
+            {"id": 0, "symbol": "USA", "name": "USA",
+             "address": "0x" + "1" * 40},
+        ],
+        "players": [
+            {"symbol": "X", "name": "X", "address": "0x" + "2" * 40,
+             "country": "USA", "role": "best"},
+            {"symbol": "Y", "name": "Y", "address": "0x" + "2" * 40,
+             "country": "USA", "role": "captain"},
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate address"):
+        seed_tokens.seed_from_data(bad)
+
+
+def test_load_tokens_json_rejects_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist.json"
+    with pytest.raises(FileNotFoundError):
+        seed_tokens.load_tokens_json(missing)
+
+
+def test_load_tokens_json_rejects_broken_json(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        seed_tokens.load_tokens_json(broken)
+
+
+def test_load_tokens_json_rejects_missing_keys(tmp_path: Path) -> None:
+    incomplete = tmp_path / "incomplete.json"
+    incomplete.write_text('{"countries": []}', encoding="utf-8")
+    with pytest.raises(ValueError, match="missing required keys"):
+        seed_tokens.load_tokens_json(incomplete)

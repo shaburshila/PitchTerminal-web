@@ -205,10 +205,30 @@ Router/Hook, PITCH ERC20) развёрнуты **только в Base Mainnet**.
 ABI в `abis/`.
 
 **Предусловия (ОБЯЗАТЕЛЬНО):**
-1. Внешний security-аудит контракта пройден (контракт двигает реальные деньги).
-2. Anvil-fork smoke прошёл: deploy + buyAccess (no-ref + ref) + setReferralSplit +
-   setPrice + grant/revoke — всё работает на форке с реальными pitchwc-state.
-3. `ACCESS_CONTRACT` env-планируется зафиксировать в `.env` после деплоя.
+
+1. **DIY security audit** пройден (внешний firm-audit отложен post-MVP, см.
+   `docs/todo-post-mvp.md`). Минимальный чек-лист:
+   - `slither contracts/src/PitchTerminalAccess.sol` — статический анализ,
+     no high-severity findings. False-positives (e.g. `reentrancy-events`)
+     обосновываются в `docs/security-checklist.md`.
+   - `myth analyze contracts/src/PitchTerminalAccess.sol --solv 0.8.26` —
+     символьный анализ, no unhandled findings.
+   - Walk по **SWC Registry** (swcregistry.io) — таблица в
+     `docs/security-checklist.md` с пометкой «не применимо / закрыто тестом
+     X» для каждой релевантной уязвимости (минимум: SWC-101, SWC-104,
+     SWC-105, SWC-107, SWC-114, SWC-127, SWC-128, SWC-132).
+   - **Anvil-fork e2e smoke**: `anvil --fork-url $RPC_URL_BASE_MAINNET
+     --fork-block-number <recent>` → deploy + полный flow
+     (`buyAccess(0)` / `buyAccess(valid_ref)` / `buyAccess(self)` /
+     `buyAccess(address(pitch))` / `setReferralSplit(...)` / `setPrice(...)` /
+     `grantAccess` + free `buyAccess` / `Ownable2Step` transfer) — все
+     корректны.
+   - Публикация `docs/SECURITY.md` с email / Telegram contact + bug bounty
+     tier'ами (например 10-25% от treasury balance за critical, post-launch).
+2. `ACCESS_CONTRACT` env планируется зафиксировать в `.env` после деплоя.
+3. **Soft launch plan готов**: первые 1-2 дня после деплоя — self-test с
+   нескольких своих кошельков, затем 3-5 доверенных людей. Никакого
+   публичного анонса до этого.
 
 **Действия:**
 - Запуск (координатор):

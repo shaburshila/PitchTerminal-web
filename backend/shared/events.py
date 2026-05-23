@@ -35,42 +35,43 @@ and we mirror it verbatim — changing it would silently misreport one side.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any
 
 from web3 import Web3
 
-# Pre-computed topic0 values. Computed lazily to avoid forcing a Web3 import
-# at module load; ``_topics()`` memoizes them.
-_TOPICS_CACHE: dict[str, str] = {}
 
-
+@functools.cache
 def _topics() -> tuple[str, str]:
     """Return ``(buy_topic, sell_topic)`` as lowercase 0x-prefixed hex.
 
-    Memoized — keccak is cheap, but we hit this for every chunk.
+    Memoized — keccak is cheap, but we hit this for every chunk. Cached
+    via :func:`functools.cache` rather than a module-level dict to keep the
+    state encapsulated and thread-safe (the cache wrapper handles concurrent
+    misses with a lock).
     """
 
-    if "buy" not in _TOPICS_CACHE:
-        buy = "0x" + Web3.keccak(text="Buy(address,address,uint256,uint256,uint256)").hex()
-        sell = "0x" + Web3.keccak(text="Sell(address,address,uint256,uint256,uint256)").hex()
-        # Normalize: keccak.hex() in web3.py v7 returns *without* 0x prefix and
-        # lowercase. Defensive .lower() in case a future version changes that.
-        _TOPICS_CACHE["buy"] = buy.lower()
-        _TOPICS_CACHE["sell"] = sell.lower()
-    return _TOPICS_CACHE["buy"], _TOPICS_CACHE["sell"]
+    buy = "0x" + Web3.keccak(text="Buy(address,address,uint256,uint256,uint256)").hex()
+    sell = "0x" + Web3.keccak(text="Sell(address,address,uint256,uint256,uint256)").hex()
+    # Normalize: keccak.hex() in web3.py v7 returns *without* 0x prefix and
+    # lowercase. Defensive .lower() in case a future version changes that.
+    return buy.lower(), sell.lower()
 
 
 def _hex_no_prefix(value: Any) -> str:
-    """Convert HexBytes / bytes / str to a lowercase no-0x hex string."""
+    """Convert HexBytes / bytes / str to a lowercase no-0x hex string.
+
+    ``HexBytes`` is a ``bytes`` subclass (eth_utils), so it's covered by the
+    bytes branch — no separate handler needed.
+    """
 
     if isinstance(value, bytes | bytearray):
         return bytes(value).hex().lower()
     if isinstance(value, str):
         s = value.lower()
         return s[2:] if s.startswith("0x") else s
-    # HexBytes — fall through to its .hex() (web3.py uses eth_utils HexBytes).
-    return cast(str, value.hex()).lower().removeprefix("0x")
+    raise TypeError(f"_hex_no_prefix: unsupported type {type(value).__name__}")
 
 
 def _topic_to_address(topic: Any) -> str:
@@ -90,7 +91,10 @@ def _to_bytes(data: Any) -> bytes:
     if isinstance(data, bytes | bytearray):
         return bytes(data)
     if isinstance(data, str):
-        s = data[2:] if data.startswith("0x") else data
+        # Strip 0x/0X prefix (case-insensitive — RPC always returns lowercase
+        # but explicit defence is cheap).
+        s = data.lower()
+        s = s[2:] if s.startswith("0x") else s
         return bytes.fromhex(s)
     # HexBytes has .hex() returning unprefixed hex.
     return bytes.fromhex(_hex_no_prefix(data))
@@ -112,6 +116,12 @@ def decode_log(log: Any) -> dict[str, Any]:
     block_number = log["blockNumber"] if isinstance(log, dict) else log.blockNumber
     tx_hash = log["transactionHash"] if isinstance(log, dict) else log.transactionHash
     log_index = log["logIndex"] if isinstance(log, dict) else log.logIndex
+
+    # Hook Buy/Sell signatures always carry 3 topics (signature + 2 indexed
+    # parameters). A shorter topic list means we're decoding the wrong event
+    # (or a malformed log) — raise explicitly instead of an opaque IndexError.
+    if len(topics) < 3:
+        raise ValueError(f"expected 3 topics in Buy/Sell event, got {len(topics)}")
 
     buy_topic, sell_topic = _topics()
     topic0 = "0x" + _hex_no_prefix(topics[0])

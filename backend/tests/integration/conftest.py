@@ -11,6 +11,7 @@ so no pool reset is needed here.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 
 # Override the stub URL from the top-level conftest before any test runs.
 os.environ["DATABASE_URL"] = os.environ.get(
@@ -43,7 +44,7 @@ def _require_db() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clean_tokens_table() -> None:
+def _clean_tokens_table() -> Iterator[None]:
     """Truncate `tokens` (and dependent rows via CASCADE) before each test."""
 
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:

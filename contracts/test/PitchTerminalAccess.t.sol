@@ -7,6 +7,7 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import { PitchTerminalAccess } from "../src/PitchTerminalAccess.sol";
+import { MockContractOwner } from "./mocks/MockContractOwner.sol";
 import { MockPitch } from "./mocks/MockPitch.sol";
 import { MockReentrantERC20 } from "./mocks/MockReentrantERC20.sol";
 
@@ -545,7 +546,8 @@ contract PitchTerminalAccessTest is Test {
     ///      `discount + ref ≤ MAX_TOTAL_REFERRAL_BPS`:
     ///      - valid referrer → `referralAmount + treasuryAmount == buyerPaid`
     ///        AND `buyerPaid == price * (10000 - discount) / 10000` (no lost wei).
-    ///      - invalid referrer (zero-address) → `treasuryAmount == price`.
+    ///      - invalid referrer (zero / msg.sender / address(contract) /
+    ///        address(PITCH)) → `treasuryAmount == price`, no discount.
     function testFuzz_RoundingInvariant(uint256 _price, uint16 _discount, uint16 _ref) public {
         uint256 boundedPrice = bound(_price, 1, access.MAX_PRICE());
         uint16 maxBps = access.MAX_TOTAL_REFERRAL_BPS();
@@ -587,21 +589,37 @@ contract PitchTerminalAccessTest is Test {
             assertEq(pitch.balanceOf(address(a)), 0);
         }
 
-        // Branch 2: invalid referrer — treasury collects the full price, no discount.
-        {
-            address buyer = address(0xB002);
+        // Branch 2: each invalid-referrer variant collects the full price into
+        // treasury, applies no discount, and leaves the contract empty. Iterate
+        // through all four silent-skip targets: 0x0, msg.sender, address(this),
+        // address(PITCH).
+        address[4] memory invalidReferrers = [
+            address(0),
+            address(0), // placeholder for msg.sender — replaced below
+            address(a),
+            address(pitch)
+        ];
+        for (uint256 i = 0; i < invalidReferrers.length; i++) {
+            address buyer = address(uint160(0xB100 + i));
             pitch.mint(buyer, boundedPrice);
             uint256 treasuryBefore = pitch.balanceOf(treasury);
+            address referrerArg = i == 1 ? buyer : invalidReferrers[i];
 
             vm.startPrank(buyer);
             pitch.approve(address(a), boundedPrice);
-            a.buyAccess(address(0));
+            a.buyAccess(referrerArg);
             vm.stopPrank();
 
             uint256 treasuryDelta = pitch.balanceOf(treasury) - treasuryBefore;
             assertEq(treasuryDelta, boundedPrice);
             assertEq(pitch.balanceOf(buyer), 0);
-            assertEq(pitch.balanceOf(address(a)), 0);
+            // The silent-skip target itself must never receive funds — even if
+            // it's a balance-holding address like PITCH or another contract.
+            if (referrerArg != treasury) {
+                // (treasury itself is the only address that *should* gain — we
+                // already asserted that delta above. Anything else stays put.)
+                assertEq(pitch.balanceOf(address(a)), 0);
+            }
         }
     }
 
@@ -988,6 +1006,38 @@ contract PitchTerminalAccessTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         vm.prank(alice);
         access.transferOwnership(bob);
+    }
+
+    /// @dev Production owner will typically be a Safe multisig — a *contract*
+    ///      with code, not an EOA. Verify that the Ownable2Step accept-flow
+    ///      works when the pending owner is itself a contract calling
+    ///      ``acceptOwnership`` through its own ``call`` path.
+    function test_Ownership_AcceptByContract() public {
+        MockContractOwner contractOwner = new MockContractOwner();
+
+        // Transfer ownership from the EOA owner to the contract.
+        vm.prank(owner);
+        access.transferOwnership(address(contractOwner));
+
+        // The EOA owner is still active until acceptance.
+        assertEq(access.owner(), owner);
+        assertEq(access.pendingOwner(), address(contractOwner));
+
+        // The contract accepts ownership via its forwarder.
+        contractOwner.call(
+            address(access),
+            abi.encodeWithSelector(access.acceptOwnership.selector)
+        );
+
+        assertEq(access.owner(), address(contractOwner));
+        assertEq(access.pendingOwner(), address(0));
+
+        // Sanity: the contract can now exercise owner-only powers.
+        contractOwner.call(
+            address(access),
+            abi.encodeWithSelector(access.setPrice.selector, 2e18)
+        );
+        assertEq(access.price(), 2e18);
     }
 
     // ---------------------------------------------------------------------

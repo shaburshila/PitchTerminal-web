@@ -51,6 +51,12 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 ///              not revert). Prevents accidental self-links and griefing via
 ///              `?ref=<dead address>` from breaking the UX or silently burning the
 ///              referral share at an unrecoverable address (no rescue function).
+///              **This is an explicit allow-list of known unrecoverable targets, NOT
+///              a universal dead-address filter.** Other burn-like addresses
+///              (e.g. `0x000…0dead`, other ERC20 contract addresses, well-known
+///              treasury holes) are NOT filtered on-chain — they will receive the
+///              referrer share normally. The UI/backend layer is responsible for
+///              validating referrer links before promoting them to users.
 ///         `treasury` is immutable: even a compromised owner cannot redirect proceeds.
 contract PitchTerminalAccess is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;

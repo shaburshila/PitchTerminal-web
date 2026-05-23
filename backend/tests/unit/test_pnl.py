@@ -74,7 +74,7 @@ class TestWalletPosition:
         assert wp["bought"] == 1.0
         assert wp["spent"] == 10.0
         assert wp["received"] == 15.0
-        # avg_buy = (10 - 0) / 1 = 10. sold = 1. realized = 15 - 10*1 = 5.
+        # avg_buy = 10 / 1 = 10. sold = 1. realized = 15 - 10*1 = 5.
         assert wp["avg_buy"] == 10.0
         assert wp["realized_pnl"] == 5.0
         # Position is zero → unrealized must be 0 (current_price irrelevant).
@@ -103,12 +103,14 @@ class TestWalletPosition:
         assert wp["spent"] == 70.0
         assert wp["avg_buy"] == 17.5
 
-    def test_buy_fees_excluded_from_avg_buy(self) -> None:
-        # avg_buy uses (spent - buy_fees) / bought (market price).
-        # Buy: paid 11 (incl 1 fee), got 1 token → avg_buy = (11-1)/1 = 10.
+    def test_avg_buy_is_fee_inclusive(self) -> None:
+        # avg_buy = spent / bought (portable parity — fee-inclusive cost basis).
+        # Buy: paid 11 (incl 1 fee), got 1 token → avg_buy = 11/1 = 11.
+        # Fees are surfaced separately via fees_paid so the user sees what was
+        # spent on fees without double-counting it.
         events = [_ev(side="buy", base=11 * WEI, token=1 * WEI, fee=1 * WEI)]
         wp = wallet_position(events, WALLET)
-        assert wp["avg_buy"] == 10.0
+        assert wp["avg_buy"] == 11.0
         assert wp["spent"] == 11.0
         assert wp["fees_paid"] == 1.0
 

@@ -1,10 +1,15 @@
 """OHLCV candles + line-chart points from a list of events.
 
-Pure adaptation of portable ``build_candles`` / ``build_points`` (server.py
-§368-478) — same formula, no global state. The portable version derived a
-synthetic timestamp from ``current_block - ev["block"]`` because the cache
-didn't store per-event timestamps; in the web version :class:`Event` carries
-a real ``timestamp`` so the chart code only does bucketing.
+Adapted from portable ``build_candles`` / ``build_points`` (server.py §368-478)
+with two intentional changes:
+
+1. **Real timestamps instead of synthetic.** The portable version derived a
+   timestamp from ``current_block - ev["block"]`` because its cache didn't
+   store per-event timestamps. The web version's :class:`Event` carries the
+   actual block timestamp, so we just bucket by it.
+2. **Forward-fill runs even with a single bucket** when ``current_price > 0``,
+   so a freshly-traded token shows a flat extension up to "now" instead of a
+   single floating dot. The portable code only forward-filled with 2+ buckets.
 
 **Sort guarantee:** ``lightweight-charts`` ``setData`` crashes on unsorted
 inputs (``"Value is null"``). Both functions sort their inputs by
@@ -172,6 +177,12 @@ def build_points(events: list[Event]) -> list[Point]:
     Sorts events by block then log_index (lightweight-charts requirement).
     Returns the fee-excluded market price for each event. Events with
     ``token_value <= 0`` are skipped.
+
+    Multiple events sharing the same block timestamp are disambiguated by a
+    sub-second tick offset (``log_index * 0.001``), so the returned ``time``
+    values are strictly increasing — required by lightweight-charts (passing
+    duplicates crashes the renderer with "Value is null"). ``log_index`` is
+    monotonic within a block, so the offset preserves event order.
     """
 
     sorted_events = _sort_events(events)
@@ -182,7 +193,8 @@ def build_points(events: list[Event]) -> list[Point]:
         price = market_price(ev["side"], ev["base_value"], ev["fee"], ev["token_value"])
         if price <= 0:
             continue
-        points.append({"time": ev["timestamp"], "value": round(price, 6)})
+        tick_offset = ev["log_index"] * 0.001
+        points.append({"time": ev["timestamp"] + tick_offset, "value": round(price, 6)})
     return points
 
 

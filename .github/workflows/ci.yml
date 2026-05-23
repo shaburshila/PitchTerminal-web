@@ -148,14 +148,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Foundry
+        # Pinned to a published release so `forge fmt`/`forge build` semantics
+        # don't drift on every CI run. Bump in lockstep with local Foundry
+        # versions referenced in docs/plans/*.md.
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
 
       - name: Cache OZ dependency
         id: cache-oz
         uses: actions/cache@v4
         with:
           path: contracts/lib
-          key: ${{ runner.os }}-foundry-oz-${{ hashFiles('contracts/foundry.toml', 'contracts/remappings.txt', 'contracts/README.md') }}
+          # Cache key keys off files that actually pin the OZ version: the OZ
+          # `forge install` line lives in *this* workflow, so we include
+          # ``ci.yml`` itself; ``foundry.toml`` and ``remappings.txt`` capture
+          # remapping/profile changes that may require a re-install.
+          key: ${{ runner.os }}-foundry-oz-${{ hashFiles('contracts/foundry.toml', 'contracts/remappings.txt', '.github/workflows/ci.yml') }}
 
       - name: Install OpenZeppelin v5.0.2
         if: steps.cache-oz.outputs.cache-hit != 'true'

@@ -1,7 +1,8 @@
 """Per-wallet PnL aggregation.
 
-Pure port of the PnL block in portable ``api_trades`` (server.py §717-852) —
-same accumulators, same formulas. Differences:
+Port of the PnL block in portable ``api_trades`` (server.py §717-852). The
+core formulas match the portable my_wallet view, with the following
+differences from the original code structure:
 
 - Pure function: ``(events, wallet_address, current_price) → WalletPosition``.
   Portable code mutated a ``wallets`` dict in-place while walking events.
@@ -11,14 +12,20 @@ same accumulators, same formulas. Differences:
 - ``current_price`` is mandatory — portable read it from ``cache["prices"]``
   via ``current_price_of``. Caller passes 0.0 if unknown, in which case
   ``unrealized_pnl`` and ``total_pnl`` collapse to 0.
+- ``position`` is clamped to 0 for display when float drift produces a
+  ~1e-15 negative after a full sell-out. Portable rounded for the same reason.
 
-Formulas (verbatim from portable, kept in display units after dividing by WEI):
+Formulas (verbatim from portable my_wallet, kept in display units after dividing
+by WEI). `avg_buy` here is **fee-inclusive** to match the portable wallet view
+(`spent / bought`, not `(spent - buy_fees) / bought`). Reasoning: users care
+about the actual amount they paid out of pocket; fees are then shown separately
+in ``fees_paid`` for transparency, not double-counted.
 
-    avg_buy   = (spent - buy_fees) / bought         # market avg (fee-excluded)
-    avg_net   = (spent - received) / position       # net cost basis (fee-incl.)
-    realized  = received - avg_buy * sold           # avg-cost basis
-    unrealized = position * current_price - avg_buy * position
-    total_pnl = realized + unrealized
+    avg_buy    = spent / bought                      # fee-inclusive (portable parity)
+    avg_net    = (spent - received) / position       # net cost basis
+    realized   = received - avg_buy * sold           # avg-cost basis
+    unrealized = position * (current_price - avg_buy)
+    total_pnl  = realized + unrealized
 """
 
 from __future__ import annotations
@@ -55,11 +62,10 @@ def wallet_position(
 
     buys = sells = 0
     position = 0.0  # net tokens held (in display units)
-    spent = 0.0  # total base spent incl. buy fees
+    spent = 0.0  # total base spent (PITCH paid out — fee included in transfer)
     received = 0.0  # total base received net of sell fees
     bought = 0.0  # gross tokens bought
-    fees_paid = 0.0  # all fees (buy + sell)
-    buy_fees = 0.0  # buy fees only — for avg_buy formula
+    fees_paid = 0.0  # all fees (buy + sell), surfaced separately
     first_ts = 0  # earliest event ts seen
 
     for ev in events:
@@ -74,7 +80,6 @@ def wallet_position(
             position += token_val
             spent += base_val
             bought += token_val
-            buy_fees += fee_val
         else:  # sell
             sells += 1
             position -= token_val
@@ -85,9 +90,15 @@ def wallet_position(
         if ts > 0 and (first_ts == 0 or ts < first_ts):
             first_ts = ts
 
-    sold = max(bought - max(position, 0.0), 0.0)
+    # ``position`` can drift slightly negative or to dust (~1e-15) after a full
+    # sell-out due to float arithmetic; clamp for display.
+    display_position = position if position > _TINY else 0.0
+    sold = max(bought - display_position, 0.0)
 
-    avg_buy = ((spent - buy_fees) / bought) if bought > 0 else 0.0
+    # Fee-inclusive avg_buy (portable parity): the buyer pays ``spent`` in PITCH
+    # and receives ``bought`` tokens; cost basis is the gross amount, not the
+    # net-of-fee amount.
+    avg_buy = (spent / bought) if bought > 0 else 0.0
     # Guard with a tiny epsilon — float position can be ~1e-15 after a full
     # sell-out, division would explode. Matches portable §782.
     avg_net = ((spent - received) / position) if position > _TINY else 0.0
@@ -95,7 +106,7 @@ def wallet_position(
 
     realized = received - avg_buy * sold
     if current_price > 0 and position > _TINY:
-        unrealized = position * current_price - avg_buy * position
+        unrealized = position * (current_price - avg_buy)
     else:
         unrealized = 0.0
     total_pnl = realized + unrealized
@@ -104,7 +115,7 @@ def wallet_position(
         "address": wallet,
         "buys": buys,
         "sells": sells,
-        "position": position,
+        "position": display_position,
         "spent": spent,
         "received": received,
         "bought": bought,

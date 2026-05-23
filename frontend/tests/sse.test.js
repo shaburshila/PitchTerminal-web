@@ -360,3 +360,131 @@ describe('openStream — handle inspection', () => {
     expect(handle.isClosed()).toBe(true);
   });
 });
+
+describe('openStream — error payload', () => {
+  it('passes {readyState, willReconnect:true, attempts:1} on CLOSED with retry budget', () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const handle = openStream(
+      { onError },
+      { reconnectDelayMs: 1000, eventSourceCtor: MockEventSource },
+    );
+    MockEventSource.instances[0].fail();
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [, info] = onError.mock.calls[0];
+    expect(info).toBeDefined();
+    expect(info.readyState).toBe(MockEventSource.CLOSED);
+    expect(info.willReconnect).toBe(true);
+    expect(info.attempts).toBe(1);
+    handle.close();
+  });
+
+  it('passes {willReconnect:false} on transient CONNECTING hiccup', () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const handle = openStream({ onError }, { eventSourceCtor: MockEventSource });
+    const es = MockEventSource.instances[0];
+    es.open();
+    es.hiccup();
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [, info] = onError.mock.calls[0];
+    expect(info.readyState).toBe(MockEventSource.CONNECTING);
+    expect(info.willReconnect).toBe(false);
+    handle.close();
+  });
+
+  it('passes {willReconnect:false} once maxReconnectAttempts is exhausted', () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const handle = openStream(
+      { onError },
+      { reconnectDelayMs: 100, maxReconnectAttempts: 1, eventSourceCtor: MockEventSource },
+    );
+    MockEventSource.instances[0].fail(); // attempts -> 1 (schedule)
+    vi.advanceTimersByTime(100);
+    MockEventSource.instances[1].fail(); // budget exhausted → no reschedule
+    const lastInfo = onError.mock.calls[onError.mock.calls.length - 1][1];
+    expect(lastInfo.willReconnect).toBe(false);
+    handle.close();
+  });
+});
+
+describe('openStream — null/edge payloads', () => {
+  it('drops JSON-null payloads without invoking handlers', () => {
+    const onPrices = vi.fn();
+    const handle = openStream({ onPrices }, { eventSourceCtor: MockEventSource });
+    // SSE `data: null\n\n` parses to JSON null — must not crash handler with
+    // `payload.foo` access.
+    MockEventSource.instances[0].dispatch('prices', null);
+    expect(onPrices).not.toHaveBeenCalled();
+    handle.close();
+  });
+
+  it('passes config payloads without txHash straight through (no dedup)', () => {
+    const onConfig = vi.fn();
+    const handle = openStream({ onConfig }, { eventSourceCtor: MockEventSource });
+    const es = MockEventSource.instances[0];
+    es.dispatch('config', { accessPriceWei: '1', buyerDiscountBps: 0, referralBps: 0 });
+    es.dispatch('config', { accessPriceWei: '2', buyerDiscountBps: 0, referralBps: 0 });
+    expect(onConfig).toHaveBeenCalledTimes(2);
+    handle.close();
+  });
+});
+
+describe('openStream — config dedup reset on reconnect', () => {
+  it('re-delivers the same txHash AFTER a reconnect (cache cleared on re-open)', () => {
+    vi.useFakeTimers();
+    const onConfig = vi.fn();
+    const handle = openStream(
+      { onConfig },
+      { reconnectDelayMs: 100, eventSourceCtor: MockEventSource },
+    );
+    const first = MockEventSource.instances[0];
+    first.open();
+    first.dispatch('config', { txHash: '0xabc', accessPriceWei: '1' });
+    expect(onConfig).toHaveBeenCalledTimes(1);
+
+    // Drop and reconnect.
+    first.fail();
+    vi.advanceTimersByTime(100);
+    const second = MockEventSource.instances[1];
+    second.open();
+
+    // Worker re-emits the same snapshot during catch-up — must reach handler
+    // so any stale-from-disconnect UI gets refreshed.
+    second.dispatch('config', { txHash: '0xabc', accessPriceWei: '1' });
+    expect(onConfig).toHaveBeenCalledTimes(2);
+    handle.close();
+  });
+});
+
+describe('openStream — constructor failure', () => {
+  it('routes synchronous constructor throws to onError and schedules reconnect', () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    let throwOnce = true;
+    function BrokenES(url, opts) {
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error('connection refused');
+      }
+      return new MockEventSource(url, opts);
+    }
+    BrokenES.CONNECTING = MockEventSource.CONNECTING;
+    BrokenES.OPEN = MockEventSource.OPEN;
+    BrokenES.CLOSED = MockEventSource.CLOSED;
+
+    const handle = openStream(
+      { onError },
+      { reconnectDelayMs: 100, eventSourceCtor: BrokenES },
+    );
+    // Constructor threw on first call — onError called, no live source yet.
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(MockEventSource.instances).toHaveLength(0);
+
+    // After the backoff a real mock instance opens.
+    vi.advanceTimersByTime(100);
+    expect(MockEventSource.instances).toHaveLength(1);
+    handle.close();
+  });
+});

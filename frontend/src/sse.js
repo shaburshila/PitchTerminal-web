@@ -22,6 +22,14 @@
  *   - Premium-payment-triggered reconnect (close + re-open after buyAccess).
  *   - Connection-limit (429) recovery — surfaced via `onError`.
  *   - Catch-up REST fetches after reconnect — fired from `onReconnect`.
+ *
+ * `Last-Event-ID` note: native EventSource automatically sends the last seen
+ * event id on its OWN reconnect attempts (CONNECTING-state retries). Manual
+ * reconnects from this module open a brand-new EventSource and therefore do
+ * NOT send Last-Event-ID. Both behaviours are fine because the server is
+ * specified to **ignore** Last-Event-ID and rely on caller-issued catch-up
+ * GETs (api-spec.md §8.2). If a future backend regression starts honouring
+ * the header, the manual-reconnect path will already be drift-resistant.
  */
 
 /**
@@ -35,7 +43,13 @@
  *   Deduplicated by `txHash` inside this client.
  * @property {(payload: object) => void} [onOrders]
  *   `{ order: { id, status, executedTxHash, failReason } }`.
- * @property {(err: Event|Error) => void} [onError]
+ * @property {(err: Event|Error, info?: {readyState: number, willReconnect: boolean, attempts: number}) => void} [onError]
+ *   `info.readyState` is the EventSource state (0=CONNECTING, 1=OPEN, 2=CLOSED).
+ *   `info.willReconnect` is true if this module will attempt a manual reconnect
+ *   after this error; false for transient CONNECTING-state hiccups (native
+ *   retry handles those). `info.attempts` is the consecutive-failure count
+ *   AFTER this error — useful to surface a banner after N failed retries
+ *   (e.g. 429 connection-limit loops).
  * @property {() => void} [onOpen]
  *   Called every time a connection opens (including the very first).
  * @property {() => void} [onReconnect]
@@ -121,7 +135,9 @@ export function openStream(handlers = {}, options = {}) {
 
   function handleChannel(channel, evt) {
     const payload = parseData(evt?.data);
-    if (payload === undefined) return;
+    // Both `undefined` (parse failure) and `null` (JSON `null` literal) are
+    // discarded — handlers would otherwise crash on `payload.foo` access.
+    if (payload === undefined || payload === null) return;
 
     if (channel === 'prices') {
       safeInvoke(handlers.onPrices, payload);
@@ -129,10 +145,10 @@ export function openStream(handlers = {}, options = {}) {
       safeInvoke(handlers.onEvents, payload);
     } else if (channel === 'config') {
       // Dedup: same on-chain tx may be re-scanned by the worker.
-      if (payload && payload.txHash && payload.txHash === lastConfigTxHash) {
+      if (payload.txHash && payload.txHash === lastConfigTxHash) {
         return;
       }
-      if (payload && payload.txHash) {
+      if (payload.txHash) {
         lastConfigTxHash = payload.txHash;
       }
       safeInvoke(handlers.onConfig, payload);
@@ -183,6 +199,12 @@ export function openStream(handlers = {}, options = {}) {
     es.onopen = () => {
       attempts = 0;
       totalOpens += 1;
+      if (totalOpens > 1) {
+        // Reset config-dedup cache on every successful reconnect so the first
+        // config snapshot post-reconnect always reaches the handler — caller
+        // may have rendered stale UI while disconnected.
+        lastConfigTxHash = null;
+      }
       safeInvoke(handlers.onOpen);
       if (totalOpens > 1) {
         safeInvoke(handlers.onReconnect);
@@ -190,7 +212,6 @@ export function openStream(handlers = {}, options = {}) {
     };
 
     es.onerror = (err) => {
-      safeInvoke(handlers.onError, err);
       // Only escalate to manual reconnect once the native EventSource has
       // given up (readyState === CLOSED). For transient hiccups
       // (readyState === CONNECTING) EventSource retries on its own.
@@ -198,6 +219,19 @@ export function openStream(handlers = {}, options = {}) {
         (eventSourceCtor && eventSourceCtor.CLOSED) ??
         (globalThis.EventSource && globalThis.EventSource.CLOSED) ??
         2;
+      const willReconnect =
+        es.readyState === CLOSED_STATE &&
+        !closed &&
+        autoReconnect &&
+        attempts < maxReconnectAttempts;
+      const info = {
+        readyState: es.readyState,
+        willReconnect,
+        // Post-error attempts count: scheduleReconnect increments it, so
+        // surface what it WILL be so callers see the next-retry number.
+        attempts: willReconnect ? attempts + 1 : attempts,
+      };
+      safeInvoke(handlers.onError, err, info);
       if (es.readyState === CLOSED_STATE) {
         scheduleReconnect();
       }

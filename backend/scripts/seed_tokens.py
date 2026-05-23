@@ -24,12 +24,16 @@ address. The seeder resolves it via the countries' ``symbol -> address`` map.
 Loading strategy:
 
 * Single transaction.
-* ``SET CONSTRAINTS tokens_country_fk DEFERRED`` (the FK is DEFERRABLE in
-  ``db-schema.sql``; deferring it keeps insertion order tolerant, though we
-  also insert countries first for clarity).
+* Countries inserted first, then players. The FK ``tokens_country_fk`` is
+  declared ``DEFERRABLE INITIALLY DEFERRED`` in ``db-schema.sql``, so order
+  isn't strictly required, but inserting in the natural order keeps the SQL
+  log readable and avoids relying on the DEFERRED behaviour.
 * Addresses normalized to lowercase (CHECK constraint requires
   ``^0x[0-9a-f]{40}$``).
-* Idempotent via ``ON CONFLICT (address) DO NOTHING``.
+* Duplicate addresses inside the JSON are rejected up-front (data quality
+  guard — silently skipping them via ``ON CONFLICT`` would hide bugs in the
+  source data).
+* Idempotent across runs via ``ON CONFLICT (address) DO NOTHING``.
 
 CLI::
 
@@ -69,18 +73,25 @@ _VALID_ROLES = {"best", "captain", "rookie"}
 
 @dataclass(frozen=True)
 class SeedCounts:
-    """Result of a seed run."""
+    """Result of a seed run.
+
+    On ``--dry-run``, ``inserted_*`` carry "would-insert" counts (all rows from
+    the validated JSON) and ``skipped_*`` are zero — there's no DB to compare
+    against. The ``dry_run`` flag distinguishes the two cases.
+    """
 
     inserted_countries: int
     skipped_countries: int
     inserted_players: int
     skipped_players: int
+    dry_run: bool = False
 
     def as_log_line(self) -> str:
+        prefix = "[dry-run] would_insert" if self.dry_run else "inserted"
         return (
-            f"inserted_countries={self.inserted_countries} "
+            f"{prefix}_countries={self.inserted_countries} "
             f"skipped_countries={self.skipped_countries} "
-            f"inserted_players={self.inserted_players} "
+            f"{prefix}_players={self.inserted_players} "
             f"skipped_players={self.skipped_players}"
         )
 
@@ -137,7 +148,10 @@ def seed_from_data(
 
     symbol_to_addr = _build_country_symbol_to_address(countries)
 
-    # Pre-validate every player BEFORE touching the DB.
+    # Pre-validate every player BEFORE touching the DB. Also reject duplicate
+    # player.address inside the JSON itself — silently skipping them via
+    # ON CONFLICT would mask data-quality bugs in the source feed.
+    seen_player_addrs: set[str] = set()
     prepared_players: list[tuple[str, str, str, str, str]] = []
     for p in players:
         country_sym = p["country"]
@@ -148,9 +162,16 @@ def seed_from_data(
         role = p["role"]
         if role not in _VALID_ROLES:
             raise ValueError(f"player {p.get('symbol')!r}: invalid role {role!r}")
+        addr = _normalize_address(p["address"])
+        if addr in seen_player_addrs:
+            raise ValueError(
+                f"player {p.get('symbol')!r}: duplicate address {addr!r} "
+                "(already used by another player in tokens.json)"
+            )
+        seen_player_addrs.add(addr)
         prepared_players.append(
             (
-                _normalize_address(p["address"]),
+                addr,
                 str(p["name"]),
                 str(p["symbol"]),
                 symbol_to_addr[country_sym],
@@ -164,12 +185,14 @@ def seed_from_data(
     ]
 
     if dry_run:
-        # No DB writes; treat all as "would-insert".
+        # Validation succeeded — report what would be inserted on a real run.
+        # Skipped counts are 0 because we never touched the DB.
         return SeedCounts(
-            inserted_countries=0,
+            inserted_countries=len(prepared_countries),
             skipped_countries=0,
-            inserted_players=0,
+            inserted_players=len(prepared_players),
             skipped_players=0,
+            dry_run=True,
         )
 
     if conn is None:
@@ -208,11 +231,11 @@ def _do_insert(
     inserted_p = 0
     skipped_p = 0
 
+    # FK is DEFERRABLE INITIALLY DEFERRED per db-schema.sql, so no explicit
+    # SET CONSTRAINTS is needed — we insert countries first anyway. Adding an
+    # explicit deferral would hard-code the constraint name and create a
+    # maintenance trap if the schema ever renames it.
     with conn.cursor() as cur:
-        # FK is DEFERRABLE INITIALLY DEFERRED per db-schema.sql; explicit DEFERRED
-        # is a no-op safety net in case future schema changes drop INITIALLY DEFERRED.
-        cur.execute("SET CONSTRAINTS tokens_country_fk DEFERRED")
-
         for addr, name, symbol in countries:
             cur.execute(
                 """
@@ -276,10 +299,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     counts = seed(args.json, dry_run=args.dry_run)
-    if args.dry_run:
-        print(f"DRY-RUN ok json={args.json}")
-    else:
-        print(counts.as_log_line())
+    print(counts.as_log_line())
     return 0
 
 
