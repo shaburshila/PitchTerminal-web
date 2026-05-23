@@ -22,6 +22,7 @@ from flask import Flask
 
 from app.errors import register_error_handlers
 from app.limits import init_limiter
+from app.routes import access as access_routes
 from app.routes import auth as auth_routes
 from app.routes import config as config_routes
 from app.routes import health as health_routes
@@ -79,6 +80,7 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
     app.register_blueprint(referral_routes.bp)
     app.register_blueprint(profile_routes.bp)
     app.register_blueprint(position_routes.bp)
+    app.register_blueprint(access_routes.bp)
 
     return app
 
