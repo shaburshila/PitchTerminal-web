@@ -181,15 +181,34 @@
 **DoD:**
 - `forge script script/DeployAccess.s.sol --rpc-url $RPC_URL --account ledger --sender 0x<owner>`
   с dry-run работает.
-- `--broadcast` на тестнете деплоит контракт (Sepolia OK для проверки).
+- `--broadcast` на **Anvil fork mainnet** деплоит контракт (см. ниже).
+  Sepolia-деплой допустим **только** для smoke-проверки wiring/constructor —
+  e2e торговый flow на Sepolia невозможен (см. ниже).
 - Post-deploy: `cast call $ACCESS "buyerDiscountBps()(uint16)"` возвращает 2500,
   `cast call $ACCESS "referralBps()(uint16)"` возвращает 2500.
+
+**ВАЖНО — отсутствие testnet'а для pitchwc.** Контракты pitchwc (Player/Country
+Router/Hook, PITCH ERC20) развёрнуты **только в Base Mainnet**. На Base Sepolia
+их нет. Это означает:
+- Sepolia годится для smoke нашего Access (с mock-PITCH ERC20).
+- E2e тестирование buy/sell/limit-orders, worker price/event loops, backfill
+  **на Sepolia невозможно**.
+- Pre-mainnet smoke полного flow делать через **Anvil fork**:
+  `anvil --fork-url $RPC_URL_BASE_MAINNET --fork-block-number <recent>`. Все
+  pitchwc-контракты доступны со снимком состояния, газ бесплатный, повтор
+  безграничный.
 
 ---
 
 ### C0.5 — Mainnet deploy + Basescan verify
 **Что:** задеплоить на Base mainnet, верифицировать на Basescan, экспортировать
 ABI в `abis/`.
+
+**Предусловия (ОБЯЗАТЕЛЬНО):**
+1. Внешний security-аудит контракта пройден (контракт двигает реальные деньги).
+2. Anvil-fork smoke прошёл: deploy + buyAccess (no-ref + ref) + setReferralSplit +
+   setPrice + grant/revoke — всё работает на форке с реальными pitchwc-state.
+3. `ACCESS_CONTRACT` env-планируется зафиксировать в `.env` после деплоя.
 
 **Действия:**
 - Запуск (координатор):
