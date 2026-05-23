@@ -5,12 +5,14 @@ Public surface:
 * :func:`lc`, :func:`chk`, :func:`is_address` — address normalization.
 * :func:`load_abi` — loads ``abis/<name>.json`` from repo root, ``lru_cache``-d.
 * :func:`multicall3_aggregate` — batches eth_calls via Multicall3 ``aggregate3``.
+* :func:`wallet_balances` — batched ETH + ERC20 ``balanceOf`` reads for one wallet.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any, cast
@@ -167,12 +169,115 @@ def multicall3_aggregate(
     return [bytes(item[1]) for item in raw_results]
 
 
+# 4-byte selector for ERC20 ``balanceOf(address)``. keccak256 prefix.
+_BALANCE_OF_SELECTOR = bytes.fromhex("70a08231")
+
+
+def _encode_balance_of_calldata(holder: str) -> bytes:
+    """Build calldata for ``balanceOf(holder)``: selector + 32-byte holder.
+
+    Caller must pass a lowercase 0x-prefixed address (validated by :func:`lc`).
+    """
+
+    raw = bytes.fromhex(holder.removeprefix("0x"))
+    if len(raw) != 20:
+        raise ValueError(f"address must be 20 bytes, got {len(raw)}")
+    return _BALANCE_OF_SELECTOR + b"\x00" * 12 + raw
+
+
+@dataclass(frozen=True)
+class WalletBalances:
+    """ETH + PITCH + per-country ERC20 balances for one wallet, in wei.
+
+    ``countries`` lists only tokens with a non-zero balance, sorted descending
+    by ``wei``. Empty list when the wallet holds none of the queried tokens
+    (or when the RPC call failed; see :func:`wallet_balances` for the
+    fail-soft contract).
+    """
+
+    eth_wei: int
+    pitch_wei: int
+    countries: list[tuple[str, int]]  # (lowercase_address, wei)
+
+
+def wallet_balances(
+    w3: Web3,
+    wallet: str,
+    pitch_token: str,
+    country_addresses: list[str],
+) -> WalletBalances:
+    """Read ETH + PITCH + per-country ERC20 balances for ``wallet``.
+
+    Single Multicall3 batch for the ERC20 ``balanceOf`` calls; ETH balance
+    is a separate ``eth_getBalance`` (Multicall3 has ``getEthBalance`` but
+    we keep the call surface minimal and match the portable version's split).
+
+    Args:
+        w3: Connected Web3 client.
+        wallet: 0x-prefixed wallet address (lowercase or mixed-case).
+        pitch_token: 0x-prefixed PITCH ERC20 address. May be empty when
+            ``PITCH_TOKEN`` env is not yet set — in that case the PITCH read
+            is skipped (returns 0) but ETH + country reads still proceed.
+        country_addresses: Lowercase 0x addresses of country ERC20 tokens.
+
+    Returns:
+        :class:`WalletBalances` with raw wei integers. Per-call failures are
+        absorbed (``allow_failure=True``) and yield 0 for that slot; the
+        envelope itself only fails on a hard RPC error.
+
+    Raises:
+        Any web3 error propagated from ``eth_getBalance`` or ``aggregate3``.
+        Callers in user-facing routes should wrap this with a try/except to
+        degrade gracefully (the portable code returned a zero-stub on error).
+    """
+
+    holder = lc(wallet)
+    holder_cs = Web3.to_checksum_address(holder)
+    eth_wei = int(w3.eth.get_balance(holder_cs))
+
+    # Build calldata once; reuse for every ERC20 target.
+    calldata = _encode_balance_of_calldata(holder)
+
+    # PITCH first (when configured), then country tokens — order matters for
+    # de-multiplexing the results below.
+    targets: list[str] = []
+    if pitch_token:
+        targets.append(pitch_token)
+    targets.extend(country_addresses)
+
+    if not targets:
+        return WalletBalances(eth_wei=eth_wei, pitch_wei=0, countries=[])
+
+    calls: list[tuple[str, bytes]] = [(t, calldata) for t in targets]
+    results = multicall3_aggregate(w3, calls, allow_failure=True)
+
+    def _parse(r: bytes) -> int:
+        return int.from_bytes(r[:32], "big") if len(r) >= 32 else 0
+
+    idx = 0
+    pitch_wei = 0
+    if pitch_token:
+        pitch_wei = _parse(results[idx])
+        idx += 1
+
+    country_bals: list[tuple[str, int]] = []
+    for addr, raw in zip(country_addresses, results[idx:], strict=True):
+        wei = _parse(raw)
+        if wei > 0:
+            country_bals.append((addr, wei))
+    country_bals.sort(key=lambda kv: -kv[1])
+
+    return WalletBalances(eth_wei=eth_wei, pitch_wei=pitch_wei, countries=country_bals)
+
+
 __all__ = [
     "MULTICALL3_ABI",
+    "WalletBalances",
     "chk",
     "get_w3",
     "is_address",
     "lc",
     "load_abi",
     "multicall3_aggregate",
+    "wallet_balances",
 ]

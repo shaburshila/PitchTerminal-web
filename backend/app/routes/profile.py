@@ -5,18 +5,17 @@ portable repo, with the structural changes required by the web version:
 
 * Reads events from Postgres (not the in-memory cache).
 * Reads per-token current prices from ``market_state`` (worker keeps them
-  fresh) — no RPC call in the hot path.
+  fresh) — no RPC call in the hot path *except* for the wallet's balances
+  block, which still requires a live ``eth_getBalance`` + Multicall3 batch
+  (see :func:`shared.eth.wallet_balances`).
 * PITCH-denominated PnL conversion uses ``market_state.price_pitch`` of each
   country token as the country→PITCH rate (the portable code carried a
   ``countryPricePitch`` field on the player dict — same data, different
   location).
-
-``balances`` block is intentionally **zeroed** at this stage: the portable
-implementation hits Multicall3 to read wallet ETH/PITCH/country balances, and
-adding that RPC call here would (a) couple the API to the worker's web3 setup
-and (b) blow the latency budget when ``ACCESS_CONTRACT`` is wired in B0.11.
-TODO(B0.13.balances): port ``_wallet_balances`` from ``server.py:1343`` once
-``shared/eth.py`` exposes a Multicall helper (post-MVP).
+* ``valueSeries`` uses :func:`shared.price.price_at_pitch` to sample each
+  held token's PITCH price *at the timestamp of every wallet trade*, so the
+  curve reflects historical valuation (not current prices applied to old
+  holdings).
 """
 
 from __future__ import annotations
@@ -30,10 +29,35 @@ from app.deps import require_premium
 from app.errors import abort_with_problem
 from app.pagination import clamp_limit, decode_cursor, encode_cursor
 from shared.db import fetch_all
-from shared.price import to_display_units
+from shared.log import get_logger
+from shared.price import price_at_pitch, to_display_units
 from shared.types import Event
 
+log = get_logger("app.routes.profile")
+
 bp = Blueprint("profile", __name__)
+
+
+# ─── Config indirection (tests patch these — ``Config`` is frozen) ─────────
+
+
+def _get_pitch_token() -> str:
+    """Thin accessor over :attr:`shared.config.config.pitch_token` so tests
+    can monkey-patch the configured address (the dataclass is frozen — see
+    :func:`shared.access._get_contract_address` for the same pattern)."""
+
+    from shared.config import config as _cfg
+
+    return _cfg.pitch_token
+
+
+def _get_w3() -> Any:
+    """Thin accessor over :func:`shared.eth.get_w3` so tests can stub the
+    web3 client without touching the network."""
+
+    from shared.eth import get_w3 as _gw3
+
+    return _gw3()
 
 
 # ─── DB helpers ────────────────────────────────────────────────────────────
@@ -67,6 +91,59 @@ def _load_wallet_events(wallet: str) -> list[Event]:
             }
         )
     return out
+
+
+def _load_all_country_addresses() -> list[str]:
+    """All ``kind='country'`` token addresses, ascending — used as the
+    Multicall target list for the ``balances.countries`` block."""
+
+    rows = fetch_all(
+        "SELECT address FROM tokens WHERE kind = 'country' ORDER BY address"
+    )
+    return [r["address"].strip() for r in rows]
+
+
+def _load_country_symbols(addrs: list[str]) -> dict[str, str]:
+    """Address → symbol lookup for the country tokens, for the response shape."""
+
+    if not addrs:
+        return {}
+    placeholders = ",".join(["%s"] * len(addrs))
+    rows = fetch_all(
+        f"SELECT address, symbol FROM tokens WHERE address IN ({placeholders})",
+        tuple(addrs),
+    )
+    return {r["address"].strip(): r["symbol"] for r in rows}
+
+
+def _fetch_balances(wallet: str) -> dict[str, Any]:
+    """Read on-chain balances for the response's ``balances`` block.
+
+    Returns the spec-shape with empty/zero fields on any RPC failure — we
+    log the error but never break the profile response (the portable code
+    behaved the same way; see ``server.py:1368``).
+    """
+
+    pitch_token = _get_pitch_token()
+    country_addrs = _load_all_country_addresses()
+    try:
+        from shared.eth import wallet_balances as _wallet_balances
+
+        w3 = _get_w3()
+        bals = _wallet_balances(w3, wallet, pitch_token, country_addrs)
+    except Exception as exc:
+        log.warning("profile.balances_failed", wallet=wallet, error=repr(exc))
+        return {"ethWei": "0", "pitchWei": "0", "countries": []}
+
+    symbols = _load_country_symbols([addr for addr, _ in bals.countries])
+    return {
+        "ethWei": str(bals.eth_wei),
+        "pitchWei": str(bals.pitch_wei),
+        "countries": [
+            {"address": addr, "symbol": symbols.get(addr, ""), "wei": str(wei)}
+            for addr, wei in bals.countries
+        ],
+    }
 
 
 def _load_token_meta(token_addrs: set[str]) -> dict[str, dict[str, Any]]:
@@ -406,30 +483,48 @@ def get_profile() -> Any:
     roi_pct = (total_pnl / spent_pitch * 100) if spent_pitch > 0 else 0.0
 
     # ─── valueSeries ───────────────────────────────────────────────────────
-    # Lightweight per-trade portfolio-value series: at each wallet trade, sum
-    # ``position * current_price_pitch`` across all tokens held at that moment.
-    # We don't have historical prices in the DB, so for now we sample at the
-    # *current* token prices — the curve becomes a step function of holdings.
-    # TODO(B0.13.value_series): wire historical price lookup once the chart
-    # module exposes ``price_at(token, ts)``; portable did binary-search over
-    # in-memory events. Not blocking for B0.13 DoD which calls for "correct
-    # sums", not historical accuracy.
+    # Per-trade portfolio-value series: at each wallet trade, sum
+    # ``position * price_at_pitch(token, ts)`` across all tokens held at that
+    # moment. The price-at-ts lookup goes to the ``events`` table for the
+    # nearest event with ``ts <= trade_ts`` (step function), so the curve
+    # reflects what the portfolio was *historically* worth — not what it
+    # would be worth at today's prices applied to old holdings. Mirrors the
+    # portable binary-search semantics in ``server.py:1507``.
     holdings: dict[str, float] = {}
     series_map: dict[int, float] = {}
+    # Memo: (token, ts) → price_pitch. Many trades share the same ts when a
+    # wallet buys multiple tokens in one tx, and consecutive ticks often
+    # resolve to the same prior event. Caching saves O(events²) DB hits.
+    price_memo: dict[tuple[str, int], float] = {}
+
+    def _memo_price(tok: str, ts: int) -> float:
+        key = (tok, ts)
+        cached = price_memo.get(key)
+        if cached is not None:
+            return cached
+        meta_ = token_meta.get(tok)
+        if not meta_:
+            price_memo[key] = 0.0
+            return 0.0
+        p = price_at_pitch(tok, meta_["kind"], meta_.get("country_address"), ts)
+        price_memo[key] = p
+        return p
+
     for ev in events:  # block-sorted ASC
         tv = to_display_units(ev["token_value"])
         delta = tv if ev["side"] == "buy" else -tv
         holdings[ev["token_address"]] = holdings.get(ev["token_address"], 0.0) + delta
+        ts = ev["timestamp"]
+        if ts <= 0:
+            continue
         val = 0.0
         for tok, qty in holdings.items():
             if qty <= 1e-9:
                 continue
-            meta = token_meta.get(tok)
-            if not meta:
-                continue
-            val += qty * float(meta["price_pitch"])
-        if ev["timestamp"] > 0:
-            series_map[ev["timestamp"]] = round(val, 2)
+            val += qty * _memo_price(tok, ts)
+        series_map[ts] = round(val, 2)
+    # The tail point uses current ``value_pitch`` (already computed from
+    # market_state above) — this anchors the series to "now".
     series_map[int(time.time())] = round(value_pitch, 2)
     value_series = [{"time": t, "value": v} for t, v in sorted(series_map.items())]
 
@@ -476,14 +571,7 @@ def get_profile() -> Any:
             "players": round(alloc_players, 2),
             "countries": round(alloc_countries, 2),
         },
-        # TODO(B0.13.balances): port _wallet_balances (Multicall3) from server.py:1343.
-        # Until then, return the spec'd shape with zero/empty values rather than omit
-        # the key — frontend can render "—" placeholders without crashing.
-        "balances": {
-            "ethWei": "0",
-            "pitchWei": "0",
-            "countries": [],
-        },
+        "balances": _fetch_balances(wallet),
         "valueSeries": value_series,
     }
     return jsonify(body)

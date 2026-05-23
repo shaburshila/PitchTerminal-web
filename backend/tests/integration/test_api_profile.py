@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
 
 from app import create_app
+from app.routes import profile as profile_route
 from shared import access as access_mod
 from shared import jwt as jwt_mod
 
@@ -18,6 +19,7 @@ _COUNTRY = "0x" + "11" * 20
 _PLAYER = "0x" + "22" * 20
 _WALLET = "0x" + "ab" * 20
 _CONTRACT = "0x" + "ee" * 20
+_PITCH_TOKEN = "0x" + "ff" * 20
 
 
 @contextmanager
@@ -229,3 +231,154 @@ class TestProfileAggregates:
             resp = client.get("/api/v1/profile?tradesCursor=!!!bogus!!!")
         assert resp.status_code == 400
         assert resp.get_json()["code"] == "validation.bad_request"
+
+
+# ─── B0.13: balances + historical valueSeries ──────────────────────────────
+
+
+def _stub_w3(eth_wei: int, balances_by_addr: dict[str, int]) -> MagicMock:
+    """Build a stub Web3 the ``wallet_balances`` helper can drive.
+
+    See test_eth.TestWalletBalances for the mock contract — same shape here,
+    just plumbed through the route's ``_get_w3`` indirection.
+    """
+
+    w3 = MagicMock()
+    w3.eth.get_balance.return_value = eth_wei
+    w3.to_checksum_address.side_effect = lambda a: a
+    # The contract handle returns ``aggregate3(...).call()`` = list[(ok, bytes)].
+    # ``wallet_balances`` issues calls in order [PITCH (if set), countries...].
+    # We can't know the order here without inspecting calldata, so build the
+    # result list dynamically from the calldata the helper passes.
+    def aggregate3_side_effect(calls: list[tuple[str, bool, bytes]]):
+        runner = MagicMock()
+        results = []
+        for target, _allow, _cd in calls:
+            wei = balances_by_addr.get(target.lower(), 0)
+            results.append((True, wei.to_bytes(32, "big")))
+        runner.call.return_value = results
+        return runner
+
+    w3.eth.contract.return_value.functions.aggregate3.side_effect = aggregate3_side_effect
+    return w3
+
+
+class TestBalances:
+    """B0.13.balances — Multicall-backed wallet balances replace the zero-stub."""
+
+    def test_balances_populated_from_chain(self, app) -> None:
+        # Wallet holds: 1 ETH, 100 PITCH, 50 BRA tokens.
+        w3 = _stub_w3(
+            eth_wei=10**18,
+            balances_by_addr={
+                _PITCH_TOKEN.lower(): 100 * 10**18,
+                _COUNTRY: 50 * 10**18,
+            },
+        )
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with (
+            _premium(has_access=True),
+            patch.object(profile_route, "_get_pitch_token", return_value=_PITCH_TOKEN.lower()),
+            patch.object(profile_route, "_get_w3", return_value=w3),
+        ):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        bal = body["balances"]
+        assert bal["ethWei"] == str(10**18)
+        assert bal["pitchWei"] == str(100 * 10**18)
+        assert bal["countries"] == [
+            {"address": _COUNTRY, "symbol": "BRA", "wei": str(50 * 10**18)}
+        ]
+
+    def test_balances_falls_back_to_stub_on_rpc_error(self, app) -> None:
+        """If the RPC call raises, route returns the zero-stub shape (never 500)."""
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with (
+            _premium(has_access=True),
+            patch.object(profile_route, "_get_pitch_token", return_value=_PITCH_TOKEN.lower()),
+            patch.object(profile_route, "_get_w3", side_effect=RuntimeError("rpc down")),
+        ):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["balances"] == {"ethWei": "0", "pitchWei": "0", "countries": []}
+
+    def test_balances_zero_filtered_from_countries(self, app) -> None:
+        w3 = _stub_w3(
+            eth_wei=0,
+            balances_by_addr={_PITCH_TOKEN.lower(): 0, _COUNTRY: 0},
+        )
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with (
+            _premium(has_access=True),
+            patch.object(profile_route, "_get_pitch_token", return_value=_PITCH_TOKEN.lower()),
+            patch.object(profile_route, "_get_w3", return_value=w3),
+        ):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        assert body["balances"]["countries"] == []
+
+
+class TestValueSeriesHistorical:
+    """B0.13.value_series — valueSeries samples at historical event prices."""
+
+    def test_uses_historical_country_price(self, app) -> None:
+        # Phase 1 (T=...01): country @ 2 PITCH. Wallet buys 5 BRA (cost 10).
+        # Phase 2 (T=...02): some other trader moves country to 4 PITCH.
+        # Wallet doesn't trade in phase 2, but the LAST tail point in
+        # valueSeries (anchored to "now") uses current market_state
+        # (which fixture seeded at 3 PITCH/country) → 15.
+        # The wallet-trade point at phase 1 must value the BRA holding at the
+        # phase-1 price (5 * 2 = 10) — NOT at current (3) which would give 15.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        # Non-wallet trader moves the market in a later block. base/token=4:
+        # 20 PITCH for 5 BRA = 4 PITCH/BRA.
+        _other_trader = "0x" + "cc" * 20
+        _insert_event(200, 0, _COUNTRY, _other_trader, "buy", 20 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        series = body["valueSeries"]
+        assert len(series) >= 2
+        # The first series entry corresponds to the wallet's only trade at
+        # block 100 — value should be 5 BRA * 2 PITCH = 10.
+        first = series[0]
+        assert first["value"] == pytest.approx(10.0, abs=0.01)
+
+    def test_uses_historical_player_price_chain(self, app) -> None:
+        # Player tokens value through the two-leg chain:
+        #   player_in_country (player events) * country_in_pitch (country events).
+        # Both legs must be sampled at the wallet-trade ts, not at current state.
+        #
+        # block  50: country event — 10 PITCH for 5 BRA → country_in_pitch = 2.
+        # block  80: player event by other trader — 6 BRA for 3 PEL →
+        #            player_in_country = 2 country/PEL.
+        # block 100: wallet buys 4 PEL for 8 BRA (same player_in_country = 2).
+        #
+        # Expected at wallet-trade ts: 4 PEL * 2 * 2 = 16 PITCH.
+        # Current state (fixture seed) would give 4 * 6 = 24 — distinguishes
+        # historical chain from current-price shortcut.
+        _other = "0x" + "cc" * 20
+        _insert_event(50, 0, _COUNTRY, _other, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(80, 0, _PLAYER, _other, "buy", 6 * 10**18, 3 * 10**18, 0)
+        _insert_event(100, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        series = body["valueSeries"]
+        assert len(series) >= 1
+        first = series[0]
+        assert first["value"] == pytest.approx(16.0, abs=0.01)
+
+
