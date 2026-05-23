@@ -1,5 +1,9 @@
 import './styles.css';
 import { mountLayout } from './layout.js';
+import { mountSidebar } from './sidebar.js';
+import { mountChart } from './chart.js';
+import { mountBottomTabs } from './components/bottom/index.js';
+import { openStream } from './sse.js';
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -7,7 +11,44 @@ function bootstrap() {
     console.error('PitchTerminal: #app root element not found');
     return;
   }
-  mountLayout(root);
+  const layout = mountLayout(root);
+
+  const chartZone = document.createElement('div');
+  chartZone.className = 'pt-center__chart';
+  chartZone.dataset.testId = 'center-chart';
+  const bottomZone = document.createElement('div');
+  bottomZone.className = 'pt-center__bottom';
+  bottomZone.dataset.testId = 'center-bottom';
+  layout.center.appendChild(chartZone);
+  layout.center.appendChild(bottomZone);
+
+  const chart = mountChart(chartZone);
+  const bottom = mountBottomTabs(bottomZone);
+
+  mountSidebar(layout.sidebar, {
+    onTokenSelect: (token) => {
+      chart.setToken(token);
+      bottom.setToken(token.address);
+    },
+  });
+
+  if (typeof globalThis.EventSource === 'function') {
+    openStream({
+      onPrices: (payload) => {
+        for (const t of payload?.tokens ?? []) {
+          if (t?.address && t.pricePitch != null) {
+            chart.applyPrice(t.address, Number(t.pricePitch));
+          }
+        }
+      },
+      onEvents: (payload) => {
+        const trades = payload?.newTrades ?? [];
+        if (trades.length === 0) return;
+        bottom.pushTrades(trades);
+        for (const trade of trades) chart.applyTrade(trade);
+      },
+    });
+  }
 }
 
 if (document.readyState === 'loading') {

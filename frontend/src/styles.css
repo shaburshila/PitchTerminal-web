@@ -150,6 +150,20 @@ button {
 
 .pt-center {
   background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pt-center__chart {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pt-center__bottom {
+  flex: 0 0 320px;
+  border-top: 1px solid var(--border);
+  overflow: auto;
 }
 
 .pt-right {
@@ -413,4 +427,269 @@ body.mode-dashboard .pt-profile {
   color: var(--text-muted);
   text-align: center;
   font-size: 13px;
+}
+
+/* Bottom tabs: Trades / Holders (F0.7) -------------------------------- */
+
+.pt-bottom {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+}
+
+.pt-bottom__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.pt-bottom__tab {
+  cursor: pointer;
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 12px;
+  font-size: 13px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.pt-bottom__tab:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.pt-bottom__tab[aria-selected='true'] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.pt-bottom__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.pt-bottom__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.pt-bottom__pane[hidden] {
+  display: none;
+}
+
+.pt-bottom__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pt-bottom__table th,
+.pt-bottom__table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pt-bottom__table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev-1);
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.pt-bottom__table td.num,
+.pt-bottom__table th.num {
+  text-align: right;
+}
+
+.pt-bottom__table td a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.pt-bottom__table td a:hover {
+  text-decoration: underline;
+}
+
+.pt-bottom__table td.side--buy {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.pt-bottom__table td.side--sell {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.pt-bottom__row--mine {
+  background: rgba(58, 123, 255, 0.08);
+}
+
+.pt-bottom__row--mine td.addr a {
+  font-weight: 600;
+}
+
+.pt-bottom__empty {
+  text-align: center !important;
+  color: var(--text-muted);
+  font-family: var(--font-stack);
+  padding: 12px !important;
+}
+
+.pt-bottom__status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  min-height: 32px;
+}
+
+.pt-bottom__error {
+  color: var(--danger);
+}
+
+.pt-bottom__more {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+/* Chart (F0.6) -------------------------------------------------------- */
+
+.pt-chart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pt-chart__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.pt-chart__tf,
+.pt-chart__type,
+.pt-chart__unit {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.pt-chart__tf-btn,
+.pt-chart__type-btn,
+.pt-chart__unit-btn {
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.pt-chart__tf-btn:hover,
+.pt-chart__type-btn:hover,
+.pt-chart__unit-btn:hover {
+  color: var(--text);
+  background: var(--bg-elev-1);
+}
+
+.pt-chart__tf-btn[aria-pressed='true'],
+.pt-chart__type-btn[aria-pressed='true'],
+.pt-chart__unit-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pt-chart__tf-btn:focus-visible,
+.pt-chart__type-btn:focus-visible,
+.pt-chart__unit-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pt-chart__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 8px 12px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.pt-chart__stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.pt-chart__stat-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+}
+
+.pt-chart__stat-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.pt-chart__stat-value.positive {
+  color: var(--success);
+}
+
+.pt-chart__stat-value.negative {
+  color: var(--danger);
+}
+
+.pt-chart__canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.pt-chart__status {
+  padding: 16px 12px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.pt-chart__status[hidden] {
+  display: none;
 }
