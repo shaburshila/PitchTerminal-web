@@ -131,23 +131,23 @@ export function mountProfile(container, opts = {}) {
   const status = el('div', {
     className: 'pt-profile__status',
     dataset: { testId: 'profile-status' },
-    text: 'Загрузка профиля…',
+    text: 'Loading profile…',
   });
   wrapper.appendChild(status);
 
   // ── Block containers ────────────────────────────────────────────────────
-  const summary = buildCard('Сводка', 'profile-summary');
+  const summary = buildCard('Summary', 'profile-summary');
   // Referral block sits between summary and the value chart — small,
   // high-signal, doesn't push the chart below the fold.
-  const referral = buildCard('Реферальная ссылка', 'profile-referral-card');
-  const valueChart = buildCard('Стоимость портфеля', 'profile-value-chart');
-  const allocation = buildCard('Аллокация', 'profile-allocation');
-  const balances = buildCard('Балансы', 'profile-balances');
-  const positions = buildCard('Открытые позиции', 'profile-positions');
-  const closed = buildCard('Закрытые позиции', 'profile-closed');
-  const stats = buildCard('Статистика', 'profile-stats');
-  const trades = buildCard('Сделки', 'profile-trades');
-  const orders = buildCard('Лимит-ордера', 'profile-orders');
+  const referral = buildCard('Referral link', 'profile-referral-card');
+  const valueChart = buildCard('Portfolio value', 'profile-value-chart');
+  const allocation = buildCard('Allocation', 'profile-allocation');
+  const balances = buildCard('Balances', 'profile-balances');
+  const positions = buildCard('Open positions', 'profile-positions');
+  const closed = buildCard('Closed positions', 'profile-closed');
+  const stats = buildCard('Stats', 'profile-stats');
+  const trades = buildCard('Trades', 'profile-trades');
+  const orders = buildCard('Limit orders', 'profile-orders');
 
   // Grid: top row = summary (full-width), then 2-col layout for the rest.
   const grid = el('div', { className: 'pt-profile__grid' });
@@ -196,18 +196,37 @@ export function mountProfile(container, opts = {}) {
   function renderSummary(s) {
     summary.body.replaceChildren();
     if (!s) {
-      summary.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет данных' }));
+      summary.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No data' }));
       return;
     }
     const grid = el('div', { className: 'pt-profile__summary-grid' });
     const items = [
-      { label: 'Стоимость (PITCH)', value: formatNumber(s.totalValuePitch, 2), key: 'totalValuePitch' },
-      { label: 'Realised PnL', value: formatSigned(s.realizedPnlPitch, 2), key: 'realizedPnlPitch', sign: s.realizedPnlPitch },
-      { label: 'Unrealised PnL', value: formatSigned(s.unrealizedPnlPitch, 2), key: 'unrealizedPnlPitch', sign: s.unrealizedPnlPitch },
-      { label: 'Total PnL', value: formatSigned(s.totalPnlPitch, 2), key: 'totalPnlPitch', sign: s.totalPnlPitch },
+      { label: 'Value (PITCH)', value: formatNumber(s.totalValuePitch, 2), key: 'totalValuePitch' },
+      {
+        label: 'Realised PnL',
+        value: formatSigned(s.realizedPnlPitch, 2),
+        key: 'realizedPnlPitch',
+        sign: s.realizedPnlPitch,
+      },
+      {
+        label: 'Unrealised PnL',
+        value: formatSigned(s.unrealizedPnlPitch, 2),
+        key: 'unrealizedPnlPitch',
+        sign: s.unrealizedPnlPitch,
+      },
+      {
+        label: 'Total PnL',
+        value: formatSigned(s.totalPnlPitch, 2),
+        key: 'totalPnlPitch',
+        sign: s.totalPnlPitch,
+      },
       { label: 'ROI', value: formatPct(s.roiPct), key: 'roiPct', sign: s.roiPct },
-      { label: 'Открытых позиций', value: typeof s.openPositions === 'number' ? String(s.openPositions) : '—', key: 'openPositions' },
-      { label: 'Комиссии (PITCH)', value: formatNumber(s.feesPaidPitch, 4), key: 'feesPaidPitch' },
+      {
+        label: 'Open positions',
+        value: typeof s.openPositions === 'number' ? String(s.openPositions) : '—',
+        key: 'openPositions',
+      },
+      { label: 'Fees (PITCH)', value: formatNumber(s.feesPaidPitch, 4), key: 'feesPaidPitch' },
     ];
     for (const it of items) {
       const cell = el('div', { className: 'pt-profile__stat' });
@@ -230,13 +249,13 @@ export function mountProfile(container, opts = {}) {
   function renderAllocation(a) {
     allocation.body.replaceChildren();
     if (!a) {
-      allocation.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет данных' }));
+      allocation.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No data' }));
       return;
     }
     const list = el('div', { className: 'pt-profile__alloc' });
     const totals = el('div', { className: 'pt-profile__alloc-totals' });
-    totals.appendChild(el('span', { text: `Игроки: ${formatNumber(a.players, 2)}` }));
-    totals.appendChild(el('span', { text: `Страны: ${formatNumber(a.countries, 2)}` }));
+    totals.appendChild(el('span', { text: `Players: ${formatNumber(a.players, 2)}` }));
+    totals.appendChild(el('span', { text: `Countries: ${formatNumber(a.countries, 2)}` }));
     list.appendChild(totals);
 
     function appendGroup(title, dict, testId) {
@@ -249,37 +268,48 @@ export function mountProfile(container, opts = {}) {
       for (const [k, v] of entries) {
         const li = el('li');
         li.appendChild(el('span', { className: 'pt-profile__alloc-key', text: k }));
-        li.appendChild(el('span', { className: 'pt-profile__alloc-val', text: formatNumber(Number(v), 2) }));
+        li.appendChild(
+          el('span', { className: 'pt-profile__alloc-val', text: formatNumber(Number(v), 2) }),
+        );
         ul.appendChild(li);
       }
       list.appendChild(ul);
     }
-    appendGroup('По стране', a.byCountry, 'profile-alloc-by-country');
-    appendGroup('По роли', a.byRole, 'profile-alloc-by-role');
+    appendGroup('By country', a.byCountry, 'profile-alloc-by-country');
+    appendGroup('By role', a.byRole, 'profile-alloc-by-role');
     allocation.body.appendChild(list);
   }
 
   function renderBalances(b) {
     balances.body.replaceChildren();
     if (!b) {
-      balances.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет данных' }));
+      balances.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No data' }));
       return;
     }
-    const ul = el('ul', { className: 'pt-profile__balances', dataset: { testId: 'profile-balances-list' } });
+    const ul = el('ul', {
+      className: 'pt-profile__balances',
+      dataset: { testId: 'profile-balances-list' },
+    });
     function row(label, weiStr, testId) {
       const li = el('li');
       li.appendChild(el('span', { className: 'pt-profile__bal-key', text: label }));
-      li.appendChild(el('span', {
-        className: 'pt-profile__bal-val',
-        dataset: { testId },
-        text: formatWei(weiStr),
-      }));
+      li.appendChild(
+        el('span', {
+          className: 'pt-profile__bal-val',
+          dataset: { testId },
+          text: formatWei(weiStr),
+        }),
+      );
       ul.appendChild(li);
     }
     row('ETH', b.ethWei, 'profile-balance-eth');
     row('PITCH', b.pitchWei, 'profile-balance-pitch');
     for (const c of Array.isArray(b.countries) ? b.countries : []) {
-      row(c.symbol || c.address || 'country', c.wei, `profile-balance-${(c.symbol || '').toLowerCase()}`);
+      row(
+        c.symbol || c.address || 'country',
+        c.wei,
+        `profile-balance-${(c.symbol || '').toLowerCase()}`,
+      );
     }
     balances.body.appendChild(ul);
   }
@@ -287,28 +317,38 @@ export function mountProfile(container, opts = {}) {
   function renderStats(s) {
     stats.body.replaceChildren();
     if (!s) {
-      stats.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет данных' }));
+      stats.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No data' }));
       return;
     }
     const grid = el('div', { className: 'pt-profile__summary-grid' });
     const items = [
-      { label: 'Всего сделок', value: typeof s.totalTrades === 'number' ? String(s.totalTrades) : '—', key: 'totalTrades' },
+      {
+        label: 'Total trades',
+        value: typeof s.totalTrades === 'number' ? String(s.totalTrades) : '—',
+        key: 'totalTrades',
+      },
       { label: 'Buys', value: typeof s.buys === 'number' ? String(s.buys) : '—', key: 'buys' },
       { label: 'Sells', value: typeof s.sells === 'number' ? String(s.sells) : '—', key: 'sells' },
-      { label: 'Объём (PITCH)', value: formatNumber(s.volumePitch, 2), key: 'volumePitch' },
-      { label: 'Средняя сделка', value: formatNumber(s.avgTradePitch, 2), key: 'avgTradePitch' },
-      { label: 'Комиссии', value: formatNumber(s.feesPaidPitch, 4), key: 'feesPaidPitch' },
-      { label: 'Закрытых позиций', value: typeof s.closedPositions === 'number' ? String(s.closedPositions) : '—', key: 'closedPositions' },
+      { label: 'Volume (PITCH)', value: formatNumber(s.volumePitch, 2), key: 'volumePitch' },
+      { label: 'Avg trade', value: formatNumber(s.avgTradePitch, 2), key: 'avgTradePitch' },
+      { label: 'Fees', value: formatNumber(s.feesPaidPitch, 4), key: 'feesPaidPitch' },
+      {
+        label: 'Closed positions',
+        value: typeof s.closedPositions === 'number' ? String(s.closedPositions) : '—',
+        key: 'closedPositions',
+      },
       { label: 'Win rate', value: formatPct(s.winRatePct), key: 'winRatePct' },
     ];
     for (const it of items) {
       const cell = el('div', { className: 'pt-profile__stat' });
       cell.appendChild(el('div', { className: 'pt-profile__stat-label', text: it.label }));
-      cell.appendChild(el('div', {
-        className: 'pt-profile__stat-value',
-        dataset: { testId: `profile-stats-${it.key}` },
-        text: it.value,
-      }));
+      cell.appendChild(
+        el('div', {
+          className: 'pt-profile__stat-value',
+          dataset: { testId: `profile-stats-${it.key}` },
+          text: it.value,
+        }),
+      );
       grid.appendChild(cell);
     }
     stats.body.appendChild(grid);
@@ -316,18 +356,22 @@ export function mountProfile(container, opts = {}) {
     // Best/worst row.
     const bw = el('div', { className: 'pt-profile__bw' });
     if (s.best) {
-      bw.appendChild(el('span', {
-        className: 'positive',
-        dataset: { testId: 'profile-stats-best' },
-        text: `Лучшая: ${s.best.symbol || '—'} ${formatSigned(s.best.pnlPitch, 2)}`,
-      }));
+      bw.appendChild(
+        el('span', {
+          className: 'positive',
+          dataset: { testId: 'profile-stats-best' },
+          text: `Best: ${s.best.symbol || '—'} ${formatSigned(s.best.pnlPitch, 2)}`,
+        }),
+      );
     }
     if (s.worst) {
-      bw.appendChild(el('span', {
-        className: 'negative',
-        dataset: { testId: 'profile-stats-worst' },
-        text: `Худшая: ${s.worst.symbol || '—'} ${formatSigned(s.worst.pnlPitch, 2)}`,
-      }));
+      bw.appendChild(
+        el('span', {
+          className: 'negative',
+          dataset: { testId: 'profile-stats-worst' },
+          text: `Worst: ${s.worst.symbol || '—'} ${formatSigned(s.worst.pnlPitch, 2)}`,
+        }),
+      );
     }
     if (bw.childElementCount > 0) stats.body.appendChild(bw);
   }
@@ -354,7 +398,9 @@ export function mountProfile(container, opts = {}) {
   function renderPositions(items) {
     positions.body.replaceChildren();
     if (!Array.isArray(items) || items.length === 0) {
-      positions.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет открытых позиций' }));
+      positions.body.appendChild(
+        el('div', { className: 'pt-profile__empty', text: 'No open positions' }),
+      );
       return;
     }
     const table = el('table', {
@@ -363,7 +409,18 @@ export function mountProfile(container, opts = {}) {
     });
     const head = el('thead');
     const headRow = el('tr');
-    for (const label of ['Токен', 'Тип', 'Страна', 'Qty', 'Avg buy', 'Цена', 'Стоимость', 'PnL', '%', 'Share']) {
+    for (const label of [
+      'Token',
+      'Type',
+      'Country',
+      'Qty',
+      'Avg buy',
+      'Price',
+      'Value',
+      'PnL',
+      '%',
+      'Share',
+    ]) {
       headRow.appendChild(el('th', { text: label }));
     }
     head.appendChild(headRow);
@@ -396,7 +453,9 @@ export function mountProfile(container, opts = {}) {
   function renderClosed(items) {
     closed.body.replaceChildren();
     if (!Array.isArray(items) || items.length === 0) {
-      closed.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет закрытых позиций' }));
+      closed.body.appendChild(
+        el('div', { className: 'pt-profile__empty', text: 'No closed positions' }),
+      );
       return;
     }
     const table = el('table', {
@@ -405,7 +464,7 @@ export function mountProfile(container, opts = {}) {
     });
     const head = el('thead');
     const headRow = el('tr');
-    for (const label of ['Токен', 'Тип', 'Страна', 'PnL', 'Buys', 'Sells', 'Последняя']) {
+    for (const label of ['Token', 'Type', 'Country', 'PnL', 'Buys', 'Sells', 'Last']) {
       headRow.appendChild(el('th', { text: label }));
     }
     head.appendChild(headRow);
@@ -436,7 +495,7 @@ export function mountProfile(container, opts = {}) {
     trades.body.replaceChildren();
     const items = state.trades.items;
     if (!Array.isArray(items) || items.length === 0) {
-      trades.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Сделок нет' }));
+      trades.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No trades' }));
       return;
     }
     const table = el('table', {
@@ -445,7 +504,7 @@ export function mountProfile(container, opts = {}) {
     });
     const head = el('thead');
     const headRow = el('tr');
-    for (const label of ['Время', 'Токен', 'Сторона', 'Цена', 'Кол-во', 'Стоимость', 'Fee', 'Tx']) {
+    for (const label of ['Time', 'Token', 'Side', 'Price', 'Amount', 'Value', 'Fee', 'Tx']) {
       headRow.appendChild(el('th', { text: label }));
     }
     head.appendChild(headRow);
@@ -481,13 +540,13 @@ export function mountProfile(container, opts = {}) {
       className: 'pt-btn',
       dataset: { testId: 'profile-trades-prev' },
       attrs: { type: 'button' },
-      text: '◀ Назад',
+      text: '◀ Prev',
     });
     const nextBtn = el('button', {
       className: 'pt-btn',
       dataset: { testId: 'profile-trades-next' },
       attrs: { type: 'button' },
-      text: 'Далее ▶',
+      text: 'Next ▶',
     });
     prevBtn.disabled = state.trades.history.length === 0;
     nextBtn.disabled = !state.trades.nextCursor;
@@ -505,11 +564,13 @@ export function mountProfile(container, opts = {}) {
     // Cross-token orders rendering — endpoint may not return this field yet.
     // Show a stub when missing/empty so the block is always visible.
     if (!Array.isArray(items) || items.length === 0) {
-      orders.body.appendChild(el('div', {
-        className: 'pt-profile__empty',
-        dataset: { testId: 'profile-orders-empty' },
-        text: 'Активных ордеров нет',
-      }));
+      orders.body.appendChild(
+        el('div', {
+          className: 'pt-profile__empty',
+          dataset: { testId: 'profile-orders-empty' },
+          text: 'No active orders',
+        }),
+      );
       return;
     }
     const table = el('table', {
@@ -518,7 +579,7 @@ export function mountProfile(container, opts = {}) {
     });
     const head = el('thead');
     const headRow = el('tr');
-    for (const label of ['Токен', 'Сторона', 'Цена', 'Статус', 'Создан']) {
+    for (const label of ['Token', 'Side', 'Price', 'Status', 'Created']) {
       headRow.appendChild(el('th', { text: label }));
     }
     head.appendChild(headRow);
@@ -540,7 +601,7 @@ export function mountProfile(container, opts = {}) {
   async function renderValueChart(series) {
     valueChart.body.replaceChildren();
     if (!Array.isArray(series) || series.length === 0) {
-      valueChart.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'Нет данных' }));
+      valueChart.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'No data' }));
       return;
     }
     chartHost = el('div', {
@@ -550,7 +611,11 @@ export function mountProfile(container, opts = {}) {
     valueChart.body.appendChild(chartHost);
     // Tear down previous instance (re-render after reload).
     if (chartInstance && typeof chartInstance.remove === 'function') {
-      try { chartInstance.remove(); } catch { /* ignore */ }
+      try {
+        chartInstance.remove();
+      } catch {
+        /* ignore */
+      }
     }
     chartInstance = null;
     chartSeries = null;
@@ -559,7 +624,9 @@ export function mountProfile(container, opts = {}) {
       mod = await ensureChartLib();
     } catch (err) {
       console.error('mountProfile: chart lib load failed', err);
-      valueChart.body.appendChild(el('div', { className: 'pt-profile__empty', text: 'График недоступен' }));
+      valueChart.body.appendChild(
+        el('div', { className: 'pt-profile__empty', text: 'Chart unavailable' }),
+      );
       return;
     }
     if (!mod || typeof mod.createChart !== 'function') return;
@@ -592,7 +659,7 @@ export function mountProfile(container, opts = {}) {
     // Reset pagination — reload() must not preserve a stale cursor stack
     // from a previous session of the same Profile view.
     state.trades.history = [];
-    setStatus('Загрузка профиля…', false);
+    setStatus('Loading profile…', false);
 
     let resp;
     try {
@@ -601,11 +668,12 @@ export function mountProfile(container, opts = {}) {
       if (seq !== state.reqSeq) return;
       state.loading = false;
       state.error = err;
-      const msg = err && err.status === 402
-        ? 'Профиль доступен только после оплаты.'
-        : err && err.status === 401
-          ? 'Войдите кошельком для просмотра профиля.'
-          : 'Не удалось загрузить профиль.';
+      const msg =
+        err && err.status === 402
+          ? 'Profile is available after payment.'
+          : err && err.status === 401
+            ? 'Sign in with your wallet to view the profile.'
+            : 'Failed to load profile.';
       setStatus(msg, false);
       return;
     }
@@ -644,7 +712,7 @@ export function mountProfile(container, opts = {}) {
     const cursor = state.trades.nextCursor;
     if (!cursor) return;
     state.loading = true;
-    setStatus('Загрузка сделок…', false);
+    setStatus('Loading trades…', false);
     try {
       const resp = await apiClient.getProfile({ tradesLimit, tradesCursor: cursor });
       // history is a stack of cursors used to load each page; first page
@@ -657,7 +725,7 @@ export function mountProfile(container, opts = {}) {
       setStatus('', true);
       renderTrades();
     } catch (err) {
-      setStatus('Не удалось загрузить страницу сделок.', false);
+      setStatus('Failed to load trades page.', false);
       console.error('mountProfile: loadTradesNext failed', err);
     } finally {
       state.loading = false;
@@ -671,11 +739,12 @@ export function mountProfile(container, opts = {}) {
     // initial (cursor-less) page.
     if (state.trades.history.length === 0) return;
     state.trades.history.pop();
-    const cursor = state.trades.history.length > 0
-      ? state.trades.history[state.trades.history.length - 1]
-      : undefined;
+    const cursor =
+      state.trades.history.length > 0
+        ? state.trades.history[state.trades.history.length - 1]
+        : undefined;
     state.loading = true;
-    setStatus('Загрузка сделок…', false);
+    setStatus('Loading trades…', false);
     try {
       const resp = await apiClient.getProfile({ tradesLimit, tradesCursor: cursor });
       const t = resp?.trades || {};
@@ -684,7 +753,7 @@ export function mountProfile(container, opts = {}) {
       setStatus('', true);
       renderTrades();
     } catch (err) {
-      setStatus('Не удалось загрузить страницу сделок.', false);
+      setStatus('Failed to load trades page.', false);
       console.error('mountProfile: loadTradesPrev failed', err);
     } finally {
       state.loading = false;
@@ -705,12 +774,20 @@ export function mountProfile(container, opts = {}) {
 
   function destroy() {
     if (chartInstance && typeof chartInstance.remove === 'function') {
-      try { chartInstance.remove(); } catch { /* ignore */ }
+      try {
+        chartInstance.remove();
+      } catch {
+        /* ignore */
+      }
     }
     chartInstance = null;
     chartSeries = null;
     if (referralHandle && typeof referralHandle.destroy === 'function') {
-      try { referralHandle.destroy(); } catch { /* ignore */ }
+      try {
+        referralHandle.destroy();
+      } catch {
+        /* ignore */
+      }
     }
     referralHandle = null;
     container.replaceChildren();
@@ -719,7 +796,9 @@ export function mountProfile(container, opts = {}) {
   return {
     reload: () => {
       if (referralHandle && typeof referralHandle.refresh === 'function') {
-        referralHandle.refresh().catch(() => { /* surfaced via section UI */ });
+        referralHandle.refresh().catch(() => {
+          /* surfaced via section UI */
+        });
       }
       return loadProfile();
     },

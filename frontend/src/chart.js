@@ -29,7 +29,7 @@ const DEFAULT_TF = '5m';
 const TYPES = Object.freeze(['candles', 'line']);
 const UNITS = Object.freeze(['pitch', 'country']);
 
-const TYPE_LABEL = { candles: 'Свечи', line: 'Линия' };
+const TYPE_LABEL = { candles: 'Candles', line: 'Line' };
 const UNIT_LABEL = { pitch: 'PITCH', country: 'Country' };
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -152,7 +152,7 @@ export function mountChart(container, options = {}) {
   const tfGroup = el('div', {
     className: 'pt-chart__tf',
     dataset: { testId: 'chart-tf' },
-    attrs: { role: 'group', 'aria-label': 'Таймфрейм' },
+    attrs: { role: 'group', 'aria-label': 'Timeframe' },
   });
   const tfButtons = {};
   for (const tf of TIMEFRAMES) {
@@ -172,7 +172,7 @@ export function mountChart(container, options = {}) {
   const typeGroup = el('div', {
     className: 'pt-chart__type',
     dataset: { testId: 'chart-type' },
-    attrs: { role: 'group', 'aria-label': 'Тип графика' },
+    attrs: { role: 'group', 'aria-label': 'Chart type' },
   });
   const typeButtons = {};
   for (const t of TYPES) {
@@ -192,7 +192,7 @@ export function mountChart(container, options = {}) {
   const unitGroup = el('div', {
     className: 'pt-chart__unit',
     dataset: { testId: 'chart-unit' },
-    attrs: { role: 'group', 'aria-label': 'Единица цены' },
+    attrs: { role: 'group', 'aria-label': 'Price unit' },
   });
   const unitButtons = {};
   for (const u of UNITS) {
@@ -229,7 +229,7 @@ export function mountChart(container, options = {}) {
     cell.appendChild(val);
     return { cell, val };
   }
-  const priceStat = statCell('Цена', 'price');
+  const priceStat = statCell('Price', 'price');
   const changeStat = statCell('Δ', 'change');
   const supplyStat = statCell('Supply', 'supply');
   const mcapStat = statCell('Mkt cap', 'mcap');
@@ -250,7 +250,7 @@ export function mountChart(container, options = {}) {
   const status = el('div', {
     className: 'pt-chart__status',
     dataset: { testId: 'chart-status' },
-    text: 'Выберите токен',
+    text: 'Select a token',
   });
 
   wrapper.appendChild(toolbar);
@@ -260,9 +260,9 @@ export function mountChart(container, options = {}) {
   container.appendChild(wrapper);
 
   // ── Chart lib (lazy) ────────────────────────────────────────────────────
-  let lib = null;          // resolved lightweight-charts module
+  let lib = null; // resolved lightweight-charts module
   let chartInstance = null;
-  let series = null;       // active series (candles or line)
+  let series = null; // active series (candles or line)
   let resizeObserver = null;
 
   async function ensureLib() {
@@ -344,7 +344,11 @@ export function mountChart(container, options = {}) {
     });
 
     // Fallback resize if autoSize isn't supported (older builds, or test env).
-    if (typeof ResizeObserver !== 'undefined' && chartInstance && typeof chartInstance.resize === 'function') {
+    if (
+      typeof ResizeObserver !== 'undefined' &&
+      chartInstance &&
+      typeof chartInstance.resize === 'function'
+    ) {
       resizeObserver = new ResizeObserver(() => {
         const { clientWidth, clientHeight } = canvasHost;
         if (clientWidth > 0 && clientHeight > 0) {
@@ -398,22 +402,22 @@ export function mountChart(container, options = {}) {
   function renderStatus() {
     if (!state.token) {
       status.hidden = false;
-      status.textContent = 'Выберите токен';
+      status.textContent = 'Select a token';
       return;
     }
     if (state.loading) {
       status.hidden = false;
-      status.textContent = 'Загрузка…';
+      status.textContent = 'Loading…';
       return;
     }
     if (state.error) {
       status.hidden = false;
-      status.textContent = 'Ошибка загрузки графика';
+      status.textContent = 'Failed to load chart';
       return;
     }
     if (state.candles.length === 0) {
       status.hidden = false;
-      status.textContent = 'Нет данных';
+      status.textContent = 'No data';
       return;
     }
     status.hidden = true;

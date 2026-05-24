@@ -60,9 +60,9 @@ describe('mountLayout', () => {
 
   it('aria-labels on zones are localized', () => {
     const handle = mountLayout(root);
-    expect(handle.sidebar.getAttribute('aria-label')).toMatch(/токен/i);
-    expect(handle.right.getAttribute('aria-label')).toMatch(/торг/i);
-    expect(handle.profile.getAttribute('aria-label')).toMatch(/профиль/i);
+    expect(handle.sidebar.getAttribute('aria-label')).toMatch(/token/i);
+    expect(handle.right.getAttribute('aria-label')).toMatch(/trading/i);
+    expect(handle.profile.getAttribute('aria-label')).toMatch(/profile/i);
   });
 
   it('renders the anonymous-state connect button by default', () => {
@@ -70,7 +70,7 @@ describe('mountLayout', () => {
     const btn = root.querySelector('[data-test-id="connect-btn"]');
     expect(btn).not.toBeNull();
     expect(btn.tagName).toBe('BUTTON');
-    expect(btn.textContent).toMatch(/Подключить/);
+    expect(btn.textContent).toMatch(/Connect/);
   });
 
   it('renders the network badge', () => {

@@ -128,7 +128,8 @@ export function add(addr) {
   const a = normaliseAddr(addr);
   if (!a) return { added: false, full: false, list: getWatchlist() };
   const list = load();
-  if (list.includes(a)) return { added: false, full: list.length >= WATCHLIST_LIMIT, list: list.slice() };
+  if (list.includes(a))
+    return { added: false, full: list.length >= WATCHLIST_LIMIT, list: list.slice() };
   if (list.length >= WATCHLIST_LIMIT) {
     return { added: false, full: true, list: list.slice() };
   }

@@ -2,7 +2,7 @@
  * Sign-in modal (F0.11).
  *
  * Tiny inline overlay shown after a successful wallet connect when the server
- * cookie is missing/expired. Single CTA — "Подписать сообщение" — calls
+ * cookie is missing/expired. Single CTA — "Sign message" — calls
  * `signIn()` from `../siwe.js`. While the signature is in-flight the button
  * is disabled and shows a spinner-text. On success the modal closes itself;
  * on failure (user rejection, invalid nonce, etc.) a toast is shown and the
@@ -62,26 +62,25 @@ export function showSignInModal(opts = {}) {
   const title = el('h2', {
     className: 'pt-modal__title',
     attrs: { id: 'pt-signin-title' },
-    text: 'Войти в PitchTerminal',
+    text: 'Sign in to PitchTerminal',
   });
   const body = el('p', {
     className: 'pt-modal__body',
     text:
-      'Подпишите сообщение, чтобы подтвердить владение кошельком. ' +
-      'Это не транзакция и не списывает газ.',
+      'Sign a message to prove wallet ownership. ' + 'This is not a transaction and costs no gas.',
   });
   const actions = el('div', { className: 'pt-modal__actions' });
   const signBtn = el('button', {
     className: 'pt-btn pt-btn--primary',
     dataset: { testId: 'signin-submit' },
     attrs: { type: 'button' },
-    text: 'Подписать сообщение',
+    text: 'Sign message',
   });
   const cancelBtn = el('button', {
     className: 'pt-btn',
     dataset: { testId: 'signin-cancel' },
     attrs: { type: 'button' },
-    text: 'Позже',
+    text: 'Later',
   });
   actions.appendChild(cancelBtn);
   actions.appendChild(signBtn);
@@ -116,7 +115,7 @@ export function showSignInModal(opts = {}) {
     signBtn.disabled = true;
     cancelBtn.disabled = true;
     const origText = signBtn.textContent;
-    signBtn.textContent = 'Подписываем…';
+    signBtn.textContent = 'Signing…';
     try {
       const info = await runSignIn();
       if (typeof opts.onSuccess === 'function') opts.onSuccess(info);
@@ -127,7 +126,7 @@ export function showSignInModal(opts = {}) {
       busy = false;
       signBtn.disabled = false;
       cancelBtn.disabled = false;
-      signBtn.textContent = origText || 'Подписать сообщение';
+      signBtn.textContent = origText || 'Sign message';
     }
   }
 
@@ -149,11 +148,11 @@ export function showSignInModal(opts = {}) {
  * trust the user to recognise their wallet's wording.
  */
 function errorMessage(e) {
-  if (!e) return 'Не удалось подписать';
+  if (!e) return 'Failed to sign';
   if (typeof e === 'string') return e;
   if (typeof e === 'object') {
     if ('shortMessage' in e && e.shortMessage) return String(e.shortMessage);
     if ('message' in e && e.message) return String(e.message);
   }
-  return 'Не удалось подписать';
+  return 'Failed to sign';
 }

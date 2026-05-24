@@ -113,7 +113,11 @@ export function mountMyWalletTab(container, opts = {}) {
 
   function tearDownLock() {
     if (lockHandle) {
-      try { lockHandle.destroy(); } catch { /* ignore */ }
+      try {
+        lockHandle.destroy();
+      } catch {
+        /* ignore */
+      }
       lockHandle = null;
     }
   }
@@ -134,7 +138,7 @@ export function mountMyWalletTab(container, opts = {}) {
     root.appendChild(skeleton);
     lockHandle = mountSoftLock(root, {
       zone: 'my-wallet',
-      label: 'Premium — PnL по выбранному токену',
+      label: 'Premium — PnL for the selected token',
       openPayModal: softLockOpts.openPayModal,
       payOpts: softLockOpts.payOpts,
     });
@@ -146,7 +150,7 @@ export function mountMyWalletTab(container, opts = {}) {
     const wrap = el('div', {
       className: 'pt-mywallet__placeholder',
       dataset: { testId: 'mywallet-no-token' },
-      text: 'Выберите токен, чтобы увидеть свою позицию',
+      text: 'Select a token to see your position',
     });
     root.appendChild(wrap);
   }
@@ -154,31 +158,37 @@ export function mountMyWalletTab(container, opts = {}) {
   function renderLoading() {
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-mywallet__loading',
-      dataset: { testId: 'mywallet-loading' },
-      text: 'Загрузка позиции…',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-mywallet__loading',
+        dataset: { testId: 'mywallet-loading' },
+        text: 'Loading position…',
+      }),
+    );
   }
 
   function renderError() {
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-mywallet__error',
-      dataset: { testId: 'mywallet-error' },
-      text: state.error || 'Не удалось загрузить позицию',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-mywallet__error',
+        dataset: { testId: 'mywallet-error' },
+        text: state.error || 'Failed to load position',
+      }),
+    );
   }
 
   function renderEmpty() {
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-mywallet__empty',
-      dataset: { testId: 'mywallet-empty' },
-      text: 'Сделок по этому токену нет — позиция пуста.',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-mywallet__empty',
+        dataset: { testId: 'mywallet-empty' },
+        text: 'No trades for this token — position is empty.',
+      }),
+    );
   }
 
   function buildStat(label, value, { testId, className = '' } = {}) {
@@ -187,10 +197,12 @@ export function mountMyWalletTab(container, opts = {}) {
       dataset: testId ? { testId } : undefined,
     });
     cell.appendChild(el('div', { className: 'pt-mywallet__stat-label', text: label }));
-    cell.appendChild(el('div', {
-      className: `pt-mywallet__stat-value${className}`,
-      text: value,
-    }));
+    cell.appendChild(
+      el('div', {
+        className: `pt-mywallet__stat-value${className}`,
+        text: value,
+      }),
+    );
     return cell;
   }
 
@@ -202,54 +214,68 @@ export function mountMyWalletTab(container, opts = {}) {
       className: 'pt-mywallet__grid',
       dataset: { testId: 'mywallet-grid' },
     });
-    grid.appendChild(buildStat('Позиция', formatNumber(d.position, 4), {
-      testId: 'mywallet-position',
-    }));
-    grid.appendChild(buildStat('Средняя цена', formatNumber(d.avgBuy, 6), {
-      testId: 'mywallet-avgbuy',
-    }));
-    grid.appendChild(buildStat('Цена сейчас', formatNumber(d.currentPrice, 6), {
-      testId: 'mywallet-current',
-    }));
-    grid.appendChild(buildStat(
-      'Стоимость позиции',
-      `${formatNumber(d.positionValue, 4)} PITCH`,
-      { testId: 'mywallet-value' },
-    ));
-    grid.appendChild(buildStat(
-      'Unrealized PnL',
-      `${formatSigned(d.unrealizedPnl, 4)} PITCH`,
-      { testId: 'mywallet-unrealized', className: pnlClass(d.unrealizedPnl) },
-    ));
-    grid.appendChild(buildStat(
-      'Realized PnL',
-      `${formatSigned(d.realizedPnl, 4)} PITCH`,
-      { testId: 'mywallet-realized', className: pnlClass(d.realizedPnl) },
-    ));
-    grid.appendChild(buildStat(
-      'Total PnL',
-      `${formatSigned(d.totalPnl, 4)} PITCH`,
-      { testId: 'mywallet-total', className: pnlClass(d.totalPnl) },
-    ));
-    grid.appendChild(buildStat(
-      'ROI',
-      formatPct(d.totalPnlPct),
-      { testId: 'mywallet-roi', className: pnlClass(d.totalPnlPct) },
-    ));
-    grid.appendChild(buildStat(
-      'Break-even',
-      formatNumber(d.breakEven, 6),
-      { testId: 'mywallet-breakeven' },
-    ));
-    grid.appendChild(buildStat('Покупки', String(d.buys ?? 0), {
-      testId: 'mywallet-buys',
-    }));
-    grid.appendChild(buildStat('Продажи', String(d.sells ?? 0), {
-      testId: 'mywallet-sells',
-    }));
-    grid.appendChild(buildStat('Комиссии', `${formatNumber(d.feesPaid, 4)} PITCH`, {
-      testId: 'mywallet-fees',
-    }));
+    grid.appendChild(
+      buildStat('Position', formatNumber(d.position, 4), {
+        testId: 'mywallet-position',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Avg buy', formatNumber(d.avgBuy, 6), {
+        testId: 'mywallet-avgbuy',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Current price', formatNumber(d.currentPrice, 6), {
+        testId: 'mywallet-current',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Position value', `${formatNumber(d.positionValue, 4)} PITCH`, {
+        testId: 'mywallet-value',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Unrealized PnL', `${formatSigned(d.unrealizedPnl, 4)} PITCH`, {
+        testId: 'mywallet-unrealized',
+        className: pnlClass(d.unrealizedPnl),
+      }),
+    );
+    grid.appendChild(
+      buildStat('Realized PnL', `${formatSigned(d.realizedPnl, 4)} PITCH`, {
+        testId: 'mywallet-realized',
+        className: pnlClass(d.realizedPnl),
+      }),
+    );
+    grid.appendChild(
+      buildStat('Total PnL', `${formatSigned(d.totalPnl, 4)} PITCH`, {
+        testId: 'mywallet-total',
+        className: pnlClass(d.totalPnl),
+      }),
+    );
+    grid.appendChild(
+      buildStat('ROI', formatPct(d.totalPnlPct), {
+        testId: 'mywallet-roi',
+        className: pnlClass(d.totalPnlPct),
+      }),
+    );
+    grid.appendChild(
+      buildStat('Break-even', formatNumber(d.breakEven, 6), { testId: 'mywallet-breakeven' }),
+    );
+    grid.appendChild(
+      buildStat('Buys', String(d.buys ?? 0), {
+        testId: 'mywallet-buys',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Sells', String(d.sells ?? 0), {
+        testId: 'mywallet-sells',
+      }),
+    );
+    grid.appendChild(
+      buildStat('Fees', `${formatNumber(d.feesPaid, 4)} PITCH`, {
+        testId: 'mywallet-fees',
+      }),
+    );
     root.appendChild(grid);
   }
 
@@ -296,7 +322,7 @@ export function mountMyWalletTab(container, opts = {}) {
       state.data = resp ?? null;
     } catch (err) {
       if (myGen !== state.gen) return;
-      const detail = err?.detail || err?.title || err?.message || 'Ошибка загрузки';
+      const detail = err?.detail || err?.title || err?.message || 'Failed to load';
       const status = err && typeof err.status === 'number' ? err.status : null;
       state.error = status ? `${detail} (${status})` : detail;
       state.data = null;
@@ -315,7 +341,9 @@ export function mountMyWalletTab(container, opts = {}) {
     state.accessState = next;
     if (prev !== 'premium' && next === 'premium' && state.token) {
       // Just unlocked — load data now.
-      fetchPosition().catch(() => { /* surfaced via state.error */ });
+      fetchPosition().catch(() => {
+        /* surfaced via state.error */
+      });
     } else if (prev === 'premium' && next !== 'premium') {
       // Just locked — clear data so a future re-unlock starts fresh.
       state.data = null;
@@ -350,7 +378,11 @@ export function mountMyWalletTab(container, opts = {}) {
   }
 
   function destroy() {
-    try { unsubscribe(); } catch { /* ignore */ }
+    try {
+      unsubscribe();
+    } catch {
+      /* ignore */
+    }
     tearDownLock();
     container.replaceChildren();
   }
@@ -369,7 +401,9 @@ export function mountMyWalletTab(container, opts = {}) {
 
   render();
   if (state.token && state.accessState === 'premium') {
-    fetchPosition().catch(() => { /* surfaced via state.error */ });
+    fetchPosition().catch(() => {
+      /* surfaced via state.error */
+    });
   }
 
   return { setToken, refresh, destroy, getState };

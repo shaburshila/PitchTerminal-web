@@ -54,7 +54,7 @@ describe('signin-modal', () => {
     const submit = document.querySelector('[data-test-id="signin-submit"]');
     submit.click();
     expect(submit.disabled).toBe(true);
-    expect(submit.textContent).toBe('Подписываем…');
+    expect(submit.textContent).toBe('Signing…');
     resolveSignIn({ address: '0x1' });
     await Promise.resolve();
     await Promise.resolve();

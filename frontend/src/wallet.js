@@ -20,7 +20,15 @@
  *   without breaking the public API of this module.
  */
 
-import { createConfig, connect, disconnect, switchChain, getConnections, watchConnections, reconnect } from '@wagmi/core';
+import {
+  createConfig,
+  connect,
+  disconnect,
+  switchChain,
+  getConnections,
+  watchConnections,
+  reconnect,
+} from '@wagmi/core';
 import { injected } from '@wagmi/core';
 import { base, baseSepolia } from 'viem/chains';
 import { createPublicClient, http } from 'viem';

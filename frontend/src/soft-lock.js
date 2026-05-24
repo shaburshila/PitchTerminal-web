@@ -59,9 +59,9 @@ async function defaultOpenPayModal(opts) {
  *   Optional zone label propagated to overlay dataset (`data-zone`) for
  *   easier debugging / per-zone styling overrides.
  * @property {string} [label]
- *   Overlay headline. Defaults to «Требуется оплата доступа».
+ *   Overlay headline. Defaults to "Premium access required".
  * @property {string} [buttonText]
- *   Pay button label. Defaults to «Оплатить».
+ *   Pay button label. Defaults to "Pay".
  * @property {(s:'unknown'|'anon'|'free'|'premium') => boolean} [isLocked]
  *   Override the lock predicate. By default, anything other than `'premium'`
  *   locks. Tests can pass an explicit function to assert specific transitions.
@@ -93,14 +93,11 @@ export function mountSoftLock(target, opts = {}) {
     throw new TypeError('mountSoftLock: target must be an HTMLElement');
   }
 
-  const isLockedFn = typeof opts.isLocked === 'function'
-    ? opts.isLocked
-    : (s) => s !== 'premium';
-  const openPayFn = typeof opts.openPayModal === 'function'
-    ? opts.openPayModal
-    : defaultOpenPayModal;
-  const label = opts.label ?? 'Требуется оплата доступа';
-  const buttonText = opts.buttonText ?? 'Оплатить';
+  const isLockedFn = typeof opts.isLocked === 'function' ? opts.isLocked : (s) => s !== 'premium';
+  const openPayFn =
+    typeof opts.openPayModal === 'function' ? opts.openPayModal : defaultOpenPayModal;
+  const label = opts.label ?? 'Premium access required';
+  const buttonText = opts.buttonText ?? 'Pay';
   const payOpts = opts.payOpts ?? undefined;
 
   // Tear down any previous mount on the same target so callers don't have to
@@ -128,16 +125,20 @@ export function mountSoftLock(target, opts = {}) {
   });
 
   const card = el('div', { className: 'pt-soft-lock__card' });
-  card.appendChild(el('div', {
-    className: 'pt-soft-lock__icon',
-    attrs: { 'aria-hidden': 'true' },
-    text: '🔒',
-  }));
-  card.appendChild(el('div', {
-    className: 'pt-soft-lock__label',
-    dataset: { testId: 'soft-lock-label' },
-    text: label,
-  }));
+  card.appendChild(
+    el('div', {
+      className: 'pt-soft-lock__icon',
+      attrs: { 'aria-hidden': 'true' },
+      text: '🔒',
+    }),
+  );
+  card.appendChild(
+    el('div', {
+      className: 'pt-soft-lock__label',
+      dataset: { testId: 'soft-lock-label' },
+      text: label,
+    }),
+  );
   const payBtn = el('button', {
     className: 'pt-btn pt-btn--primary pt-soft-lock__btn',
     dataset: { testId: 'soft-lock-pay' },
@@ -173,7 +174,11 @@ export function mountSoftLock(target, opts = {}) {
       overlay.hidden = true;
     }
     if (typeof opts.onStateChange === 'function') {
-      try { opts.onStateChange(stateValue); } catch { /* ignore */ }
+      try {
+        opts.onStateChange(stateValue);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -186,10 +191,18 @@ export function mountSoftLock(target, opts = {}) {
     destroy() {
       if (destroyed) return;
       destroyed = true;
-      try { unsubscribe(); } catch { /* ignore */ }
+      try {
+        unsubscribe();
+      } catch {
+        /* ignore */
+      }
       target.classList.remove(TARGET_CLASS);
       if (overlay.parentNode === target) {
-        try { target.removeChild(overlay); } catch { /* ignore */ }
+        try {
+          target.removeChild(overlay);
+        } catch {
+          /* ignore */
+        }
       }
     },
     getState: () => getAccessState(),

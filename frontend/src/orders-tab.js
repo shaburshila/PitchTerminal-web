@@ -14,7 +14,7 @@
  *   see `backend/app/routes/stream.py:319` — "orders is premium-only, phase 2").
  *   The frontend ships in phase 0 with the full UI wired up; in production
  *   the first `getOrders()` call will fail with 404 / 501 and the tab will
- *   render a friendly "Лимитные ордера — coming soon" placeholder via the
+ *   render a friendly "Limit orders — coming soon" placeholder via the
  *   `phase2_not_available` detection in `_handleListError`. When the
  *   backend lands the route, the tab activates automatically (no FE redeploy
  *   needed for the happy path).
@@ -43,15 +43,15 @@ import { mountSoftLock } from './soft-lock.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
 
 const STATUS_LABEL = {
-  pending: 'Ожидает',
-  executing: 'Исполняется',
-  filled: 'Исполнен',
-  failed: 'Ошибка',
-  cancelled: 'Отменён',
-  expired: 'Истёк',
+  pending: 'Pending',
+  executing: 'Executing',
+  filled: 'Filled',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  expired: 'Expired',
 };
 const SIDE_LABEL = {
-  'limit-buy': 'Лимит-покупка',
+  'limit-buy': 'Limit buy',
   'take-profit': 'Take-profit',
 };
 
@@ -76,7 +76,10 @@ function formatWeiNumber(weiStr, decimals = 18, digits = 6) {
   const abs = neg ? weiStr.slice(1) : weiStr;
   const padded = abs.padStart(decimals + 1, '0');
   const whole = padded.slice(0, padded.length - decimals);
-  const frac = padded.slice(padded.length - decimals).slice(0, digits).replace(/0+$/, '');
+  const frac = padded
+    .slice(padded.length - decimals)
+    .slice(0, digits)
+    .replace(/0+$/, '');
   const out = frac ? `${whole}.${frac}` : whole;
   return neg ? `-${out}` : out;
 }
@@ -86,7 +89,7 @@ function formatTtl(expiresAt, nowSec) {
     return '∞';
   }
   const remain = expiresAt - nowSec;
-  if (remain <= 0) return 'истёк';
+  if (remain <= 0) return 'expired';
   // Pretty-print: <1m → ss, <1h → mm:ss, <1d → hh:mm, else Nd hh:mm.
   const s = Math.floor(remain % 60);
   const m = Math.floor((remain / 60) % 60);
@@ -141,7 +144,11 @@ export function mountOrdersTab(container, opts = {}) {
   const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now();
   const fireAction = (action, info) => {
     if (typeof opts.onActionDone === 'function') {
-      try { opts.onActionDone(action, info); } catch { /* ignore */ }
+      try {
+        opts.onActionDone(action, info);
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -169,7 +176,11 @@ export function mountOrdersTab(container, opts = {}) {
 
   function tearDownLock() {
     if (lockHandle) {
-      try { lockHandle.destroy(); } catch { /* ignore */ }
+      try {
+        lockHandle.destroy();
+      } catch {
+        /* ignore */
+      }
       lockHandle = null;
     }
   }
@@ -215,7 +226,7 @@ export function mountOrdersTab(container, opts = {}) {
     root.appendChild(skeleton);
     lockHandle = mountSoftLock(root, {
       zone: 'orders',
-      label: 'Premium — лимитные ордера',
+      label: 'Premium — limit orders',
       openPayModal: softLockOpts.openPayModal,
       payOpts: softLockOpts.payOpts,
     });
@@ -225,11 +236,13 @@ export function mountOrdersTab(container, opts = {}) {
     stopTicker();
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-orders__placeholder',
-      dataset: { testId: 'orders-no-token' },
-      text: 'Выберите токен, чтобы увидеть свои ордера',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-orders__placeholder',
+        dataset: { testId: 'orders-no-token' },
+        text: 'Select a token to see your orders',
+      }),
+    );
   }
 
   function renderPhase2() {
@@ -240,17 +253,21 @@ export function mountOrdersTab(container, opts = {}) {
       className: 'pt-orders__phase2',
       dataset: { testId: 'orders-phase2' },
     });
-    wrap.appendChild(el('div', {
-      className: 'pt-orders__phase2-title',
-      text: 'Лимитные ордера — скоро',
-    }));
-    wrap.appendChild(el('div', {
-      className: 'pt-orders__phase2-body',
-      text:
-        'Кипер лимит-ордеров (off-chain executor + EIP-712 подпись) поедет ' +
-        'отдельным релизом в фазе 2. Premium-доступ покрывает эту функцию — ' +
-        'докупать ничего не придётся, как только модуль появится.',
-    }));
+    wrap.appendChild(
+      el('div', {
+        className: 'pt-orders__phase2-title',
+        text: 'Limit orders — coming soon',
+      }),
+    );
+    wrap.appendChild(
+      el('div', {
+        className: 'pt-orders__phase2-body',
+        text:
+          'The limit-order keeper (off-chain executor + EIP-712 signing) ships ' +
+          'in a separate phase 2 release. Premium access already covers this ' +
+          'feature — no extra purchase needed once the module is live.',
+      }),
+    );
     root.appendChild(wrap);
   }
 
@@ -258,22 +275,26 @@ export function mountOrdersTab(container, opts = {}) {
     stopTicker();
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-orders__loading',
-      dataset: { testId: 'orders-loading' },
-      text: 'Загрузка ордеров…',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-orders__loading',
+        dataset: { testId: 'orders-loading' },
+        text: 'Loading orders…',
+      }),
+    );
   }
 
   function renderError() {
     stopTicker();
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(el('div', {
-      className: 'pt-orders__error',
-      dataset: { testId: 'orders-error' },
-      text: state.error || 'Не удалось загрузить ордера',
-    }));
+    root.appendChild(
+      el('div', {
+        className: 'pt-orders__error',
+        dataset: { testId: 'orders-error' },
+        text: state.error || 'Failed to load orders',
+      }),
+    );
   }
 
   function buildArmedToggle() {
@@ -292,13 +313,18 @@ export function mountOrdersTab(container, opts = {}) {
       const desired = input.checked;
       // Revert visually until the server confirms; busy flag prevents reentry.
       input.disabled = true;
-      onToggleArmed(desired).catch(() => { /* surfaced via error state */ });
+      onToggleArmed(desired).catch(() => {
+        /* surfaced via error state */
+      });
     });
     wrap.appendChild(input);
-    wrap.appendChild(el('span', {
-      className: 'pt-orders__armed-label',
-      text: state.armed ? 'Kill-switch: armed' : 'Kill-switch: paused',
-    }));
+    wrap.appendChild(
+      el('span', {
+        className: 'pt-orders__armed-label',
+        text: state.armed ? 'Kill-switch: armed' : 'Kill-switch: paused',
+      }),
+    );
+    // Kept "armed"/"paused" — these are conventional EN terms.
     return wrap;
   }
 
@@ -318,22 +344,31 @@ export function mountOrdersTab(container, opts = {}) {
       dataset: { testId: 'order-row', orderId: String(order.id ?? ''), status: order.status ?? '' },
     });
 
-    tr.appendChild(el('td', {
-      className: 'side',
-      text: SIDE_LABEL[order.side] ?? order.side ?? '—',
-    }));
-    tr.appendChild(el('td', {
-      className: 'num',
-      text: formatWeiNumber(order.targetPrice),
-    }));
-    tr.appendChild(el('td', {
-      className: 'num',
-      text: formatWeiNumber(order.amountIn),
-    }));
-    tr.appendChild(el('td', {
-      className: 'num',
-      text: typeof order.slippageBps === 'number' ? `${(order.slippageBps / 100).toFixed(2)}%` : '—',
-    }));
+    tr.appendChild(
+      el('td', {
+        className: 'side',
+        text: SIDE_LABEL[order.side] ?? order.side ?? '—',
+      }),
+    );
+    tr.appendChild(
+      el('td', {
+        className: 'num',
+        text: formatWeiNumber(order.targetPrice),
+      }),
+    );
+    tr.appendChild(
+      el('td', {
+        className: 'num',
+        text: formatWeiNumber(order.amountIn),
+      }),
+    );
+    tr.appendChild(
+      el('td', {
+        className: 'num',
+        text:
+          typeof order.slippageBps === 'number' ? `${(order.slippageBps / 100).toFixed(2)}%` : '—',
+      }),
+    );
 
     const ttlCell = el('td', {
       className: 'ttl',
@@ -345,10 +380,12 @@ export function mountOrdersTab(container, opts = {}) {
     });
     tr.appendChild(ttlCell);
 
-    tr.appendChild(el('td', {
-      className: `status status--${order.status ?? 'unknown'}`,
-      text: STATUS_LABEL[order.status] ?? order.status ?? '—',
-    }));
+    tr.appendChild(
+      el('td', {
+        className: `status status--${order.status ?? 'unknown'}`,
+        text: STATUS_LABEL[order.status] ?? order.status ?? '—',
+      }),
+    );
 
     const actionCell = el('td', { className: 'actions' });
     if (order.status === 'pending') {
@@ -356,11 +393,13 @@ export function mountOrdersTab(container, opts = {}) {
         className: 'pt-btn pt-orders__cancel',
         dataset: { testId: 'orders-cancel', orderId: String(order.id ?? '') },
         attrs: { type: 'button' },
-        text: 'Отмена',
+        text: 'Cancel',
       });
       btn.disabled = state.busyOrderId === String(order.id);
       btn.addEventListener('click', () => {
-        onCancelOrder(String(order.id)).catch(() => { /* surfaced via error */ });
+        onCancelOrder(String(order.id)).catch(() => {
+          /* surfaced via error */
+        });
       });
       actionCell.appendChild(btn);
     }
@@ -381,7 +420,7 @@ export function mountOrdersTab(container, opts = {}) {
     });
     const thead = el('thead');
     const headRow = el('tr');
-    for (const label of ['Тип', 'Цель', 'Объём', 'Slippage', 'TTL', 'Статус', '']) {
+    for (const label of ['Type', 'Target', 'Amount', 'Slippage', 'TTL', 'Status', '']) {
       headRow.appendChild(el('th', { text: label }));
     }
     thead.appendChild(headRow);
@@ -390,7 +429,7 @@ export function mountOrdersTab(container, opts = {}) {
     const tbody = el('tbody');
     if (state.orders.length === 0) {
       const tr = el('tr', { dataset: { testId: 'orders-empty' } });
-      const td = el('td', { text: 'Ордеров нет', attrs: { colspan: '7' } });
+      const td = el('td', { text: 'No orders', attrs: { colspan: '7' } });
       td.className = 'pt-orders__empty';
       tr.appendChild(td);
       tbody.appendChild(tr);
@@ -446,7 +485,7 @@ export function mountOrdersTab(container, opts = {}) {
       state.error = null;
       return;
     }
-    const detail = err?.detail || err?.title || err?.message || 'Ошибка загрузки';
+    const detail = err?.detail || err?.title || err?.message || 'Failed to load';
     const status = err && typeof err.status === 'number' ? err.status : null;
     state.error = status ? `${detail} (${status})` : detail;
   }
@@ -511,7 +550,7 @@ export function mountOrdersTab(container, opts = {}) {
         state.error = null;
         fireAction('cancel', { id, ok: true, idempotent: true });
       } else {
-        state.error = _mutationErrorMessage(err, 'Не удалось отменить ордер');
+        state.error = _mutationErrorMessage(err, 'Failed to cancel order');
         fireAction('cancel', { id, ok: false, err });
       }
     } finally {
@@ -536,7 +575,7 @@ export function mountOrdersTab(container, opts = {}) {
     } catch (err) {
       // Same reasoning as `onCancelOrder` — never let a per-mutation failure
       // collapse the list into the phase-2 stub.
-      state.error = _mutationErrorMessage(err, 'Не удалось обновить kill-switch');
+      state.error = _mutationErrorMessage(err, 'Failed to update kill-switch');
       fireAction('armed', { ok: false, err });
     } finally {
       state.busyArmed = false;
@@ -549,7 +588,9 @@ export function mountOrdersTab(container, opts = {}) {
     const prev = state.accessState;
     state.accessState = next;
     if (prev !== 'premium' && next === 'premium' && state.token) {
-      fetchOrders().catch(() => { /* surfaced via state */ });
+      fetchOrders().catch(() => {
+        /* surfaced via state */
+      });
     } else if (prev === 'premium' && next !== 'premium') {
       state.orders = [];
       state.error = null;
@@ -593,8 +634,11 @@ export function mountOrdersTab(container, opts = {}) {
     const order = payload?.order;
     if (!order || order.id == null) return;
     if (state.accessState !== 'premium' || state.phase2) return;
-    if (state.token && typeof order.token === 'string'
-        && order.token.toLowerCase() !== state.token) {
+    if (
+      state.token &&
+      typeof order.token === 'string' &&
+      order.token.toLowerCase() !== state.token
+    ) {
       return;
     }
     const id = String(order.id);
@@ -608,7 +652,11 @@ export function mountOrdersTab(container, opts = {}) {
   }
 
   function destroy() {
-    try { unsubscribe(); } catch { /* ignore */ }
+    try {
+      unsubscribe();
+    } catch {
+      /* ignore */
+    }
     stopTicker();
     tearDownLock();
     container.replaceChildren();
@@ -628,7 +676,9 @@ export function mountOrdersTab(container, opts = {}) {
 
   render();
   if (state.token && state.accessState === 'premium') {
-    fetchOrders().catch(() => { /* surfaced via state */ });
+    fetchOrders().catch(() => {
+      /* surfaced via state */
+    });
   }
 
   return { setToken, refresh, destroy, pushOrderUpdate, getState };

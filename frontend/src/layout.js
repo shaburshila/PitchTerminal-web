@@ -61,7 +61,7 @@ function buildHeader() {
     className: 'pt-btn pt-btn--primary',
     dataset: { testId: 'connect-btn' },
     attrs: { type: 'button' },
-    text: 'Подключить кошелёк',
+    text: 'Connect wallet',
   });
   // F0.9 will attach the actual wagmi click handler — until then the button
   // exists as a visible CTA but has no listener (no dead-no-op handler that
@@ -86,7 +86,7 @@ function buildSidebar() {
   const sidebar = el('aside', {
     className: 'pt-sidebar',
     dataset: { testId: 'sidebar', zone: 'sidebar' },
-    attrs: { 'aria-label': 'Список токенов' },
+    attrs: { 'aria-label': 'Token list' },
   });
   return sidebar;
 }
@@ -95,7 +95,7 @@ function buildCenter() {
   const center = el('section', {
     className: 'pt-center',
     dataset: { testId: 'center', zone: 'center' },
-    attrs: { 'aria-label': 'График и вкладки' },
+    attrs: { 'aria-label': 'Chart and tabs' },
   });
   return center;
 }
@@ -104,7 +104,7 @@ function buildRight() {
   const right = el('aside', {
     className: 'pt-right',
     dataset: { testId: 'right', zone: 'right' },
-    attrs: { 'aria-label': 'Торговая панель' },
+    attrs: { 'aria-label': 'Trading panel' },
   });
   return right;
 }
@@ -115,7 +115,7 @@ function buildProfileZone() {
   const profile = el('section', {
     className: 'pt-profile',
     dataset: { testId: 'profile', zone: 'profile' },
-    attrs: { 'aria-label': 'Профиль кошелька' },
+    attrs: { 'aria-label': 'Wallet profile' },
   });
   return profile;
 }

@@ -256,6 +256,51 @@ describe('mountSidebar', () => {
     expect(arg.role).toBe('best');
   });
 
+  // F1.4 — sidebar threads `countrySymbol` so the trade panel doesn't need
+  // its own getTokens() lookup.
+  it('player onTokenSelect payload includes countrySymbol from the country table', async () => {
+    const api = makeApi(defaultPayload());
+    const onTokenSelect = vi.fn();
+    const handle = mountSidebar(container, { apiClient: api, onTokenSelect });
+    await handle.refresh();
+
+    const firstRow = container.querySelector('[data-test-id="sidebar-row"]');
+    firstRow.click();
+    const arg = onTokenSelect.mock.calls[0][0];
+    // Mbappé's countryAddress = 0xccc2 → countries[].symbol = 'FRA'.
+    expect(arg.countrySymbol).toBe('FRA');
+  });
+
+  it('falls back to player.country when countries table is missing the address', async () => {
+    const payload = defaultPayload();
+    payload.countries = []; // strip the table
+    const api = makeApi(payload);
+    const onTokenSelect = vi.fn();
+    const handle = mountSidebar(container, { apiClient: api, onTokenSelect });
+    await handle.refresh();
+
+    const firstRow = container.querySelector('[data-test-id="sidebar-row"]');
+    firstRow.click();
+    const arg = onTokenSelect.mock.calls[0][0];
+    // Mbappé's country = 'France' — used as fallback.
+    expect(arg.countrySymbol).toBe('France');
+  });
+
+  it('country-tab rows pass through unchanged (no countrySymbol injected)', async () => {
+    const api = makeApi(defaultPayload());
+    const onTokenSelect = vi.fn();
+    const handle = mountSidebar(container, { apiClient: api, onTokenSelect });
+    await handle.refresh();
+    // Switch to countries tab.
+    container.querySelector('[data-test-id="sidebar-tab-countries"]').click();
+
+    const firstRow = container.querySelector('[data-test-id="sidebar-row"]');
+    firstRow.click();
+    const arg = onTokenSelect.mock.calls[0][0];
+    expect(arg.countryAddress).toBeUndefined();
+    expect(arg.countrySymbol).toBeUndefined();
+  });
+
   it('clicked row gets aria-selected="true"', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
@@ -428,7 +473,7 @@ describe('mountSidebar', () => {
     const toast = document.querySelector('[data-test-id="toast"]');
     expect(toast).not.toBeNull();
     expect(toast.dataset.kind).toBe('warn');
-    expect(toast.textContent).toMatch(/полнен/i);
+    expect(toast.textContent).toMatch(/full/i);
 
     // Star did NOT flip on.
     const after = container.querySelector('[data-test-id="sidebar-star"]');

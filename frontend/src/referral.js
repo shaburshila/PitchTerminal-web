@@ -155,10 +155,7 @@ export function getEffectiveRef(currentWallet, accessContractAddr) {
   if (typeof currentWallet === 'string' && currentWallet.toLowerCase() === saved) {
     return ZERO_ADDRESS;
   }
-  if (
-    typeof accessContractAddr === 'string' &&
-    accessContractAddr.toLowerCase() === saved
-  ) {
+  if (typeof accessContractAddr === 'string' && accessContractAddr.toLowerCase() === saved) {
     return ZERO_ADDRESS;
   }
   return saved;

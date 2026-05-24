@@ -271,11 +271,11 @@ describe('disabledReason', () => {
   });
 
   it('flags limit mode', () => {
-    expect(disabledReason({ ...baseCtx, limitMode: true })).toMatch(/фаза 2/i);
+    expect(disabledReason({ ...baseCtx, limitMode: true })).toMatch(/phase 2/i);
   });
 
   it('flags wallet disconnected', () => {
-    expect(disabledReason({ ...baseCtx, walletConnected: false })).toMatch(/кошелёк/);
+    expect(disabledReason({ ...baseCtx, walletConnected: false })).toMatch(/wallet/i);
   });
 
   it('flags wrong chain', () => {
@@ -283,20 +283,20 @@ describe('disabledReason', () => {
   });
 
   it('flags missing token', () => {
-    expect(disabledReason({ ...baseCtx, token: null })).toMatch(/токен/);
+    expect(disabledReason({ ...baseCtx, token: null })).toMatch(/token/i);
   });
 
   it('flags missing contracts', () => {
-    expect(disabledReason({ ...baseCtx, contractsReady: false })).toMatch(/конфиг/i);
+    expect(disabledReason({ ...baseCtx, contractsReady: false })).toMatch(/config/i);
   });
 
   it('flags zero amount', () => {
-    expect(disabledReason({ ...baseCtx, amountWei: 0n })).toMatch(/сумму/i);
-    expect(disabledReason({ ...baseCtx, amountWei: null })).toMatch(/сумму/i);
+    expect(disabledReason({ ...baseCtx, amountWei: 0n })).toMatch(/amount/i);
+    expect(disabledReason({ ...baseCtx, amountWei: null })).toMatch(/amount/i);
   });
 
   it('flags insufficient balance', () => {
-    expect(disabledReason({ ...baseCtx, amountWei: 100n * 10n ** 18n, balanceWei: 10n ** 18n })).toMatch(/Недостаточно/);
+    expect(disabledReason({ ...baseCtx, amountWei: 100n * 10n ** 18n, balanceWei: 10n ** 18n })).toMatch(/Insufficient/);
   });
 });
 
@@ -327,7 +327,7 @@ describe('mountTradePanel — DOM', () => {
     await flush();
     const cta = container.querySelector('[data-test-id="trade-cta"]');
     expect(cta.disabled).toBe(true);
-    expect(container.querySelector('[data-test-id="trade-status"]').textContent).toMatch(/кошелёк/);
+    expect(container.querySelector('[data-test-id="trade-status"]').textContent).toMatch(/wallet/i);
     handle.destroy();
   });
 
@@ -686,7 +686,7 @@ describe('mountTradePanel — quote flow', () => {
     vi.useFakeTimers();
     const readBalance = vi.fn().mockResolvedValue(1n * 10n ** 18n);
     const readQuote = vi.fn().mockResolvedValue(1n * 10n ** 18n);
-    // Use COUNTRY_TOKEN here to keep the generic "Недостаточно" message —
+    // Use COUNTRY_TOKEN here to keep the generic "Insufficient" message —
     // F1.3 rewrites the message for player+Buy specifically, exercised by
     // the dedicated F1.3 suite below.
     const handle = mountTradePanel(container, {
@@ -701,7 +701,7 @@ describe('mountTradePanel — quote flow', () => {
     container.querySelector('[data-test-id="trade-amount"]').value = '100';
     container.querySelector('[data-test-id="trade-amount"]').dispatchEvent(new Event('input'));
     expect(container.querySelector('[data-test-id="trade-cta"]').disabled).toBe(true);
-    expect(container.querySelector('[data-test-id="trade-status"]').textContent).toMatch(/Недостаточно/);
+    expect(container.querySelector('[data-test-id="trade-status"]').textContent).toMatch(/Insufficient/);
     handle.destroy();
   });
 });
@@ -736,7 +736,7 @@ describe('disabledReason — F1.2 pending states', () => {
         limitMode: false,
         swapPending: true,
       }),
-    ).toMatch(/своп|подтвержд/i);
+    ).toMatch(/swap|await/i);
   });
 
   it('limitMode still takes top priority over pending flags', () => {
@@ -751,7 +751,7 @@ describe('disabledReason — F1.2 pending states', () => {
         limitMode: true,
         swapPending: true,
       }),
-    ).toMatch(/фаза 2/);
+    ).toMatch(/phase 2/i);
   });
 });
 
@@ -958,7 +958,7 @@ describe('mountTradePanel — F1.2 allowance loading race', () => {
     const status = container.querySelector('[data-test-id="trade-status"]');
     // Quote is ready; allowance is null (still loading) → CTA must be disabled.
     expect(cta.disabled).toBe(true);
-    expect(status.textContent).toMatch(/allowance|Проверка/i);
+    expect(status.textContent).toMatch(/allowance|Checking/i);
 
     // Resolve allowance with sufficient value → CTA becomes enabled.
     resolveAllowance(1000n * 10n ** 18n);
@@ -1312,7 +1312,7 @@ describe('mountTradePanel — F1.2 swap trigger', () => {
     const toast = document.querySelector('[data-test-id="toast"]');
     expect(toast).not.toBeNull();
     expect(toast.dataset.kind).toBe('info');
-    expect(toast.textContent).toMatch(/Своп/);
+    expect(toast.textContent).toMatch(/Swap/);
     // amount cleared
     expect(input.value).toBe('');
     expect(handle.getState().amountStr).toBe('');
@@ -1501,7 +1501,7 @@ describe('MAX_UINT256 constant', () => {
   });
 });
 
-// ─── F1.3: player+Buy country-balance hint + Купить country CTA ────────────
+// ─── F1.3: player+Buy country-balance hint + Buy country CTA ────────────
 
 describe('disabledReason — F1.3 playerBuy message', () => {
   it('rewrites insufficient-balance message when playerBuy=true', () => {
@@ -1548,7 +1548,7 @@ describe('disabledReason — F1.3 playerBuy message', () => {
         limitMode: false,
         playerBuy: false,
       }),
-    ).toMatch(/Недостаточно/);
+    ).toMatch(/Insufficient/);
   });
 });
 
@@ -1669,7 +1669,7 @@ describe('mountTradePanel — F1.3 country hint block', () => {
 });
 
 describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
-  it('shows explicit message + "Купить BRA" CTA when player+Buy insufficient', async () => {
+  it('shows explicit message + "Buy BRA" CTA when player+Buy insufficient', async () => {
     vi.useFakeTimers();
     const onCountrySwitch = vi.fn();
     const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
@@ -1703,7 +1703,7 @@ describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
     handle.destroy();
   });
 
-  it('clicking Купить country CTA fires onCountrySwitch with the country address', async () => {
+  it('clicking Buy country CTA fires onCountrySwitch with the country address', async () => {
     vi.useFakeTimers();
     const onCountrySwitch = vi.fn();
     const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
@@ -1732,7 +1732,7 @@ describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
     handle.destroy();
   });
 
-  it('Купить country CTA hidden when balance is sufficient', async () => {
+  it('Buy country CTA hidden when balance is sufficient', async () => {
     vi.useFakeTimers();
     const onCountrySwitch = vi.fn();
     const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
@@ -1756,7 +1756,7 @@ describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
     handle.destroy();
   });
 
-  it('Купить country CTA hidden when onCountrySwitch is not wired', async () => {
+  it('Buy country CTA hidden when onCountrySwitch is not wired', async () => {
     vi.useFakeTimers();
     const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
     const handle = mountTradePanel(container, {
@@ -1779,7 +1779,7 @@ describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
     handle.destroy();
   });
 
-  it('Купить country CTA hidden on country venue (insufficient PITCH)', async () => {
+  it('Buy country CTA hidden on country venue (insufficient PITCH)', async () => {
     vi.useFakeTimers();
     const onCountrySwitch = vi.fn();
     const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
@@ -1840,6 +1840,360 @@ describe('mountTradePanel — F1.3 balance line symbol', () => {
     const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
     expect(txt).toContain('42');
     expect(txt).toContain('PITCH');
+    handle.destroy();
+  });
+});
+
+// ─── F1.4: Basescan link in swap-success toast ─────────────────────────────
+
+describe('mountTradePanel — F1.4 swap-success Basescan link', () => {
+  it('renders a Basescan anchor with the tx hash returned by payment.swap', async () => {
+    vi.useFakeTimers();
+    const txHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+    const payment = makePayment({
+      readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n),
+      swap: vi.fn().mockResolvedValue(txHash),
+    });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(0);
+    const anchor = document.querySelector('[data-test-id="toast-link"]');
+    expect(anchor).not.toBeNull();
+    expect(anchor.getAttribute('href')).toBe(`https://basescan.org/tx/${txHash}`);
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    expect(anchor.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(anchor.textContent).toMatch(/Basescan/i);
+    handle.destroy();
+  });
+
+  it('omits link when swap returns a non-hash value', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({
+      readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n),
+      swap: vi.fn().mockResolvedValue(undefined), // legacy stub
+    });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(0);
+    const toast = document.querySelector('[data-test-id="toast"]');
+    expect(toast).not.toBeNull();
+    expect(toast.textContent).toMatch(/Swap/);
+    expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+    handle.destroy();
+  });
+});
+
+// ─── F1.4: countrySymbol threaded via setToken ─────────────────────────────
+
+describe('mountTradePanel — F1.4 countrySymbol threading', () => {
+  it('uses token.countrySymbol when threaded (no getTokens fetch needed)', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment();
+    const tokenWithSymbol = { ...PLAYER_TOKEN, countrySymbol: 'BRA' };
+    // Deliberately omit getTokens from the API client — threading should
+    // make the panel work without it.
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(), // no getTokens stub
+      token: tokenWithSymbol,
+      readBalance: vi.fn().mockResolvedValue(7n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
+    expect(txt).toContain('BRA');
+    handle.destroy();
+  });
+
+  it('threaded symbol wins over countrySymbolMap', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment();
+    // Map says "OLD", threaded says "NEW" — threaded wins.
+    const apiWithStaleMap = {
+      getConfig: vi.fn().mockResolvedValue(CONFIG),
+      getTokens: vi.fn().mockResolvedValue({
+        players: [],
+        countries: [{ address: PLAYER_TOKEN.countryAddress, symbol: 'OLD' }],
+      }),
+    };
+    const tokenWithSymbol = { ...PLAYER_TOKEN, countrySymbol: 'NEW' };
+    const handle = mountTradePanel(container, {
+      apiClient: apiWithStaleMap,
+      token: tokenWithSymbol,
+      readBalance: vi.fn().mockResolvedValue(7n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(0);
+    const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
+    expect(txt).toContain('NEW');
+    expect(txt).not.toContain('OLD');
+    handle.destroy();
+  });
+
+  it('falls back to countrySymbolMap when threaded symbol is absent', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment();
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN, // no countrySymbol on the token
+      readBalance: vi.fn().mockResolvedValue(7n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(0);
+    const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
+    // makeApiWithTokens defaults to "BRA" for the player's country address.
+    expect(txt).toContain('BRA');
+    handle.destroy();
+  });
+
+  it('player+Sell success toast uses threaded country symbol (not shortened address)', async () => {
+    vi.useFakeTimers();
+    const txHash = '0xfeed0000000000000000000000000000000000000000000000000000000000ed';
+    const payment = makePayment({
+      readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n),
+      swap: vi.fn().mockResolvedValue(txHash),
+    });
+    const tokenWithSymbol = { ...PLAYER_TOKEN, countrySymbol: 'BRA' };
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: tokenWithSymbol,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    container.querySelector('[data-test-id="side-sell"]').click();
+    for (let i = 0; i < 2; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(0);
+    const toast = document.querySelector('[data-test-id="toast"]');
+    expect(toast).not.toBeNull();
+    expect(toast.textContent).toContain('BRA');
+    expect(toast.textContent).not.toContain('0xcccc');
+    handle.destroy();
+  });
+});
+
+// ─── F1.4: config retry with exponential backoff ───────────────────────────
+
+describe('mountTradePanel — F1.4 config retry', () => {
+  it('retries getConfig with backoff and recovers on later attempt', async () => {
+    vi.useFakeTimers();
+    const getConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network'))
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValue(CONFIG);
+    const handle = mountTradePanel(container, {
+      apiClient: { getConfig },
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment: makePayment(),
+      debounceMs: 50,
+    });
+    // First attempt synchronously.
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    expect(handle.getState().contracts).toBeNull();
+    // First retry @ 1000ms.
+    await vi.advanceTimersByTimeAsync(1000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(2);
+    // Second retry @ +2000ms — this one resolves.
+    await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(3);
+    expect(handle.getState().contracts).not.toBeNull();
+    handle.destroy();
+  });
+
+  it('after 5 failed retries shows a reload toast', async () => {
+    vi.useFakeTimers();
+    const getConfig = vi.fn().mockRejectedValue(new Error('persistent'));
+    const handle = mountTradePanel(container, {
+      apiClient: { getConfig },
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment: makePayment(),
+      debounceMs: 50,
+    });
+    // Walk through all 5 retries: 1s, 2s, 4s, 8s, 16s — total 31s + initial.
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(8000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(16000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    // 1 initial + 5 retries = 6 total.
+    expect(getConfig).toHaveBeenCalledTimes(6);
+    const toast = document.querySelector('[data-test-id="toast"]');
+    expect(toast).not.toBeNull();
+    expect(toast.dataset.kind).toBe('error');
+    expect(toast.textContent).toMatch(/Reload/i);
+    handle.destroy();
+  });
+
+  it('does not retry after destroy() — pending timers cleared', async () => {
+    vi.useFakeTimers();
+    const getConfig = vi.fn().mockRejectedValue(new Error('boom'));
+    const handle = mountTradePanel(container, {
+      apiClient: { getConfig },
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(0n),
+      readQuote: vi.fn().mockResolvedValue(0n),
+      payment: makePayment(),
+      debounceMs: 50,
+    });
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    handle.destroy();
+    // Advance far past every backoff — no further calls should fire.
+    await vi.advanceTimersByTimeAsync(60000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply config after destroy() if fetch resolves post-teardown', async () => {
+    vi.useFakeTimers();
+    let resolveCfg;
+    const getConfig = vi.fn(
+      () =>
+        new Promise((r) => {
+          resolveCfg = r;
+        }),
+    );
+    const handle = mountTradePanel(container, {
+      apiClient: { getConfig },
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(0n),
+      readQuote: vi.fn().mockResolvedValue(0n),
+      payment: makePayment(),
+      debounceMs: 50,
+    });
+    // Let mount fire getConfig (which is pending).
+    for (let i = 0; i < 2; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    expect(handle.getState().contracts).toBeNull();
+    // Tear down BEFORE the promise resolves.
+    handle.destroy();
+    // Now resolve the in-flight fetch — destroyed guard must short-circuit
+    // applyContracts so state.contracts stays null and the container stays
+    // empty (no DOM mutation post-destroy).
+    resolveCfg(CONFIG);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(handle.getState().contracts).toBeNull();
+    expect(container.querySelector('[data-test-id="trade-panel"]')).toBeNull();
+  });
+
+  it('does not schedule a retry after destroy() if fetch rejects post-teardown', async () => {
+    vi.useFakeTimers();
+    let rejectCfg;
+    const getConfig = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectCfg = reject;
+        }),
+    );
+    const handle = mountTradePanel(container, {
+      apiClient: { getConfig },
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(0n),
+      readQuote: vi.fn().mockResolvedValue(0n),
+      payment: makePayment(),
+      debounceMs: 50,
+    });
+    for (let i = 0; i < 2; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    handle.destroy();
+    // Reject AFTER destroy — destroyed guard must skip the retry-schedule.
+    rejectCfg(new Error('late fail'));
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    // No retry scheduled → no additional call after advancing past 1s.
+    await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    // No reload-toast either (retry exhaustion guarded as well).
+    expect(document.querySelector('[data-test-id="toast"]')).toBeNull();
+  });
+});
+
+// ─── F1.4: stale-quote invalidation on chain switch ────────────────────────
+
+describe('mountTradePanel — F1.4 chain switch invalidates quote', () => {
+  it('clears state.quote when chainId changes', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(handle.getState().quote).not.toBeNull();
+    // Simulate chain switch via wagmi mock.
+    const { switchChain } = await import('@wagmi/core');
+    await switchChain({}, { chainId: 1 }); // Off Base → onAccountChange fires
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(handle.getState().quote).toBeNull();
     handle.destroy();
   });
 });

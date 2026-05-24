@@ -85,7 +85,7 @@ export function mountWalletChip(container, opts = {}) {
     className: 'pt-btn pt-btn--primary',
     dataset: { testId: 'wallet-connect-btn' },
     attrs: { type: 'button' },
-    text: 'Подключить кошелёк',
+    text: 'Connect wallet',
   });
 
   // Picker — hidden by default, opened by clicking `connectBtn` when WC is
@@ -134,7 +134,7 @@ export function mountWalletChip(container, opts = {}) {
     className: 'pt-wallet-chip__switch',
     dataset: { testId: 'wallet-switch-btn' },
     attrs: { type: 'button' },
-    text: 'Переключить на Base',
+    text: 'Switch to Base',
   });
   switchBtn.hidden = true;
 
@@ -148,13 +148,13 @@ export function mountWalletChip(container, opts = {}) {
     className: 'pt-wallet-dropdown__item',
     dataset: { testId: 'wallet-view-profile' },
     attrs: { type: 'button', role: 'menuitem' },
-    text: 'Профиль',
+    text: 'Profile',
   });
   const disconnectItem = el('button', {
     className: 'pt-wallet-dropdown__item',
     dataset: { testId: 'wallet-disconnect' },
     attrs: { type: 'button', role: 'menuitem' },
-    text: 'Отключить',
+    text: 'Disconnect',
   });
   dropdown.appendChild(viewProfile);
   dropdown.appendChild(disconnectItem);
@@ -216,7 +216,8 @@ export function mountWalletChip(container, opts = {}) {
     try {
       await connectWallet(connectorId);
     } catch (e) {
-      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Не удалось подключить';
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Failed to connect';
       showToast(msg, { kind: 'error' });
     }
   }
@@ -250,7 +251,7 @@ export function mountWalletChip(container, opts = {}) {
       opts.onViewProfile();
     } else {
       // TODO(F0.15): wire to layout.setMode('profile') once Profile view exists.
-      showToast('Профиль — coming soon', { kind: 'info' });
+      showToast('Profile — coming soon', { kind: 'info' });
     }
   }
 
@@ -268,7 +269,8 @@ export function mountWalletChip(container, opts = {}) {
     try {
       await switchToBase();
     } catch (e) {
-      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Switch failed';
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Switch failed';
       showToast(msg, { kind: 'error' });
     }
   }

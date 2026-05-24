@@ -168,12 +168,12 @@ describe('mountChart', () => {
     expect(one.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('shows "Выберите токен" status before any setToken', () => {
+  it('shows "Select a token" status before any setToken', () => {
     const { lib } = makeChartLib();
     mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
     const status = container.querySelector('[data-test-id="chart-status"]');
     expect(status.hidden).toBe(false);
-    expect(status.textContent).toMatch(/Выберите токен/);
+    expect(status.textContent).toMatch(/Select a token/);
   });
 
   it('setToken triggers getChart with token addr + default tf, then renders series', async () => {
@@ -374,7 +374,7 @@ describe('mountChart', () => {
 
     const status = container.querySelector('[data-test-id="chart-status"]');
     expect(status.hidden).toBe(false);
-    expect(status.textContent).toMatch(/Ошибка/);
+    expect(status.textContent).toMatch(/Failed/);
   });
 
   it('destroy() removes chart instance and clears DOM', async () => {

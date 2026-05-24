@@ -789,6 +789,15 @@ body.mode-dashboard .pt-profile {
   color: var(--danger);
 }
 
+/* F1.4 — inline link inside a toast (e.g. Basescan tx). Underlined so it
+   reads as a link against the toast body; colour stays inherited so error
+   toasts still get the danger tint. */
+.pt-toast__link {
+  color: inherit;
+  text-decoration: underline;
+  pointer-events: auto;
+}
+
 /* Header wallet chip (F0.9 / F0.10) ----------------------------------- */
 
 .pt-wallet-chip {
@@ -957,12 +966,12 @@ body.mode-dashboard .pt-profile {
   min-width: 0;
 }
 
-.pt-profile__card[data-test-id="profile-summary"],
-.pt-profile__card[data-test-id="profile-value-chart"],
-.pt-profile__card[data-test-id="profile-positions"],
-.pt-profile__card[data-test-id="profile-closed"],
-.pt-profile__card[data-test-id="profile-trades"],
-.pt-profile__card[data-test-id="profile-orders"] {
+.pt-profile__card[data-test-id='profile-summary'],
+.pt-profile__card[data-test-id='profile-value-chart'],
+.pt-profile__card[data-test-id='profile-positions'],
+.pt-profile__card[data-test-id='profile-closed'],
+.pt-profile__card[data-test-id='profile-trades'],
+.pt-profile__card[data-test-id='profile-orders'] {
   grid-column: 1 / -1;
 }
 
@@ -1292,7 +1301,9 @@ body.mode-dashboard .pt-profile {
   user-select: none;
   /* Slight desaturation reinforces "this is gated" — readable but not vibrant. */
   opacity: 0.75;
-  transition: filter 200ms ease, opacity 200ms ease;
+  transition:
+    filter 200ms ease,
+    opacity 200ms ease;
 }
 
 .pt-soft-lock {
@@ -1660,7 +1671,7 @@ body.mode-dashboard .pt-profile {
   text-align: center;
 }
 
-/* F1.3 — player+Buy hint block + "Купить country" shortcut CTA. */
+/* F1.3 — player+Buy hint block + "Buy country" shortcut CTA. */
 .pt-trade__hint {
   padding: 8px 10px;
   background: var(--bg-1, #0f1320);
@@ -1700,4 +1711,3 @@ body.mode-dashboard .pt-profile {
 .pt-trade__country-cta:hover {
   background: rgba(74, 120, 255, 0.08);
 }
-

@@ -291,29 +291,29 @@ export function resolveVenue(token, pitchAddr) {
  * @returns {string|null}
  */
 export function disabledReason(ctx) {
-  if (ctx.limitMode) return 'Лимит-ордера — фаза 2';
-  if (ctx.approvePending) return 'Подтвердите approve в кошельке…';
-  if (ctx.swapPending) return 'Ждём подтверждение свопа…';
-  if (!ctx.walletConnected) return 'Подключите кошелёк';
-  if (ctx.chainId !== BASE_CHAIN_ID) return 'Переключитесь на Base';
-  if (!ctx.token) return 'Выберите токен';
-  if (!ctx.contractsReady) return 'Загрузка конфига…';
-  if (!ctx.amountWei || ctx.amountWei <= 0n) return 'Введите сумму';
+  if (ctx.limitMode) return 'Limit orders — phase 2';
+  if (ctx.approvePending) return 'Confirm approve in wallet…';
+  if (ctx.swapPending) return 'Awaiting swap confirmation…';
+  if (!ctx.walletConnected) return 'Connect wallet';
+  if (ctx.chainId !== BASE_CHAIN_ID) return 'Switch to Base';
+  if (!ctx.token) return 'Select a token';
+  if (!ctx.contractsReady) return 'Loading config…';
+  if (!ctx.amountWei || ctx.amountWei <= 0n) return 'Enter amount';
   if (ctx.balanceWei != null && ctx.amountWei > ctx.balanceWei) {
     if (ctx.playerBuy) {
       const sym = ctx.countrySymbol || 'country';
       const need = formatWei(ctx.amountWei, 6);
-      return `Нужно ${need} ${sym}. Купи на Country panel.`;
+      return `Required: ${need} ${sym}. Buy it on the Country panel.`;
     }
-    return 'Недостаточно средств';
+    return 'Insufficient balance';
   }
   // F1.2 fix: while allowance is being read we can't decide approve-vs-swap.
   // Block the CTA to prevent a null-allowance race where the user clicks
   // "Buy" before refreshAllowance resolves and the swap reverts on ERC20
   // transferFrom. Sits below balance check so the more informative
-  // "Недостаточно средств" still wins; sits below pending flags so an
+  // "Insufficient balance" still wins; sits below pending flags so an
   // in-flight tx label keeps priority.
-  if (ctx.allowanceLoading) return 'Проверка allowance…';
+  if (ctx.allowanceLoading) return 'Checking allowance…';
   return null;
 }
 
@@ -498,7 +498,8 @@ export function mountTradePanel(container, options = {}) {
   }
 
   const apiClient = options.apiClient ?? defaultApi;
-  const debounceMs = typeof options.debounceMs === 'number' ? options.debounceMs : QUOTE_DEBOUNCE_MS;
+  const debounceMs =
+    typeof options.debounceMs === 'number' ? options.debounceMs : QUOTE_DEBOUNCE_MS;
 
   // Test-overrides for chain reads. In prod we hit viem.
   const readBalanceOverride = options.readBalance ?? null;
@@ -511,9 +512,8 @@ export function mountTradePanel(container, options = {}) {
   // F1.3 — callback to ask the host to switch to the country token row.
   // Optional — if absent the "Купить country" CTA is hidden entirely so the
   // standalone panel still degrades gracefully.
-  const onCountrySwitch = typeof options.onCountrySwitch === 'function'
-    ? options.onCountrySwitch
-    : null;
+  const onCountrySwitch =
+    typeof options.onCountrySwitch === 'function' ? options.onCountrySwitch : null;
 
   container.replaceChildren();
 
@@ -570,7 +570,7 @@ export function mountTradePanel(container, options = {}) {
       type: 'button',
       'aria-pressed': 'false',
       disabled: 'disabled',
-      title: 'Лимит-ордера — фаза 2',
+      title: 'Limit orders — phase 2',
     },
     text: 'Limit',
   });
@@ -603,11 +603,11 @@ export function mountTradePanel(container, options = {}) {
   const balanceLine = el('div', {
     className: 'pt-trade__balance',
     dataset: { testId: 'trade-balance' },
-    text: 'Баланс: —',
+    text: 'Balance: —',
   });
 
   const amountWrap = el('label', { className: 'pt-trade__amount' });
-  amountWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Сумма' }));
+  amountWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Amount' }));
   const amountInput = el('input', {
     className: 'pt-trade__input',
     dataset: { testId: 'trade-amount' },
@@ -615,7 +615,7 @@ export function mountTradePanel(container, options = {}) {
       type: 'text',
       inputmode: 'decimal',
       placeholder: '0.0',
-      'aria-label': 'Сумма для обмена',
+      'aria-label': 'Swap amount',
       autocomplete: 'off',
     },
   });
@@ -647,7 +647,7 @@ export function mountTradePanel(container, options = {}) {
       min: '0',
       max: String(MAX_SLIPPAGE_PCT),
       value: String(DEFAULT_SLIPPAGE_PCT),
-      'aria-label': 'Slippage в процентах',
+      'aria-label': 'Slippage percent',
     },
   });
   slipInput.value = String(DEFAULT_SLIPPAGE_PCT);
@@ -658,9 +658,18 @@ export function mountTradePanel(container, options = {}) {
     className: 'pt-trade__quote',
     dataset: { testId: 'trade-quote' },
   });
-  const quoteOutLine = el('div', { className: 'pt-trade__quote-out', dataset: { testId: 'quote-out' } });
-  const quoteMinLine = el('div', { className: 'pt-trade__quote-min', dataset: { testId: 'quote-min' } });
-  const quoteFeeLine = el('div', { className: 'pt-trade__quote-fee', dataset: { testId: 'quote-fee' } });
+  const quoteOutLine = el('div', {
+    className: 'pt-trade__quote-out',
+    dataset: { testId: 'quote-out' },
+  });
+  const quoteMinLine = el('div', {
+    className: 'pt-trade__quote-min',
+    dataset: { testId: 'quote-min' },
+  });
+  const quoteFeeLine = el('div', {
+    className: 'pt-trade__quote-fee',
+    dataset: { testId: 'quote-fee' },
+  });
   const quoteErrLine = el('div', {
     className: 'pt-trade__quote-error',
     dataset: { testId: 'quote-error' },
@@ -699,7 +708,7 @@ export function mountTradePanel(container, options = {}) {
     text: 'Buy',
   });
 
-  // F1.3 — secondary CTA: "Купить country". Shown only when player+Buy AND
+  // F1.3 — secondary CTA: "Buy country". Shown only when player+Buy AND
   // insufficient country balance AND a `onCountrySwitch` callback was wired.
   // Click delegates back to the host (sidebar/router) — the panel never
   // touches navigation itself.
@@ -707,7 +716,7 @@ export function mountTradePanel(container, options = {}) {
     className: 'pt-btn pt-trade__country-cta',
     dataset: { testId: 'trade-country-cta' },
     attrs: { type: 'button' },
-    text: 'Купить country',
+    text: 'Buy country',
   });
   countryCta.hidden = true;
 
@@ -741,7 +750,8 @@ export function mountTradePanel(container, options = {}) {
     const v = resolveVenue(state.token, state.contracts?.pitch);
     if (!v) return null;
     const hook = v.venue === 'player' ? state.contracts?.playerHook : state.contracts?.countryHook;
-    const router = v.venue === 'player' ? state.contracts?.playerRouter : state.contracts?.countryRouter;
+    const router =
+      v.venue === 'player' ? state.contracts?.playerRouter : state.contracts?.countryRouter;
     if (typeof hook !== 'string' || !hook) return null;
     // Router can be missing in early config-load — still allow quote/balance,
     // approve+swap branches gate on it themselves.
@@ -767,14 +777,38 @@ export function mountTradePanel(container, options = {}) {
   }
 
   /**
-   * Resolve a display symbol for a country-token address. Returns the cached
-   * symbol when getTokens() has filled the map; falls back to the shortened
-   * address (e.g. `0xcccc…0001`) otherwise. F1.3 helper.
+   * Resolve a display symbol for a country-token address. F1.4 refinement —
+   * priority order:
+   *   1. `state.token.countrySymbol` when the sidebar threaded it through
+   *      `setToken({ ..., countrySymbol })`. Always the canonical source
+   *      when the address matches the currently-selected token's country.
+   *   2. `state.countrySymbolMap` populated by the legacy one-shot
+   *      `getTokens()` fetch (defence-in-depth; survives a sidebar that
+   *      forgets to thread the symbol).
+   *   3. Shortened address fallback (`0xcccc…0001`) — last-ditch label so
+   *      the user never sees the literal word "country" or an empty string.
+   *
+   * F1.3 helper, F1.4 extended.
    */
   function symbolForCountry(addr) {
     if (typeof addr !== 'string' || !addr) return 'country';
-    const cached = state.countrySymbolMap.get(addr.toLowerCase());
+    const addrLower = addr.toLowerCase();
+    // Step 1: prefer the symbol threaded via setToken when it matches the
+    // address we were asked about. Guard the equality so a stale value from
+    // a previous setToken() doesn't leak across token switches.
+    const threaded =
+      typeof state.token?.countrySymbol === 'string' && state.token.countrySymbol
+        ? state.token.countrySymbol
+        : null;
+    const tokenCountryAddr =
+      typeof state.token?.countryAddress === 'string'
+        ? state.token.countryAddress.toLowerCase()
+        : null;
+    if (threaded && tokenCountryAddr === addrLower) return threaded;
+    // Step 2: legacy map fallback.
+    const cached = state.countrySymbolMap.get(addrLower);
     if (cached) return cached;
+    // Step 3: shortened address.
     return shortenAddress(addr);
   }
 
@@ -821,15 +855,15 @@ export function mountTradePanel(container, options = {}) {
 
   function renderBalance() {
     if (!state.account.isConnected) {
-      balanceLine.textContent = 'Баланс: подключите кошелёк';
+      balanceLine.textContent = 'Balance: connect wallet';
       return;
     }
     if (state.balanceLoading) {
-      balanceLine.textContent = 'Баланс: загрузка…';
+      balanceLine.textContent = 'Balance: loading…';
       return;
     }
     if (state.balanceWei == null) {
-      balanceLine.textContent = 'Баланс: —';
+      balanceLine.textContent = 'Balance: —';
       return;
     }
     // F1.3: suffix the symbol of the *input* token so the user knows what the
@@ -838,11 +872,11 @@ export function mountTradePanel(container, options = {}) {
     // resolve.
     const sym = inputTokenSymbol();
     const value = formatWei(state.balanceWei, 6);
-    balanceLine.textContent = sym ? `Баланс: ${value} ${sym}` : `Баланс: ${value}`;
+    balanceLine.textContent = sym ? `Balance: ${value} ${sym}` : `Balance: ${value}`;
   }
 
   /**
-   * F1.3 — player+Buy hint block. Renders "Требуется: X CC / Ваш баланс: Y CC"
+   * F1.3 — player+Buy hint block. Renders "Required: X CC / Your balance: Y CC"
    * once we have BOTH a quote (so we know how much country is needed) AND a
    * balance read (so the user can compare). Hidden in every other case so it
    * doesn't add empty rows on the country panel or pre-quote.
@@ -861,8 +895,8 @@ export function mountTradePanel(container, options = {}) {
     const sym = symbolForCountry(state.token?.countryAddress);
     const need = formatWei(state.quote.amountInWei, 6);
     const have = formatWei(state.balanceWei, 6);
-    hintRequiredLine.textContent = `Требуется: ${need} ${sym}`;
-    hintBalanceLine.textContent = `Ваш баланс: ${have} ${sym}`;
+    hintRequiredLine.textContent = `Required: ${need} ${sym}`;
+    hintBalanceLine.textContent = `Your balance: ${have} ${sym}`;
     hintBlock.hidden = false;
   }
 
@@ -877,7 +911,7 @@ export function mountTradePanel(container, options = {}) {
     }
     quoteErrLine.hidden = true;
     if (state.quoteLoading) {
-      quoteOutLine.textContent = 'Котировка…';
+      quoteOutLine.textContent = 'Quoting…';
       quoteMinLine.textContent = '';
       quoteFeeLine.textContent = '';
       return;
@@ -890,9 +924,9 @@ export function mountTradePanel(container, options = {}) {
     }
     const outText = formatWei(state.quote.amountOutWei, 6);
     const minText = formatWei(state.quote.minOutWei, 6);
-    quoteOutLine.textContent = `Получите ≈ ${outText}`;
-    quoteMinLine.textContent = `Минимум (с учётом slippage): ${minText}`;
-    quoteFeeLine.textContent = `Комиссия pitchwc: ${(PITCHWC_FEE_BPS / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
+    quoteOutLine.textContent = `You receive ≈ ${outText}`;
+    quoteMinLine.textContent = `Minimum (after slippage): ${minText}`;
+    quoteFeeLine.textContent = `pitchwc fee: ${(PITCHWC_FEE_BPS / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
   }
 
   function renderCta() {
@@ -920,7 +954,7 @@ export function mountTradePanel(container, options = {}) {
     //   * a balance is known and is short of the requested amount, AND
     //   * no tx is in flight (so we don't surprise-navigate mid-approve/swap).
     // The disabledReason for this case is the explicit
-    // "Нужно X CC. Купи на Country panel." string — the CTA reinforces it.
+    // "Required: X CC. Buy it on the Country panel." string — the CTA reinforces it.
     const insufficientCountry =
       playerBuy &&
       state.balanceWei != null &&
@@ -928,16 +962,13 @@ export function mountTradePanel(container, options = {}) {
       amountWei > 0n &&
       amountWei > state.balanceWei;
     const showCountryCta =
-      onCountrySwitch != null &&
-      insufficientCountry &&
-      !state.approvePending &&
-      !state.swapPending;
+      onCountrySwitch != null && insufficientCountry && !state.approvePending && !state.swapPending;
     countryCta.hidden = !showCountryCta;
     if (showCountryCta) {
-      // Best-effort symbol label so the user sees "Купить BRA" not
-      // "Купить country" once the registry has loaded.
+      // Best-effort symbol label so the user sees "Buy BRA" not
+      // "Buy country" once the registry has loaded.
       const sym = countrySymbol && countrySymbol !== 'country' ? countrySymbol : null;
-      countryCta.textContent = sym ? `Купить ${sym}` : 'Купить country';
+      countryCta.textContent = sym ? `Buy ${sym}` : 'Buy country';
       countryCta.dataset.countryAddress = (state.token?.countryAddress ?? '').toLowerCase();
     } else {
       delete countryCta.dataset.countryAddress;
@@ -947,10 +978,7 @@ export function mountTradePanel(container, options = {}) {
     // When user must approve before swap, swap the label to "Approve" so the
     // expected popup matches the click.
     const needsApprove =
-      !reason &&
-      amountWei != null &&
-      state.allowanceWei != null &&
-      state.allowanceWei < amountWei;
+      !reason && amountWei != null && state.allowanceWei != null && state.allowanceWei < amountWei;
 
     if (state.approvePending) {
       cta.textContent = 'Approve…';
@@ -961,12 +989,12 @@ export function mountTradePanel(container, options = {}) {
     } else {
       cta.textContent = state.side === 'buy' ? 'Buy' : 'Sell';
     }
-    cta.dataset.action = needsApprove && !state.approvePending && !state.swapPending
-      ? 'approve'
-      : 'swap';
+    cta.dataset.action =
+      needsApprove && !state.approvePending && !state.swapPending ? 'approve' : 'swap';
 
     // Swap requires a fresh quote (otherwise no minOut). Approve doesn't.
-    const swapNeedsQuote = !needsApprove && (state.quote == null || state.quote.amountInWei !== amountWei);
+    const swapNeedsQuote =
+      !needsApprove && (state.quote == null || state.quote.amountInWei !== amountWei);
 
     cta.disabled = reason != null || swapNeedsQuote;
     status.textContent = reason ?? '';
@@ -1094,7 +1122,7 @@ export function mountTradePanel(container, options = {}) {
     } catch (err) {
       if (myGen !== state.quoteGen) return;
       state.quote = null;
-      state.quoteError = err?.shortMessage || err?.message || 'Не удалось получить котировку';
+      state.quoteError = err?.shortMessage || err?.message || 'Failed to fetch quote';
     } finally {
       if (myGen === state.quoteGen) {
         state.quoteLoading = false;
@@ -1125,12 +1153,7 @@ export function mountTradePanel(container, options = {}) {
 
   async function refreshAllowance() {
     const sideInfo = resolveSide();
-    if (
-      !sideInfo ||
-      !sideInfo.router ||
-      !state.account.isConnected ||
-      !state.account.address
-    ) {
+    if (!sideInfo || !sideInfo.router || !state.account.isConnected || !state.account.address) {
       state.allowanceWei = null;
       renderCta();
       return;
@@ -1208,7 +1231,7 @@ export function mountTradePanel(container, options = {}) {
     // The previous quote (if any) is now stale relative to the live input.
     // renderHint() compares quote.amountInWei to the live amount and hides
     // the country-required block during the debounce window so we never show
-    // "Требуется: 5 BRA" while the user is typing "10".
+    // "Required: 5 BRA" while the user is typing "10".
     renderHint();
     scheduleQuote();
   }
@@ -1262,7 +1285,7 @@ export function mountTradePanel(container, options = {}) {
     } catch (err) {
       state.approvePending = false;
       renderCta();
-      showToast(errorMessage(err, 'Не удалось подключить кошелёк'), { kind: 'error' });
+      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
       return;
     }
     try {
@@ -1272,13 +1295,13 @@ export function mountTradePanel(container, options = {}) {
         amount: MAX_UINT256,
         owner: state.account.address,
       });
-      showToast('Approve выполнен', { kind: 'info' });
+      showToast('Approve confirmed', { kind: 'info' });
       // Re-read allowance from chain — don't optimistically set MAX_UINT256
       // (in case the wallet sub-allowance got truncated by some odd token).
       await refreshAllowance();
     } catch (err) {
       if (!isUserRejection(err)) {
-        showToast(errorMessage(err, 'Approve не удался'), { kind: 'error' });
+        showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
       }
     } finally {
       state.approvePending = false;
@@ -1305,23 +1328,26 @@ export function mountTradePanel(container, options = {}) {
     } catch (err) {
       state.swapPending = false;
       renderCta();
-      showToast(errorMessage(err, 'Не удалось подключить кошелёк'), { kind: 'error' });
+      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
       return;
     }
     const minOut = state.quote.minOutWei;
-    // Output-token label for the success toast. Sell on a player venue means
-    // the user receives the country token, whose symbol we don't carry on
-    // state.token (it lives on the sidebar row); fall back to a shortened
-    // address rather than the literal "country". F1.4 refinement: thread
-    // countrySymbol through setToken.
+    // Output-token label for the success toast. F1.4 — sell on a player venue
+    // means the user receives the country token; prefer the threaded
+    // `countrySymbol` (sidebar) over the legacy address-fallback path.
     const outSymbol =
       state.side === 'buy'
         ? state.token?.symbol || 'tokens'
         : sideInfo.venue === 'country'
           ? 'PITCH'
-          : shortenAddress(state.token?.countryAddress);
+          : symbolForCountry(state.token?.countryAddress);
     try {
-      await client.swap({
+      // F1.4 — capture the tx hash so the success toast can link to Basescan.
+      // `payment.swap` returns the hash both for the default wagmi-backed
+      // client (`writeContract` → hash) and the test stubs
+      // (`vi.fn().mockResolvedValue('0xswaphash')`). When the seam returns
+      // something non-stringy we just omit the link rather than crashing.
+      const txHash = await client.swap({
         router: sideInfo.router,
         side: state.side,
         token: tradedToken,
@@ -1330,9 +1356,13 @@ export function mountTradePanel(container, options = {}) {
         owner: state.account.address,
       });
       const outText = formatWei(state.quote.amountOutWei, 6);
-      showToast(`Своп выполнен: ${outText} ${outSymbol}`, { kind: 'info' });
+      const link =
+        typeof txHash === 'string' && /^0x[0-9a-fA-F]+$/.test(txHash)
+          ? { url: `https://basescan.org/tx/${txHash}`, label: 'View on Basescan' }
+          : null;
+      showToast(`Swap done: ${outText} ${outSymbol}`, { kind: 'info', link });
       // Clear amount, refresh chain state. Order matters — clear first so
-      // CTA reverts to "введите сумму" while balance refetches.
+      // CTA reverts to "enter amount" while balance refetches.
       state.amountStr = '';
       amountInput.value = '';
       state.quote = null;
@@ -1344,7 +1374,7 @@ export function mountTradePanel(container, options = {}) {
       refreshAllowance();
     } catch (err) {
       if (!isUserRejection(err)) {
-        showToast(errorMessage(err, 'Своп не удался'), { kind: 'error' });
+        showToast(errorMessage(err, 'Swap failed'), { kind: 'error' });
       }
     } finally {
       state.swapPending = false;
@@ -1388,9 +1418,20 @@ export function mountTradePanel(container, options = {}) {
     const prev = state.account;
     state.account = acc;
     // Address or chain changed → invalidate balance + allowance + quote.
-    if (prev.address !== acc.address || prev.chainId !== acc.chainId || prev.isConnected !== acc.isConnected) {
+    if (
+      prev.address !== acc.address ||
+      prev.chainId !== acc.chainId ||
+      prev.isConnected !== acc.isConnected
+    ) {
       state.balanceWei = null;
       state.allowanceWei = null;
+      // F1.4 — drop the cached quote on account/chain change. The disabledReason
+      // chainId guard already blocks the CTA when the user is off Base, but a
+      // stale quote (taken against a previous address/chain) would resurface
+      // the moment they switched back to Base and could mislead them about
+      // current pool state. Clearing forces a fresh fetch on the next input.
+      state.quote = null;
+      state.quoteError = null;
       refreshBalance();
       refreshAllowance();
       // Quote isn't user-specific but disabled-state depends on chainId; re-render.
@@ -1419,16 +1460,55 @@ export function mountTradePanel(container, options = {}) {
     renderAll();
   }
 
-  // Kick off config fetch — but don't block UI mount.
-  Promise.resolve()
-    .then(() => apiClient.getConfig())
-    .then((cfg) => {
-      if (!configLoaded) applyContracts(cfg);
-    })
-    .catch(() => {
-      // Stays in "config loading" disabled state. A future retry path
-      // (F1.4 polish) can re-fetch; for now the user can refresh the page.
-    });
+  // F1.4 — exponential-backoff retry for /config. Without this the panel
+  // stayed in "Загрузка конфига…" forever if the first fetch failed (network
+  // hiccup, server restart). Schedule: 1s, 2s, 4s, 8s, 16s (capped to 60s),
+  // up to 5 attempts after the initial try. After exhaustion we surface a
+  // toast asking the user to reload and leave the CTA disabled — that's
+  // strictly better than silent failure, and a manual reload is the right
+  // remediation since the rest of the bootstrap chain (sidebar, chart) may
+  // also be broken in a way the panel can't see.
+  //
+  // Each timer is tracked so destroy() can cancel pending retries — without
+  // this a re-mount would leak a fetcher that races the new instance's state.
+  const configRetryTimers = new Set();
+  const CONFIG_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000]; // capped at 60s by Math.min if extended
+  let configAttempt = 0;
+  // F1.4 fix — destroyed flag for in-flight `getConfig()` continuations.
+  // destroy() clears the pending retry timers but cannot cancel an
+  // already-fired fetch. Without this guard the resolved `.then`/`.catch`
+  // would call applyContracts() / showToast() / schedule a fresh retry
+  // against a torn-down panel — writing to detached state and re-rendering
+  // a detached DOM. Setting `destroyed = true` in destroy() short-circuits
+  // both branches.
+  let destroyed = false;
+  function attemptConfigFetch() {
+    return Promise.resolve()
+      .then(() => apiClient.getConfig())
+      .then((cfg) => {
+        if (configLoaded || destroyed) return;
+        applyContracts(cfg);
+      })
+      .catch(() => {
+        if (configLoaded || destroyed) return; // somebody else succeeded, or panel is gone
+        if (configAttempt >= CONFIG_RETRY_DELAYS_MS.length) {
+          // Out of retries — surface ONE final toast. Stays disabled.
+          showToast('Failed to load config. Reload the page.', {
+            kind: 'error',
+            duration: 8000,
+          });
+          return;
+        }
+        const delay = Math.min(60000, CONFIG_RETRY_DELAYS_MS[configAttempt]);
+        configAttempt += 1;
+        const t = setTimeout(() => {
+          configRetryTimers.delete(t);
+          attemptConfigFetch();
+        }, delay);
+        configRetryTimers.add(t);
+      });
+  }
+  attemptConfigFetch();
 
   // F1.3 — populate the country symbol map from /tokens. One-shot; if it
   // fails the UI degrades to `shortenAddress` labels. Same endpoint the
@@ -1501,10 +1581,18 @@ export function mountTradePanel(container, options = {}) {
   }
 
   function destroy() {
+    // F1.4 fix — set flag BEFORE clearing timers so any continuation that
+    // resolves between this call and the timer cleanup also sees `destroyed`
+    // and bails out of applyContracts/retry-scheduling.
+    destroyed = true;
     if (state.quoteTimer != null) {
       clearTimeout(state.quoteTimer);
       state.quoteTimer = null;
     }
+    // F1.4 — clean up any pending config-retry timers to prevent a stale
+    // fetcher resolving against a torn-down state.
+    for (const t of configRetryTimers) clearTimeout(t);
+    configRetryTimers.clear();
     modeRow.removeEventListener('click', onModeClick);
     sideRow.removeEventListener('click', onSideClick);
     amountInput.removeEventListener('input', onAmountInput);

@@ -291,7 +291,7 @@ describe('mountProfile', () => {
 
     const status = container.querySelector('[data-test-id="profile-status"]');
     expect(status.hidden).toBe(false);
-    expect(status.textContent).toMatch(/оплат/i);
+    expect(status.textContent).toMatch(/payment/i);
   });
 
   it('shows 401 error message when unauthenticated', async () => {
@@ -309,7 +309,7 @@ describe('mountProfile', () => {
     await flush();
 
     const status = container.querySelector('[data-test-id="profile-status"]');
-    expect(status.textContent).toMatch(/кошельком/i);
+    expect(status.textContent).toMatch(/wallet/i);
   });
 
   it('renders empty stubs when blocks are missing', async () => {

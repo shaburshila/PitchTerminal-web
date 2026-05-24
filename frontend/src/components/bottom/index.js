@@ -241,11 +241,11 @@ export function mountBottomTabs(container, options = {}) {
       return;
     }
     if (state.loading) {
-      status.appendChild(el('span', { className: 'pt-bottom__loading', text: 'Загрузка…' }));
+      status.appendChild(el('span', { className: 'pt-bottom__loading', text: 'Loading…' }));
       return;
     }
     if (!state.token) {
-      status.appendChild(el('span', { text: 'Выберите токен' }));
+      status.appendChild(el('span', { text: 'Select a token' }));
       return;
     }
     if (state.tab === 'trades' && state.nextCursor) {
@@ -253,7 +253,7 @@ export function mountBottomTabs(container, options = {}) {
         className: 'pt-btn pt-bottom__more',
         dataset: { testId: 'bottom-load-more' },
         attrs: { type: 'button' },
-        text: 'Загрузить ещё',
+        text: 'Load more',
       });
       more.addEventListener('click', loadMore);
       status.appendChild(more);
@@ -271,7 +271,7 @@ export function mountBottomTabs(container, options = {}) {
 
     const thead = el('thead');
     const headRow = el('tr');
-    for (const label of ['Время', 'Сторона', 'Объём', 'Цена', 'Маркет', 'Адрес', 'Tx']) {
+    for (const label of ['Time', 'Side', 'Amount', 'Price', 'Market', 'Address', 'Tx']) {
       headRow.appendChild(el('th', { text: label }));
     }
     thead.appendChild(headRow);
@@ -280,7 +280,7 @@ export function mountBottomTabs(container, options = {}) {
     const tbody = el('tbody');
     if (state.trades.length === 0) {
       const empty = el('tr', { dataset: { testId: 'trades-empty' } });
-      const td = el('td', { text: 'Нет сделок', attrs: { colspan: '7' } });
+      const td = el('td', { text: 'No trades', attrs: { colspan: '7' } });
       td.className = 'pt-bottom__empty';
       empty.appendChild(td);
       tbody.appendChild(empty);
@@ -300,7 +300,8 @@ export function mountBottomTabs(container, options = {}) {
         tr.appendChild(
           el('td', {
             className: `side side--${trade.type}`,
-            text: trade.type === 'buy' ? 'Buy' : trade.type === 'sell' ? 'Sell' : trade.type ?? '',
+            text:
+              trade.type === 'buy' ? 'Buy' : trade.type === 'sell' ? 'Sell' : (trade.type ?? ''),
           }),
         );
         tr.appendChild(el('td', { className: 'num', text: formatNumber(trade.tokenValue) }));
@@ -330,7 +331,7 @@ export function mountBottomTabs(container, options = {}) {
               href: BASESCAN_TX + trade.tx,
               target: '_blank',
               rel: 'noopener noreferrer',
-              'aria-label': 'Транзакция в BaseScan',
+              'aria-label': 'Transaction on BaseScan',
             },
             text: '↗',
           });
@@ -356,22 +357,20 @@ export function mountBottomTabs(container, options = {}) {
 
     const thead = el('thead');
     const headRow = el('tr');
-    for (const label of ['#', 'Адрес', 'Баланс', 'Доля', 'Buys', 'Sells']) {
+    for (const label of ['#', 'Address', 'Balance', 'Share', 'Buys', 'Sells']) {
       headRow.appendChild(el('th', { text: label }));
     }
     thead.appendChild(headRow);
     table.appendChild(thead);
 
     const tbody = el('tbody');
-    const sorted = state.wallets
-      .slice()
-      .sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+    const sorted = state.wallets.slice().sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
     const positiveHolders = sorted.filter((w) => (w.position ?? 0) > 0);
     const totalPosition = positiveHolders.reduce((acc, w) => acc + (w.position ?? 0), 0);
 
     if (positiveHolders.length === 0) {
       const empty = el('tr', { dataset: { testId: 'holders-empty' } });
-      const td = el('td', { text: 'Нет холдеров', attrs: { colspan: '6' } });
+      const td = el('td', { text: 'No holders', attrs: { colspan: '6' } });
       td.className = 'pt-bottom__empty';
       empty.appendChild(td);
       tbody.appendChild(empty);
@@ -407,8 +406,7 @@ export function mountBottomTabs(container, options = {}) {
 
         tr.appendChild(el('td', { className: 'num', text: formatNumber(wallet.position) }));
 
-        const sharePct =
-          totalPosition > 0 ? ((wallet.position ?? 0) / totalPosition) * 100 : 0;
+        const sharePct = totalPosition > 0 ? ((wallet.position ?? 0) / totalPosition) * 100 : 0;
         tr.appendChild(el('td', { className: 'num', text: formatPercent(sharePct) }));
 
         tr.appendChild(el('td', { className: 'num', text: String(wallet.buys ?? 0) }));
@@ -457,7 +455,7 @@ export function mountBottomTabs(container, options = {}) {
       state.nextCursor = resp?.trades?.nextCursor ?? null;
     } catch (err) {
       if (myGen !== state.gen) return;
-      state.error = err?.detail || err?.title || err?.message || 'Ошибка загрузки';
+      state.error = err?.detail || err?.title || err?.message || 'Failed to load';
     } finally {
       if (myGen === state.gen) {
         state.loading = false;
@@ -503,8 +501,14 @@ export function mountBottomTabs(container, options = {}) {
     renderAll();
     // Propagate to premium tabs if they're already mounted. We don't await —
     // their internal data fetch is independent and shouldn't block trades.
-    if (myWalletHandle) myWalletHandle.setToken(normalized).catch(() => { /* surfaced */ });
-    if (ordersHandle) ordersHandle.setToken(normalized).catch(() => { /* surfaced */ });
+    if (myWalletHandle)
+      myWalletHandle.setToken(normalized).catch(() => {
+        /* surfaced */
+      });
+    if (ordersHandle)
+      ordersHandle.setToken(normalized).catch(() => {
+        /* surfaced */
+      });
     if (state.token) await fetchPage();
   }
 
@@ -553,13 +557,28 @@ export function mountBottomTabs(container, options = {}) {
    * if My Wallet hasn't been opened yet.
    */
   function refreshMyWallet() {
-    if (myWalletHandle) myWalletHandle.refresh().catch(() => { /* surfaced */ });
+    if (myWalletHandle)
+      myWalletHandle.refresh().catch(() => {
+        /* surfaced */
+      });
   }
 
   function destroy() {
     tabs.removeEventListener('click', onTabClick);
-    if (myWalletHandle) { try { myWalletHandle.destroy(); } catch { /* ignore */ } }
-    if (ordersHandle) { try { ordersHandle.destroy(); } catch { /* ignore */ } }
+    if (myWalletHandle) {
+      try {
+        myWalletHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (ordersHandle) {
+      try {
+        ordersHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
     myWalletHandle = null;
     ordersHandle = null;
     container.replaceChildren();

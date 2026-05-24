@@ -199,7 +199,7 @@ describe('mountProfileReferral', () => {
     await flush();
     const err = modal.querySelector('[data-test-id="profile-referral-modal-error"]');
     expect(err.hidden).toBe(false);
-    expect(err.textContent).toContain('занято');
+    expect(err.textContent).toContain('taken');
   });
 
   it('shows reserved message on 422 referral.reserved', async () => {
@@ -220,7 +220,7 @@ describe('mountProfileReferral', () => {
     await flush();
     await flush();
     const err = modal.querySelector('[data-test-id="profile-referral-modal-error"]');
-    expect(err.textContent).toContain('зарезервировано');
+    expect(err.textContent).toContain('reserved');
   });
 
   it('release: confirm → DELETE → no-handle state', async () => {

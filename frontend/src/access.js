@@ -39,7 +39,11 @@
 
 import * as defaultApi from './api.js';
 import { getEffectiveRef } from './referral.js';
-import { subscribe as subscribeConfig, get as getConfigSnap, merge as mergeConfigSnap } from './config-store.js';
+import {
+  subscribe as subscribeConfig,
+  get as getConfigSnap,
+  merge as mergeConfigSnap,
+} from './config-store.js';
 import { set as setAccessState } from './access-store.js';
 import { getAccount } from './wallet.js';
 import { showToast } from './ui/toast.js';
@@ -269,13 +273,13 @@ function isUserRejection(err) {
 }
 
 function errorMessage(err) {
-  if (!err) return 'Не удалось выполнить транзакцию';
+  if (!err) return 'Transaction failed';
   if (typeof err === 'string') return err;
   if (typeof err === 'object') {
     if ('shortMessage' in err && err.shortMessage) return String(err.shortMessage);
     if ('message' in err && err.message) return String(err.message);
   }
-  return 'Не удалось выполнить транзакцию';
+  return 'Transaction failed';
 }
 
 // ─── Pay modal ──────────────────────────────────────────────────────────────
@@ -306,14 +310,19 @@ let _activeModal = null;
 export function openPayModal(opts = {}) {
   if (typeof document === 'undefined') return { close: () => {} };
   if (_activeModal) {
-    try { _activeModal.remove(); } catch { /* ignore */ }
+    try {
+      _activeModal.remove();
+    } catch {
+      /* ignore */
+    }
     _activeModal = null;
   }
 
   const apiClient = opts.apiClient ?? defaultApi;
-  const getCurrentAddress = typeof opts.getCurrentAddress === 'function'
-    ? opts.getCurrentAddress
-    : () => getAccount().address;
+  const getCurrentAddress =
+    typeof opts.getCurrentAddress === 'function'
+      ? opts.getCurrentAddress
+      : () => getAccount().address;
   const refFn = typeof opts.getRef === 'function' ? opts.getRef : getEffectiveRef;
 
   // ── DOM scaffold ───────────────────────────────────────────────────────
@@ -323,11 +332,13 @@ export function openPayModal(opts = {}) {
     attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pt-pay-title' },
   });
   const card = el('div', { className: 'pt-modal pt-modal--pay' });
-  card.appendChild(el('h2', {
-    className: 'pt-modal__title',
-    attrs: { id: 'pt-pay-title' },
-    text: 'Оплата доступа',
-  }));
+  card.appendChild(
+    el('h2', {
+      className: 'pt-modal__title',
+      attrs: { id: 'pt-pay-title' },
+      text: 'Premium access',
+    }),
+  );
 
   const statusEl = el('div', {
     className: 'pt-modal__status',
@@ -350,9 +361,9 @@ export function openPayModal(opts = {}) {
     className: 'pt-pay__disclaimer',
     dataset: { testId: 'pay-disclaimer' },
     text:
-      'Разовая оплата навсегда. Один кошелёк — один доступ, не подписка. ' +
-      'Транзакция отправляется напрямую в контракт PitchTerminalAccess на Base. ' +
-      'PitchTerminal не хранит ваш приватный ключ.',
+      'One-time payment, lifetime access. One wallet, one access — not a subscription. ' +
+      'The transaction is sent directly to the PitchTerminalAccess contract on Base. ' +
+      'PitchTerminal never holds your private key.',
   });
 
   const linksEl = el('div', { className: 'pt-pay__links' });
@@ -365,7 +376,7 @@ export function openPayModal(opts = {}) {
     className: 'pt-pay__portable',
     dataset: { testId: 'pay-portable' },
     attrs: { href: PORTABLE_DOWNLOAD_URL, target: '_blank', rel: 'noopener noreferrer' },
-    text: 'Скачать портативную версию',
+    text: 'Download portable version',
   });
   linksEl.appendChild(uniLinkWrap);
   linksEl.appendChild(portableLink);
@@ -381,13 +392,13 @@ export function openPayModal(opts = {}) {
     className: 'pt-btn',
     dataset: { testId: 'pay-cancel' },
     attrs: { type: 'button' },
-    text: 'Отмена',
+    text: 'Cancel',
   });
   const payBtn = el('button', {
     className: 'pt-btn pt-btn--primary',
     dataset: { testId: 'pay-submit' },
     attrs: { type: 'button' },
-    text: 'Оплатить',
+    text: 'Pay',
   });
   payBtn.disabled = true;
   actions.appendChild(cancelBtn);
@@ -449,27 +460,22 @@ export function openPayModal(opts = {}) {
   function renderBreakdown() {
     breakdownEl.replaceChildren();
     if (priceWei == null || payWei == null) {
-      breakdownEl.appendChild(el('div', {
-        className: 'pt-pay__row pt-pay__row--loading',
-        dataset: { testId: 'pay-loading' },
-        text: 'Загружаем актуальную цену…',
-      }));
+      breakdownEl.appendChild(
+        el('div', {
+          className: 'pt-pay__row pt-pay__row--loading',
+          dataset: { testId: 'pay-loading' },
+          text: 'Fetching current price…',
+        }),
+      );
       return;
     }
-    breakdownEl.appendChild(buildRow('Цена', `${formatPitch(priceWei)} PITCH`, 'pay-price'));
+    breakdownEl.appendChild(buildRow('Price', `${formatPitch(priceWei)} PITCH`, 'pay-price'));
     if (discountWei != null && discountWei > 0n) {
-      breakdownEl.appendChild(buildRow(
-        'Реферал-скидка',
-        `−${formatPitch(discountWei)} PITCH`,
-        'pay-discount',
-      ));
+      breakdownEl.appendChild(
+        buildRow('Referral discount', `−${formatPitch(discountWei)} PITCH`, 'pay-discount'),
+      );
     }
-    breakdownEl.appendChild(buildRow(
-      'К оплате',
-      `${formatPitch(payWei)} PITCH`,
-      'pay-total',
-      true,
-    ));
+    breakdownEl.appendChild(buildRow('Total', `${formatPitch(payWei)} PITCH`, 'pay-total', true));
   }
 
   function buildRow(label, value, testId, strong = false) {
@@ -492,7 +498,7 @@ export function openPayModal(opts = {}) {
     refEl.replaceChildren();
     const rawHandle = safeLocalStorageGet(STORAGE_RAW);
     const short = shortenAddress(referrer);
-    let txt = `Поделился с тобой: ${short}`;
+    let txt = `Referred by: ${short}`;
     if (rawHandle && rawHandle !== referrer && !/^0x/i.test(rawHandle)) {
       txt += ` (${rawHandle})`;
     }
@@ -509,7 +515,7 @@ export function openPayModal(opts = {}) {
     const need = payWei - balanceWei;
     const msg = el('span', {
       className: 'pt-pay__need',
-      text: `Не хватает ${formatPitch(need)} PITCH. `,
+      text: `Short by ${formatPitch(need)} PITCH. `,
     });
     const link = el('a', {
       className: 'pt-pay__uniswap-link',
@@ -519,7 +525,7 @@ export function openPayModal(opts = {}) {
         target: '_blank',
         rel: 'noopener noreferrer',
       },
-      text: 'Купить PITCH на Uniswap',
+      text: 'Buy PITCH on Uniswap',
     });
     uniLinkWrap.appendChild(msg);
     uniLinkWrap.appendChild(link);
@@ -546,7 +552,11 @@ export function openPayModal(opts = {}) {
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     if (_activeModal === overlay) _activeModal = null;
     if (!paid && !silent && typeof opts.onClose === 'function') {
-      try { opts.onClose(); } catch { /* ignore */ }
+      try {
+        opts.onClose();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -564,7 +574,7 @@ export function openPayModal(opts = {}) {
 
   // ── Initial load: defensive /config?fresh=1 + balance probe ────────────
   (async () => {
-    setStatus('Получаем актуальную цену…');
+    setStatus('Fetching current price…');
     renderBreakdown();
     try {
       const cfg = await apiClient.getConfig({ fresh: true });
@@ -580,17 +590,17 @@ export function openPayModal(opts = {}) {
       pitchAddress = opts.pitchAddress || cfg?.contracts?.pitch || null;
       const rawPrice = cfg?.accessPriceWei;
       if (typeof rawPrice !== 'string' || !/^\d+$/.test(rawPrice)) {
-        throw new Error('Цена доступа недоступна — попробуйте позже.');
+        throw new Error('Access price is unavailable — please try again later.');
       }
       if (!accessAddress || !pitchAddress) {
-        throw new Error('Адрес контракта не сконфигурирован.');
+        throw new Error('Contract address is not configured.');
       }
       priceWei = BigInt(rawPrice);
       const buyerDiscountBps = Number(cfg?.buyerDiscountBps) || 0;
 
       ownerAddress = (opts.ownerAddress || getCurrentAddress() || '').toLowerCase() || null;
       if (!ownerAddress) {
-        throw new Error('Кошелёк не подключён.');
+        throw new Error('Wallet is not connected.');
       }
       referrer = refFn(ownerAddress, accessAddress) || ZERO_ADDRESS;
       const hasValidRef = referrer !== ZERO_ADDRESS;
@@ -645,7 +655,7 @@ export function openPayModal(opts = {}) {
 
     try {
       // 1. Read allowance.
-      setStatus('Проверяем разрешение токена…');
+      setStatus('Checking token allowance…');
       let allowance = await client.readAllowance({
         pitchAddress,
         owner: ownerAddress,
@@ -656,14 +666,14 @@ export function openPayModal(opts = {}) {
       // 2. If insufficient, approve (with USDT-style reset if > 0).
       if (allowance < payWei) {
         if (allowance > 0n) {
-          setStatus('Сбрасываем разрешение… (попап 1/3)');
+          setStatus('Resetting allowance… (popup 1/3)');
           await client.approve({
             pitchAddress,
             spender: accessAddress,
             amount: 0n,
             owner: ownerAddress,
           });
-          setStatus('Устанавливаем новое разрешение… (попап 2/3)');
+          setStatus('Setting new allowance… (popup 2/3)');
           await client.approve({
             pitchAddress,
             spender: accessAddress,
@@ -671,7 +681,7 @@ export function openPayModal(opts = {}) {
             owner: ownerAddress,
           });
         } else {
-          setStatus('Подтвердите разрешение токена… (попап 1/2)');
+          setStatus('Confirm token allowance… (popup 1/2)');
           await client.approve({
             pitchAddress,
             spender: accessAddress,
@@ -682,7 +692,7 @@ export function openPayModal(opts = {}) {
       }
 
       // 3. buyAccess.
-      setStatus('Покупаем доступ…');
+      setStatus('Purchasing access…');
       const txHash = await client.buyAccess({
         accessAddress,
         referrer,
@@ -690,7 +700,7 @@ export function openPayModal(opts = {}) {
       });
 
       // 4. Force-refresh /access — bypass server cache.
-      setStatus('Проверяем доступ…');
+      setStatus('Verifying access…');
       try {
         await apiClient.getAccess({ fresh: true });
       } catch {
@@ -701,11 +711,17 @@ export function openPayModal(opts = {}) {
 
       paid = true;
       if (typeof opts.onPaid === 'function') {
-        try { opts.onPaid({ txHash }); } catch { /* ignore */ }
+        try {
+          opts.onPaid({ txHash });
+        } catch {
+          /* ignore */
+        }
       }
       try {
-        showToast('Доступ оплачен. Premium активирован.', { kind: 'info' });
-      } catch { /* non-DOM safe */ }
+        showToast('Payment successful. Premium activated.', { kind: 'info' });
+      } catch {
+        /* non-DOM safe */
+      }
       close({ silent: true });
     } catch (err) {
       if (isUserRejection(err)) {
@@ -754,9 +770,10 @@ export function mountAccessBanner(container, opts = {}) {
     throw new TypeError('mountAccessBanner: container must be an HTMLElement');
   }
   const apiClient = opts.apiClient ?? defaultApi;
-  const getCurrentAddress = typeof opts.getCurrentAddress === 'function'
-    ? opts.getCurrentAddress
-    : () => getAccount().address;
+  const getCurrentAddress =
+    typeof opts.getCurrentAddress === 'function'
+      ? opts.getCurrentAddress
+      : () => getAccount().address;
 
   let destroyed = false;
   let reqSeq = 0;
@@ -769,24 +786,25 @@ export function mountAccessBanner(container, opts = {}) {
     if (state !== 'free') return; // empty banner → CSS collapses it
 
     const snap = getConfigSnap();
-    const priceWei = snap.accessPriceWei && /^\d+$/.test(snap.accessPriceWei)
-      ? BigInt(snap.accessPriceWei)
-      : null;
+    const priceWei =
+      snap.accessPriceWei && /^\d+$/.test(snap.accessPriceWei) ? BigInt(snap.accessPriceWei) : null;
     const priceTxt = priceWei != null ? `${formatPitch(priceWei)} PITCH` : '1 PITCH';
 
     const wrap = el('div', {
       className: 'pt-banner__pay',
       dataset: { testId: 'pay-banner' },
     });
-    wrap.appendChild(el('span', {
-      className: 'pt-banner__text',
-      text: `Премиум-доступ — разовая оплата ${priceTxt}. `,
-    }));
+    wrap.appendChild(
+      el('span', {
+        className: 'pt-banner__text',
+        text: `Premium access — one-time payment of ${priceTxt}. `,
+      }),
+    );
     const payBtn = el('button', {
       className: 'pt-btn pt-btn--primary pt-btn--sm',
       dataset: { testId: 'pay-banner-btn' },
       attrs: { type: 'button' },
-      text: 'Оплатить',
+      text: 'Pay',
     });
     payBtn.addEventListener('click', () => {
       openPayModal({
@@ -806,7 +824,11 @@ export function mountAccessBanner(container, opts = {}) {
           publishState();
           render();
           if (typeof opts.onPaid === 'function') {
-            try { opts.onPaid(info); } catch { /* ignore */ }
+            try {
+              opts.onPaid(info);
+            } catch {
+              /* ignore */
+            }
           }
         },
       });
@@ -817,7 +839,7 @@ export function mountAccessBanner(container, opts = {}) {
       className: 'pt-banner__portable',
       dataset: { testId: 'pay-banner-portable' },
       attrs: { href: PORTABLE_DOWNLOAD_URL, target: '_blank', rel: 'noopener noreferrer' },
-      text: 'Скачать портативную версию',
+      text: 'Download portable version',
     });
     wrap.appendChild(portable);
 
@@ -875,25 +897,37 @@ export function mountAccessBanner(container, opts = {}) {
     if (state === 'free') render();
   });
 
-  refresh().catch(() => { /* surfaced via state */ });
+  refresh().catch(() => {
+    /* surfaced via state */
+  });
 
   function destroy() {
     destroyed = true;
-    try { unsubscribeConfig(); } catch { /* ignore */ }
+    try {
+      unsubscribeConfig();
+    } catch {
+      /* ignore */
+    }
     container.replaceChildren();
   }
 
   return {
     refresh,
     destroy,
-    _getState() { return state; },
+    _getState() {
+      return state;
+    },
   };
 }
 
 /** Test-only: close any active modal + reset module-level state. */
 export function _resetForTests() {
   if (_activeModal) {
-    try { _activeModal.remove(); } catch { /* ignore */ }
+    try {
+      _activeModal.remove();
+    } catch {
+      /* ignore */
+    }
     _activeModal = null;
   }
   _defaultPaymentClient = null;

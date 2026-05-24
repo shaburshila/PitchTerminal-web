@@ -83,7 +83,7 @@ function bootstrap() {
         }
       }
       if (!row) {
-        showToast('Country-токен не найден. Перезагрузи страницу.', { kind: 'error' });
+        showToast('Country token not found. Please reload the page.', { kind: 'error' });
         return;
       }
       selectToken(row);
@@ -121,11 +121,11 @@ function bootstrap() {
   // Exposed via `window.__pt_locks` for ad-hoc debug + test teardown.
   const rightLock = mountSoftLock(layout.right, {
     zone: 'right',
-    label: 'Premium — торговая панель',
+    label: 'Premium — trading panel',
   });
   const profileLock = mountSoftLock(layout.profile, {
     zone: 'profile',
-    label: 'Premium — профиль',
+    label: 'Premium — profile',
   });
   if (typeof window !== 'undefined') {
     window.__pt_locks = { rightLock, profileLock };
@@ -198,11 +198,15 @@ function bootstrap() {
   onAccountChange((acc) => {
     if (!acc.isConnected || !acc.address) {
       lastSignedInAddress = null;
-      accessBanner.refresh().catch(() => { /* surfaced via state */ });
+      accessBanner.refresh().catch(() => {
+        /* surfaced via state */
+      });
       return;
     }
     if (acc.address === lastSignedInAddress || modalOpen) {
-      accessBanner.refresh().catch(() => { /* surfaced via state */ });
+      accessBanner.refresh().catch(() => {
+        /* surfaced via state */
+      });
       return;
     }
     modalOpen = true;
@@ -210,19 +214,25 @@ function bootstrap() {
       .then(() => {
         modalOpen = false;
         lastSignedInAddress = acc.address;
-        accessBanner.refresh().catch(() => { /* surfaced via state */ });
+        accessBanner.refresh().catch(() => {
+          /* surfaced via state */
+        });
       })
       .catch((err) => {
         if (!(err instanceof ApiError) || err.status !== 401) {
           modalOpen = false;
-          accessBanner.refresh().catch(() => { /* surfaced via state */ });
+          accessBanner.refresh().catch(() => {
+            /* surfaced via state */
+          });
           return;
         }
         showSignInModal({
           onSuccess: () => {
             modalOpen = false;
             lastSignedInAddress = acc.address;
-            accessBanner.refresh().catch(() => { /* surfaced via state */ });
+            accessBanner.refresh().catch(() => {
+              /* surfaced via state */
+            });
           },
           onCancel: () => {
             modalOpen = false;
@@ -281,7 +291,11 @@ function bootstrap() {
 
   function reopenStream() {
     if (streamHandle && typeof streamHandle.close === 'function') {
-      try { streamHandle.close(); } catch { /* ignore */ }
+      try {
+        streamHandle.close();
+      } catch {
+        /* ignore */
+      }
     }
     streamHandle = null;
     openOrReopenStream();

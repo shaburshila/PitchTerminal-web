@@ -57,4 +57,75 @@ describe('showToast', () => {
     expect(host.getAttribute('aria-live')).toBe('polite');
     expect(host.getAttribute('role')).toBe('status');
   });
+
+  // F1.4 — optional inline link (e.g. Basescan tx).
+  it('renders an anchor when `link` is provided', () => {
+    showToast('Swap done', {
+      duration: 1000,
+      link: { url: 'https://basescan.org/tx/0xabc', label: 'View on Basescan' },
+    });
+    const anchor = document.querySelector('[data-test-id="toast-link"]');
+    expect(anchor).not.toBeNull();
+    expect(anchor.getAttribute('href')).toBe('https://basescan.org/tx/0xabc');
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    expect(anchor.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(anchor.textContent).toBe('View on Basescan');
+  });
+
+  it('omits link node when `link` is missing or malformed', () => {
+    showToast('Plain', { duration: 1000 });
+    expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+    showToast('Bad link', { duration: 1000, link: { label: 'no url' } });
+    expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+  });
+
+  it('falls back to the url as label when label is omitted', () => {
+    showToast('msg', { duration: 1000, link: { url: 'https://example.com' } });
+    const anchor = document.querySelector('[data-test-id="toast-link"]');
+    expect(anchor).not.toBeNull();
+    expect(anchor.textContent).toBe('https://example.com');
+  });
+
+  // F1.4 fix — protocol allowlist hardening for the public API.
+  describe('link protocol allowlist', () => {
+    it('rejects javascript: URLs (XSS-vector)', () => {
+      showToast('bad', { duration: 1000, link: { url: 'javascript:alert(1)', label: 'click me' } });
+      // No anchor rendered → text-only fallback.
+      expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+      const node = document.querySelector('[data-test-id="toast"]');
+      expect(node).not.toBeNull();
+      expect(node.textContent).toBe('bad');
+    });
+
+    it('rejects data: URLs', () => {
+      showToast('bad', {
+        duration: 1000,
+        link: { url: 'data:text/html,<script>alert(1)</script>', label: 'data' },
+      });
+      expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+    });
+
+    it('rejects file:, ftp:, vbscript:, and other non-http(s) schemes', () => {
+      const schemes = ['file:///etc/passwd', 'ftp://example.com', 'vbscript:msgbox', 'about:blank'];
+      for (const url of schemes) {
+        document.body.replaceChildren();
+        showToast('bad', { duration: 1000, link: { url, label: 'x' } });
+        expect(document.querySelector('[data-test-id="toast-link"]')).toBeNull();
+      }
+    });
+
+    it('accepts https: URLs', () => {
+      showToast('ok', { duration: 1000, link: { url: 'https://example.com', label: 'site' } });
+      const anchor = document.querySelector('[data-test-id="toast-link"]');
+      expect(anchor).not.toBeNull();
+      expect(anchor.getAttribute('href')).toBe('https://example.com');
+    });
+
+    it('accepts http: URLs (legitimate in rare cases)', () => {
+      showToast('ok', { duration: 1000, link: { url: 'http://example.com', label: 'site' } });
+      const anchor = document.querySelector('[data-test-id="toast-link"]');
+      expect(anchor).not.toBeNull();
+      expect(anchor.getAttribute('href')).toBe('http://example.com');
+    });
+  });
 });

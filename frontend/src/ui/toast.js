@@ -3,10 +3,17 @@
  * messages stack vertically and auto-dismiss after `duration` ms.
  *
  * Public API:
- *   showToast(message, { kind?, duration? }) -> dismiss fn
+ *   showToast(message, { kind?, duration?, link? }) -> dismiss fn
  *
  * Kind defaults to 'info'; `kind = 'warn' | 'error'` adjust colour via CSS
  * classes (`pt-toast--warn`, `pt-toast--error`). Duration defaults to 3000ms.
+ *
+ * F1.4 — optional `link: { url, label }` appends an anchor next to the
+ * message (target=_blank, rel=noopener noreferrer). Used by the swap-success
+ * toast to surface a Basescan tx link without coupling toast.js to viem or
+ * url helpers. The link is rendered as a real DOM `<a>` so it inherits user
+ * styles + keyboard activation; the toast still auto-dismisses on duration
+ * but the click survives because the browser opens the URL synchronously.
  *
  * Idempotent: re-importing or repeatedly calling `showToast` reuses the
  * single host. Safe in non-DOM contexts (no-op + logs to console) so unit
@@ -33,18 +40,46 @@ function ensureHost() {
 
 /**
  * @param {string} message
- * @param {{ kind?: 'info' | 'warn' | 'error', duration?: number }} [opts]
+ * @param {{ kind?: 'info' | 'warn' | 'error', duration?: number, link?: { url: string, label?: string } | null }} [opts]
  * @returns {() => void} dismiss — call to remove the toast early.
  */
 export function showToast(message, opts = {}) {
   const text = String(message ?? '');
   const kind = opts.kind ?? 'info';
   const duration = Number.isFinite(opts.duration) ? opts.duration : DEFAULT_DURATION_MS;
+  // F1.4 — optional inline link (e.g. Basescan tx). Validated minimally:
+  // requires a string `url`; defaults the label so callers can pass
+  // `{ url }` for the common case.
+  //
+  // Hardening (F1.4 fix): allowlist only http(s) protocols. `showToast` is a
+  // public API and we never want a caller-supplied `javascript:` /
+  // `data:` / `file:` URL to land in an anchor `href` — that becomes an XSS
+  // sink on click. The protocol check is intentionally strict (anchored
+  // `https?://`) rather than `URL` parsing because happy-dom + jsdom
+  // disagree on edge cases like protocol-relative URLs, and the only
+  // legitimate caller passes absolute https URLs.
+  const link =
+    opts.link &&
+    typeof opts.link === 'object' &&
+    typeof opts.link.url === 'string' &&
+    opts.link.url &&
+    /^https?:\/\//i.test(opts.link.url)
+      ? {
+          url: opts.link.url,
+          label:
+            typeof opts.link.label === 'string' && opts.link.label
+              ? opts.link.label
+              : opts.link.url,
+        }
+      : null;
 
   const host = ensureHost();
   if (!host) {
     // Non-DOM environment: log so devs notice in unit tests.
-    if (typeof console !== 'undefined') console.log(`[toast:${kind}] ${text}`);
+    if (typeof console !== 'undefined') {
+      const tail = link ? ` (${link.label}: ${link.url})` : '';
+      console.log(`[toast:${kind}] ${text}${tail}`);
+    }
     return () => {};
   }
 
@@ -52,7 +87,22 @@ export function showToast(message, opts = {}) {
   node.className = `pt-toast pt-toast--${kind}`;
   node.dataset.testId = 'toast';
   node.dataset.kind = kind;
-  node.textContent = text;
+  if (link) {
+    // Mixed content: text node + anchor. Avoid innerHTML — keep the text safe
+    // from caller-provided HTML, and the anchor's textContent set explicitly.
+    const textNode = document.createTextNode(text ? `${text} ` : '');
+    const anchor = document.createElement('a');
+    anchor.className = 'pt-toast__link';
+    anchor.dataset.testId = 'toast-link';
+    anchor.href = link.url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.textContent = link.label;
+    node.appendChild(textNode);
+    node.appendChild(anchor);
+  } else {
+    node.textContent = text;
+  }
   host.appendChild(node);
 
   let dismissed = false;

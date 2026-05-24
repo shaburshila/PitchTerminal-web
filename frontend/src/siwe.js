@@ -37,13 +37,7 @@
 import { getAddress } from 'viem';
 import { signMessage as wagmiSignMessage } from '@wagmi/core';
 
-import {
-  getAuthNonce,
-  verifySiwe,
-  getAccess,
-  getConfig,
-  ApiError,
-} from './api.js';
+import { getAuthNonce, verifySiwe, getAccess, getConfig, ApiError } from './api.js';
 import {
   getAccount,
   getWagmiConfig,
@@ -214,10 +208,7 @@ export async function signIn(opts = {}) {
   }
 
   const checksumAddress = getAddress(rawAddress);
-  const [{ domain, uri }, nonceResp] = await Promise.all([
-    loadSiweConfig(),
-    getAuthNonce(),
-  ]);
+  const [{ domain, uri }, nonceResp] = await Promise.all([loadSiweConfig(), getAuthNonce()]);
 
   const nonce = nonceResp?.nonce;
   const issuedAtSec = Number(nonceResp?.issuedAt);

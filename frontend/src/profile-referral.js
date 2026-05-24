@@ -6,7 +6,7 @@
  *   1. GET /ref/me → 200: show `https://<host>/?ref=<handle>` with copy +
  *      replace/release buttons.
  *   2. GET /ref/me → 404: show `?ref=<wallet>` fallback link with copy +
- *      "Получить читаемое имя" CTA.
+ *      "Claim a readable name" CTA.
  *   3. GET /ref/me → 401: hide the section (caller already requires auth
  *      for /profile, so this is a defensive fallback).
  *
@@ -32,9 +32,29 @@ const HANDLE_RE = /^[a-z0-9_-]{4,32}$/;
 // The server is the source of truth — claim still falls through on 422
 // `referral.reserved` for anything not in this set.
 const RESERVED_CODES = new Set([
-  'api', 'admin', 'app', 'auth', 'config', 'health', 'me', 'mine',
-  'null', 'ref', 'static', 'stream', 'tokens', 'undefined', 'www',
-  'fuck', 'shit', 'cunt', 'nazi', 'hitl', 'suka', 'blya', 'pidr',
+  'api',
+  'admin',
+  'app',
+  'auth',
+  'config',
+  'health',
+  'me',
+  'mine',
+  'null',
+  'ref',
+  'static',
+  'stream',
+  'tokens',
+  'undefined',
+  'www',
+  'fuck',
+  'shit',
+  'cunt',
+  'nazi',
+  'hitl',
+  'suka',
+  'blya',
+  'pidr',
 ]);
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -137,7 +157,7 @@ export function mountProfileReferral(container, opts = {}) {
     className: 'pt-referral',
     dataset: { testId: 'profile-referral' },
   });
-  const title = el('h2', { className: 'pt-referral__title', text: 'Реферальная ссылка' });
+  const title = el('h2', { className: 'pt-referral__title', text: 'Referral link' });
   const bodyEl = el('div', { className: 'pt-referral__body' });
   section.appendChild(title);
   section.appendChild(bodyEl);
@@ -153,7 +173,7 @@ export function mountProfileReferral(container, opts = {}) {
     const url = buildRefUrl(state.code);
 
     const linkRow = el('div', { className: 'pt-referral__link-row' });
-    linkRow.appendChild(el('span', { className: 'pt-referral__label', text: 'Твоя ссылка:' }));
+    linkRow.appendChild(el('span', { className: 'pt-referral__label', text: 'Your link:' }));
     const linkEl = el('code', {
       className: 'pt-referral__url',
       dataset: { testId: 'profile-referral-url' },
@@ -169,7 +189,7 @@ export function mountProfileReferral(container, opts = {}) {
       className: 'pt-btn',
       dataset: { testId: 'profile-referral-change' },
       attrs: { type: 'button' },
-      text: 'Сменить handle',
+      text: 'Change handle',
     });
     changeBtn.addEventListener('click', () => openClaimModal({ initial: state.code }));
     actions.appendChild(changeBtn);
@@ -178,7 +198,7 @@ export function mountProfileReferral(container, opts = {}) {
       className: 'pt-btn',
       dataset: { testId: 'profile-referral-release' },
       attrs: { type: 'button' },
-      text: 'Освободить handle',
+      text: 'Release handle',
     });
     releaseBtn.addEventListener('click', onRelease);
     actions.appendChild(releaseBtn);
@@ -192,10 +212,12 @@ export function mountProfileReferral(container, opts = {}) {
     const url = addr ? buildRefUrl(addr) : '';
 
     const linkRow = el('div', { className: 'pt-referral__link-row' });
-    linkRow.appendChild(el('span', {
-      className: 'pt-referral__label',
-      text: 'У тебя пока нет читаемого имени. Можно делиться адресом:',
-    }));
+    linkRow.appendChild(
+      el('span', {
+        className: 'pt-referral__label',
+        text: "You don't have a readable name yet. You can share your address:",
+      }),
+    );
     if (url) {
       const linkEl = el('code', {
         className: 'pt-referral__url',
@@ -213,7 +235,7 @@ export function mountProfileReferral(container, opts = {}) {
       className: 'pt-btn pt-btn--primary',
       dataset: { testId: 'profile-referral-claim' },
       attrs: { type: 'button' },
-      text: 'Получить читаемое имя',
+      text: 'Claim a readable name',
     });
     claimBtn.addEventListener('click', () => openClaimModal({ initial: '' }));
     actions.appendChild(claimBtn);
@@ -222,20 +244,24 @@ export function mountProfileReferral(container, opts = {}) {
 
   function renderLoading() {
     bodyEl.replaceChildren();
-    bodyEl.appendChild(el('div', {
-      className: 'pt-referral__status',
-      dataset: { testId: 'profile-referral-loading' },
-      text: 'Загрузка…',
-    }));
+    bodyEl.appendChild(
+      el('div', {
+        className: 'pt-referral__status',
+        dataset: { testId: 'profile-referral-loading' },
+        text: 'Loading…',
+      }),
+    );
   }
 
   function renderError(msg) {
     bodyEl.replaceChildren();
-    bodyEl.appendChild(el('div', {
-      className: 'pt-referral__status pt-referral__status--err',
-      dataset: { testId: 'profile-referral-error' },
-      text: msg,
-    }));
+    bodyEl.appendChild(
+      el('div', {
+        className: 'pt-referral__status pt-referral__status--err',
+        dataset: { testId: 'profile-referral-error' },
+        text: msg,
+      }),
+    );
   }
 
   function makeCopyBtn(text, testId) {
@@ -243,16 +269,16 @@ export function mountProfileReferral(container, opts = {}) {
       className: 'pt-btn',
       dataset: { testId },
       attrs: { type: 'button' },
-      text: 'Копировать',
+      text: 'Copy',
     });
     btn.addEventListener('click', async () => {
       const ok = await copyToClipboard(text);
       const orig = btn.textContent;
-      btn.textContent = ok ? 'Скопировано' : 'Не удалось';
+      btn.textContent = ok ? 'Copied' : 'Failed';
       btn.disabled = true;
       setTimeout(() => {
         if (destroyed) return;
-        btn.textContent = orig || 'Копировать';
+        btn.textContent = orig || 'Copy';
         btn.disabled = false;
       }, 1200);
     });
@@ -286,7 +312,7 @@ export function mountProfileReferral(container, opts = {}) {
       } else {
         state.status = 'error';
         section.hidden = false;
-        renderError('Не удалось загрузить реферальную ссылку.');
+        renderError('Failed to load referral link.');
       }
       return;
     }
@@ -314,15 +340,19 @@ export function mountProfileReferral(container, opts = {}) {
       attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pt-ref-modal-title' },
     });
     const card = el('div', { className: 'pt-modal pt-modal--referral' });
-    card.appendChild(el('h2', {
-      className: 'pt-modal__title',
-      attrs: { id: 'pt-ref-modal-title' },
-      text: state.status === 'has-handle' ? 'Сменить handle' : 'Получить читаемое имя',
-    }));
-    card.appendChild(el('p', {
-      className: 'pt-modal__body',
-      text: '4–32 символа, буквы a-z, цифры, `-` и `_`. Не может начинаться или заканчиваться на `-`/`_`.',
-    }));
+    card.appendChild(
+      el('h2', {
+        className: 'pt-modal__title',
+        attrs: { id: 'pt-ref-modal-title' },
+        text: state.status === 'has-handle' ? 'Change handle' : 'Claim a readable name',
+      }),
+    );
+    card.appendChild(
+      el('p', {
+        className: 'pt-modal__body',
+        text: '4–32 characters: a-z, digits, `-`, `_`. Cannot start or end with `-`/`_`.',
+      }),
+    );
 
     const form = el('form', { className: 'pt-modal__form' });
     const inputWrap = el('div', { className: 'pt-modal__field' });
@@ -347,13 +377,13 @@ export function mountProfileReferral(container, opts = {}) {
       className: 'pt-btn',
       dataset: { testId: 'profile-referral-modal-cancel' },
       attrs: { type: 'button' },
-      text: 'Отмена',
+      text: 'Cancel',
     });
     const submitBtn = el('button', {
       className: 'pt-btn pt-btn--primary',
       dataset: { testId: 'profile-referral-modal-submit' },
       attrs: { type: 'submit' },
-      text: 'Зарезервировать',
+      text: 'Reserve',
     });
     submitBtn.disabled = true;
     actions.appendChild(cancelBtn);
@@ -393,11 +423,11 @@ export function mountProfileReferral(container, opts = {}) {
         return;
       }
       const map = {
-        format: 'Допустимы a-z, 0-9, `-`, `_`. Длина 4–32.',
-        edge: 'Не может начинаться или заканчиваться на `-` или `_`.',
-        reserved: 'Это имя зарезервировано.',
+        format: 'Allowed: a-z, 0-9, `-`, `_`. Length 4–32.',
+        edge: 'Cannot start or end with `-` or `_`.',
+        reserved: 'This name is reserved.',
       };
-      showError(map[code] || 'Неверный формат.');
+      showError(map[code] || 'Invalid format.');
     }
 
     async function onSubmit(ev) {
@@ -409,7 +439,7 @@ export function mountProfileReferral(container, opts = {}) {
       submitBtn.disabled = true;
       cancelBtn.disabled = true;
       const origText = submitBtn.textContent;
-      submitBtn.textContent = 'Сохраняем…';
+      submitBtn.textContent = 'Saving…';
       try {
         await apiClient.putRefMe(raw);
         closeModal();
@@ -417,7 +447,9 @@ export function mountProfileReferral(container, opts = {}) {
         state.code = raw;
         state.status = 'has-handle';
         renderHasHandle();
-        refresh().catch(() => { /* surfaced via state */ });
+        refresh().catch(() => {
+          /* surfaced via state */
+        });
       } catch (e) {
         const status = e && typeof e.status === 'number' ? e.status : null;
         const apiCode = e && typeof e.code === 'string' ? e.code : '';
@@ -429,15 +461,15 @@ export function mountProfileReferral(container, opts = {}) {
           section.hidden = true;
           return;
         }
-        let msg = 'Не удалось сохранить.';
-        if (status === 409 || apiCode === 'referral.taken') msg = 'Это имя уже занято.';
-        else if (apiCode === 'referral.reserved') msg = 'Это имя зарезервировано.';
-        else if (apiCode === 'referral.invalid_format') msg = 'Неверный формат имени.';
+        let msg = 'Failed to save.';
+        if (status === 409 || apiCode === 'referral.taken') msg = 'This name is already taken.';
+        else if (apiCode === 'referral.reserved') msg = 'This name is reserved.';
+        else if (apiCode === 'referral.invalid_format') msg = 'Invalid name format.';
         showError(msg);
         busy = false;
         submitBtn.disabled = false;
         cancelBtn.disabled = false;
-        submitBtn.textContent = origText || 'Зарезервировать';
+        submitBtn.textContent = origText || 'Reserve';
       }
     }
 
@@ -455,7 +487,11 @@ export function mountProfileReferral(container, opts = {}) {
 
     // Trigger initial validation if pre-filled.
     onInput();
-    try { input.focus(); } catch { /* ignore */ }
+    try {
+      input.focus();
+    } catch {
+      /* ignore */
+    }
 
     modalCleanup = () => {
       document.removeEventListener('keydown', onKey);
@@ -465,7 +501,11 @@ export function mountProfileReferral(container, opts = {}) {
 
   function closeModal() {
     if (modalCleanup) {
-      try { modalCleanup(); } catch { /* ignore */ }
+      try {
+        modalCleanup();
+      } catch {
+        /* ignore */
+      }
       modalCleanup = null;
     }
   }
@@ -474,9 +514,10 @@ export function mountProfileReferral(container, opts = {}) {
 
   async function onRelease() {
     if (releaseBusy) return;
-    const ok = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm('Освободить handle? Ссылка вернётся к адресу.')
-      : true;
+    const ok =
+      typeof window !== 'undefined' && typeof window.confirm === 'function'
+        ? window.confirm('Release this handle? Your link will revert to your address.')
+        : true;
     if (!ok) return;
     releaseBusy = true;
     try {
@@ -486,11 +527,13 @@ export function mountProfileReferral(container, opts = {}) {
       // without leaving the profile view. Backend treats DELETE as
       // idempotent (always 204), so any error here is network/5xx.
       renderHasHandle();
-      bodyEl.appendChild(el('div', {
-        className: 'pt-referral__status pt-referral__status--err',
-        dataset: { testId: 'profile-referral-error' },
-        text: 'Не удалось освободить handle. Попробуйте ещё раз.',
-      }));
+      bodyEl.appendChild(
+        el('div', {
+          className: 'pt-referral__status pt-referral__status--err',
+          dataset: { testId: 'profile-referral-error' },
+          text: 'Failed to release handle. Please try again.',
+        }),
+      );
       releaseBusy = false;
       return;
     }
@@ -498,7 +541,9 @@ export function mountProfileReferral(container, opts = {}) {
     state.wallet = null;
     state.status = 'no-handle';
     renderNoHandle();
-    refresh().catch(() => { /* surfaced via state */ });
+    refresh().catch(() => {
+      /* surfaced via state */
+    });
     releaseBusy = false;
   }
 

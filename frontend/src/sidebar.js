@@ -35,15 +35,15 @@ const ROLES = Object.freeze(['all', 'best', 'captain', 'rookie']);
 const PERIODS = Object.freeze(['all', '1d', '12h', '6h', '1h', '15m']);
 
 const ROLE_LABEL = {
-  all: 'Все',
+  all: 'All',
   best: 'Best',
   captain: 'Captain',
   rookie: 'Rookie',
 };
 
 const TAB_LABEL = {
-  players: 'Игроки',
-  countries: 'Страны',
+  players: 'Players',
+  countries: 'Countries',
 };
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -91,7 +91,7 @@ function pctOf(token, period) {
  * Pure function — easy to test, no DOM.
  */
 function selectTokens(state, source) {
-  const list = state.tab === 'players' ? source.players ?? [] : source.countries ?? [];
+  const list = state.tab === 'players' ? (source.players ?? []) : (source.countries ?? []);
   const q = state.search.trim().toLowerCase();
 
   let filtered = list.filter((t) => {
@@ -114,9 +114,7 @@ function selectTokens(state, source) {
   if (state.tab === 'countries') {
     filtered = filtered.slice().sort((a, b) => (b.pricePitch ?? 0) - (a.pricePitch ?? 0));
   } else {
-    filtered = filtered
-      .slice()
-      .sort((a, b) => pctOf(b, state.period) - pctOf(a, state.period));
+    filtered = filtered.slice().sort((a, b) => pctOf(b, state.period) - pctOf(a, state.period));
   }
 
   return filtered;
@@ -192,12 +190,12 @@ export function mountSidebar(container, options = {}) {
   const search = el('input', {
     className: 'pt-sidebar__search',
     dataset: { testId: 'sidebar-search' },
-    attrs: { type: 'search', placeholder: 'Поиск...', 'aria-label': 'Поиск токенов' },
+    attrs: { type: 'search', placeholder: 'Search...', 'aria-label': 'Search tokens' },
   });
   const roleSelect = el('select', {
     className: 'pt-sidebar__role',
     dataset: { testId: 'sidebar-role' },
-    attrs: { 'aria-label': 'Фильтр по роли' },
+    attrs: { 'aria-label': 'Filter by role' },
   });
   for (const r of ROLES) {
     const opt = el('option', { text: ROLE_LABEL[r] });
@@ -207,7 +205,7 @@ export function mountSidebar(container, options = {}) {
   const periodSelect = el('select', {
     className: 'pt-sidebar__period',
     dataset: { testId: 'sidebar-period' },
-    attrs: { 'aria-label': 'Период изменения цены' },
+    attrs: { 'aria-label': 'Price change period' },
   });
   for (const p of PERIODS) {
     const opt = el('option', { text: p });
@@ -222,10 +220,10 @@ export function mountSidebar(container, options = {}) {
     attrs: {
       type: 'button',
       'aria-pressed': 'false',
-      'aria-label': 'Только избранные',
-      title: 'Только избранные',
+      'aria-label': 'Favorites only',
+      title: 'Favorites only',
     },
-    text: '☆ Избранные',
+    text: '☆ Favorites',
   });
 
   filters.appendChild(search);
@@ -237,14 +235,14 @@ export function mountSidebar(container, options = {}) {
   const list = el('ul', {
     className: 'pt-sidebar__list',
     dataset: { testId: 'sidebar-list' },
-    attrs: { role: 'listbox', 'aria-label': 'Список токенов' },
+    attrs: { role: 'listbox', 'aria-label': 'Token list' },
   });
 
   // Empty state placeholder (sibling, hidden by default)
   const empty = el('div', {
     className: 'pt-sidebar__empty',
     dataset: { testId: 'sidebar-empty' },
-    text: 'Нет токенов',
+    text: 'No tokens',
   });
   empty.hidden = true;
 
@@ -309,13 +307,13 @@ export function mountSidebar(container, options = {}) {
         dataset: { testId: 'sidebar-star' },
         attrs: {
           type: 'button',
-          'aria-label': watched ? 'Убрать из избранного' : 'Добавить в избранное',
+          'aria-label': watched ? 'Remove from favorites' : 'Add to favorites',
           'aria-pressed': watched ? 'true' : 'false',
           // Star is a control inside an option — keep it out of the roving
           // tabindex; users reach it via Shift+Tab from a focused row if
           // needed. Click is the primary interaction.
           tabindex: '-1',
-          title: watched ? 'Убрать из избранного' : 'Добавить в избранное',
+          title: watched ? 'Remove from favorites' : 'Add to favorites',
         },
         text: watched ? '★' : '☆',
       });
@@ -373,7 +371,41 @@ export function mountSidebar(container, options = {}) {
         node.removeAttribute('aria-selected');
       }
     }
-    if (onTokenSelect) onTokenSelect(token);
+    if (onTokenSelect) onTokenSelect(enrichTokenPayload(token));
+  }
+
+  /**
+   * F1.4 — enrich the player-row payload with `countrySymbol` resolved from
+   * the country table the sidebar already holds. The backend's
+   * `players[].country` field carries the symbol most of the time, but is
+   * occasionally missing or out-of-sync for new entries; we lookup by
+   * `countryAddress` against `state.tokens.countries` and prefer that.
+   *
+   * The trade panel uses this to skip its own `getTokens()` fetch and avoids
+   * the race where the panel renders a player-Buy hint before the legacy
+   * `countrySymbolMap` resolves. Country-only rows pass through unchanged.
+   */
+  function enrichTokenPayload(token) {
+    if (!token || typeof token !== 'object') return token;
+    if (typeof token.countryAddress !== 'string' || !token.countryAddress) return token;
+    const addrLc = token.countryAddress.toLowerCase();
+    const countries = state.tokens.countries || [];
+    let resolved = null;
+    for (const c of countries) {
+      if (c && typeof c.address === 'string' && c.address.toLowerCase() === addrLc) {
+        if (typeof c.symbol === 'string' && c.symbol) {
+          resolved = c.symbol;
+        }
+        break;
+      }
+    }
+    // Fallback to the player row's `country` field — it's the symbol in
+    // practice (e.g. "BRA"). Keeps the threading useful when the country
+    // table didn't include the entry (test fixtures, partial loads).
+    const fallback = typeof token.country === 'string' && token.country ? token.country : null;
+    const countrySymbol = resolved ?? fallback;
+    if (!countrySymbol) return token;
+    return { ...token, countrySymbol };
   }
 
   function focusRowAt(idx) {
@@ -425,7 +457,7 @@ export function mountSidebar(container, options = {}) {
     const result = toggleWatchlist(token.address);
     if (result.full && !result.added) {
       // Rejected because at capacity; user attempted to add a new entry.
-      showToast(`Список избранного заполнен (максимум ${WATCHLIST_LIMIT})`, {
+      showToast(`Favorites list is full (max ${WATCHLIST_LIMIT})`, {
         kind: 'warn',
       });
       return;
@@ -441,7 +473,7 @@ export function mountSidebar(container, options = {}) {
     state.favoritesOnly = !state.favoritesOnly;
     favBtn.setAttribute('aria-pressed', state.favoritesOnly ? 'true' : 'false');
     favBtn.classList.toggle('is-on', state.favoritesOnly);
-    favBtn.textContent = state.favoritesOnly ? '★ Избранные' : '☆ Избранные';
+    favBtn.textContent = state.favoritesOnly ? '★ Favorites' : '☆ Favorites';
     state.focusedIndex = 0;
     render();
   }
@@ -455,9 +487,7 @@ export function mountSidebar(container, options = {}) {
   function onTabClick(ev) {
     // Review J M5: `ev.target` can be a nested icon/span once we add chrome
     // to tab buttons. `.closest('[data-tab]')` walks up to the actual button.
-    const target = ev.target instanceof Element
-      ? ev.target.closest('[data-tab]')
-      : null;
+    const target = ev.target instanceof Element ? ev.target.closest('[data-tab]') : null;
     if (!(target instanceof HTMLElement)) return;
     const tab = target.dataset.tab;
     if (!tab || !TABS.includes(tab)) return;
