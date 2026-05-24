@@ -166,9 +166,14 @@ jobs:
           # remapping/profile changes that may require a re-install.
           key: ${{ runner.os }}-foundry-oz-${{ hashFiles('contracts/foundry.toml', 'contracts/remappings.txt', '.github/workflows/ci.yml') }}
 
-      - name: Install OpenZeppelin v5.0.2
+      - name: Install OpenZeppelin v5.0.2 (if missing)
         if: steps.cache-oz.outputs.cache-hit != 'true'
-        run: forge install OpenZeppelin/openzeppelin-contracts@v5.0.2 --no-git
+        run: |
+          if [ -d contracts/lib/openzeppelin-contracts ]; then
+            echo "OpenZeppelin already present (committed to repo), skipping install"
+          else
+            forge install OpenZeppelin/openzeppelin-contracts@v5.0.2 --no-git
+          fi
 
       - name: forge fmt --check
         run: forge fmt --check
