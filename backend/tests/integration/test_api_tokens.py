@@ -78,6 +78,96 @@ class TestListTokens:
             assert t["tradesCount"] == 0
             assert t["changePct"]["all"] == 0
 
+    def test_sorted_by_price_pitch_desc(self, app) -> None:
+        """Known-issue #7: tokens are returned sorted by pricePitch DESC.
+
+        NULLS LAST keeps un-priced tokens after priced ones; a stable
+        ``address ASC`` tiebreaker keeps the order deterministic when several
+        tokens share the same price (the common case during worker backfill).
+        """
+
+        with _connect() as conn, conn.cursor() as cur:
+            # Cheapest first so the ORDER BY actually has work to do — if the
+            # query forgot to sort, the response would echo this insert order.
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES "
+                "(%s, 'Country A', 'CA', 'country', NULL, NULL),"
+                "(%s, 'Country B', 'CB', 'country', NULL, NULL),"
+                "(%s, 'Country C', 'CC', 'country', NULL, NULL)",
+                (
+                    "0x" + "a" * 40,
+                    "0x" + "b" * 40,
+                    "0x" + "c" * 40,
+                ),
+            )
+            # Player rows with mixed prices (incl. a tie at 0 and an unpriced row).
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES "
+                "(%s, 'P low', 'PL', 'player', %s, 'rookie'),"
+                "(%s, 'P high', 'PH', 'player', %s, 'best'),"
+                "(%s, 'P zero1', 'P1', 'player', %s, 'captain'),"
+                "(%s, 'P zero2', 'P2', 'player', %s, 'captain'),"
+                "(%s, 'P unpriced', 'PU', 'player', %s, 'rookie')",
+                (
+                    "0x" + "1" * 40, "0x" + "a" * 40,
+                    "0x" + "2" * 40, "0x" + "a" * 40,
+                    "0x" + "3" * 40, "0x" + "a" * 40,
+                    "0x" + "4" * 40, "0x" + "a" * 40,
+                    "0x" + "5" * 40, "0x" + "a" * 40,
+                ),
+            )
+            # Country prices: A=10e18, B=1e18, C=0
+            cur.execute(
+                "INSERT INTO market_state (token_address, price_country, price_pitch, supply) "
+                "VALUES "
+                "(%s, 0, %s, 0),"
+                "(%s, 0, %s, 0),"
+                "(%s, 0, %s, 0)",
+                (
+                    "0x" + "a" * 40, 10 * 10**18,
+                    "0x" + "b" * 40, 1 * 10**18,
+                    "0x" + "c" * 40, 0,
+                ),
+            )
+            # Player prices: low=5e18, high=100e18, zero1=0, zero2=0.
+            # `unpriced` deliberately has no market_state row → NULL price.
+            cur.execute(
+                "INSERT INTO market_state (token_address, price_country, price_pitch, supply) "
+                "VALUES "
+                "(%s, 0, %s, 0),"
+                "(%s, 0, %s, 0),"
+                "(%s, 0, %s, 0),"
+                "(%s, 0, %s, 0)",
+                (
+                    "0x" + "1" * 40, 5 * 10**18,
+                    "0x" + "2" * 40, 100 * 10**18,
+                    "0x" + "3" * 40, 0,
+                    "0x" + "4" * 40, 0,
+                ),
+            )
+            conn.commit()
+
+        resp = app.test_client().get("/api/v1/tokens")
+        assert resp.status_code == 200
+        body = resp.get_json()
+
+        # Countries: A (10) > B (1) > C (0).
+        country_addrs = [c["address"] for c in body["countries"]]
+        assert country_addrs == ["0x" + "a" * 40, "0x" + "b" * 40, "0x" + "c" * 40]
+
+        # Players: high (100) > low (5) > zero1/zero2 tied at 0 (address ASC:
+        # 0x3... before 0x4...) > unpriced (NULL → last).
+        player_addrs = [p["address"] for p in body["players"]]
+        assert player_addrs == [
+            "0x" + "2" * 40,  # 100
+            "0x" + "1" * 40,  # 5
+            "0x" + "3" * 40,  # 0, addr 0x3... wins tiebreak
+            "0x" + "4" * 40,  # 0, addr 0x4...
+            "0x" + "5" * 40,  # NULL → last
+        ]
+
 
 class TestChart:
     """spec §4.2 — `/chart` returns `{kind, name, symbol, country, candles, points}`."""

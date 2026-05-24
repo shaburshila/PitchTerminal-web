@@ -26,7 +26,7 @@
 - **Fix:** дефолт сменить на line chart. Свечи оставить как опцию toggle для
   пользователей с активным графиком (player с большим volume).
 - **Found:** 2026-05-24.
-- **Status:** open.
+- **Status:** ✅ done — `frontend/src/chart.js` initial `state.type='line'`, toggle Line/Candles сохранён, +2 теста.
 
 ### #2 [access] Premium-gating не применяется при смене кошелька
 - **Severity:** P1 (security/billing bypass).
@@ -39,8 +39,15 @@
 - **Fix:** access-store должен подписываться на `onAccountChange` (или
   эквивалент) и пересчитывать `hasAccess` при каждом switch wallet'а.
   Возможно проблема в том что bootstrap делает access-check один раз и кеширует.
+- **Root cause (deeper than spec):** stale JWT-cookie от wallet-A продолжал
+  работать под wallet-B — backend возвращал `hasAccess=true` старого юзера.
+  Без сброса cookie любая клиентская reactivity бесполезна.
 - **Found:** 2026-05-24.
-- **Status:** open.
+- **Status:** ✅ done — `frontend/src/access.js` + `main.js`: синхронный
+  soft-lock при account-change до ответа `/access`, `logout()` для сброса
+  stale JWT, защита от flicker при refresh того же кошелька, guard против
+  rapid double-switch при открытой signin-modal. +6 тестов
+  (4 в `access.test.js` + 2 в новом `main.test.js`).
 
 ### #3 [chart] Нет filter-кнопок над графиком (other/own trades, avg, buys/sells)
 - **Severity:** P2.
@@ -95,8 +102,15 @@
   с `HOOK_DEPLOY_BLOCK`). После backfill сортировка может оказаться правильной
   если backend уже sort'ит по price. **Проверить:** есть ли `ORDER BY` в
   `/api/v1/tokens` или сортировка делается на фронте.
+- **Root cause:** на фронте players сортировались по `changePct[period]`. При
+  `pricePitch=0` у всех (backfill в процессе) `changePct` тоже все 0 → JS
+  `Array.sort` давал unstable order для ~144 элементов с равными ключами.
 - **Found:** 2026-05-24.
-- **Status:** open (зависит от worker backfill для верификации).
+- **Status:** ✅ done — backend `app/routes/tokens.py`
+  (`LEFT JOIN market_state` + `ORDER BY price_pitch DESC NULLS LAST,
+  address ASC`) + frontend `sidebar.js` defence-in-depth (тот же порядок).
+  Финальная верификация «most expensive first» произойдёт автоматически
+  когда worker догонит backfill. +1 backend test, +2 frontend tests.
 
 ### #5a [referral] История рефералов (post-MVP)
 - **Severity:** P3.
@@ -111,4 +125,8 @@
 
 ## Done
 
-(пусто пока)
+- **2026-05-24 fix-batch** — закрыты #1 (chart line default), #2 (premium
+  reactivity + stale JWT sweep), #7 (sidebar sort by price). Detail см. в
+  каждом item'е выше. Verify: backend 397 passed, frontend 463 passed
+  (+10 новых тестов суммарно). Pre-Phase-1.5 cleanup, не закрывает items
+  ожидающие redesign (#3, #4, #5, #6).

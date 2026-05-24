@@ -9,13 +9,123 @@ import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
 import { onAccountChange } from './wallet.js';
-import { getConfig, getTokens, ApiError, getAccess } from './api.js';
+import { getConfig, getTokens, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
+import { set as setAccessState } from './access-store.js';
 import { mountProfile } from './profile.js';
 import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
 import { showToast } from './ui/toast.js';
+
+// Exported for unit tests. The bootstrap() flow wires this into
+// `onAccountChange`; tests drive the returned handler directly with deps
+// injected so we can assert the synchronous access-store transitions without
+// spinning up the full layout/sidebar/sse stack.
+//
+// Known issue #2 fix (2026-05-24): on EVERY account change we must
+//   1. synchronously force-lock the premium UI by resetting the access-store
+//      to `'unknown'` (soft-lock listeners react before the async /access
+//      round-trip resolves — no "premium flash" window for wallet-B), and
+//   2. clear the stale wallet-A `pt_session` cookie via /auth/logout, so the
+//      subsequent /access call doesn't return wallet-A's `hasAccess=true`
+//      under wallet-B's UI.
+// The previous code skipped both steps and let access-store retain the
+// wallet-A `'premium'` state until refresh() resolved — billing bypass.
+export function createAccountChangeHandler({
+  accessBanner,
+  deps = {},
+} = {}) {
+  const _setAccessState = deps.setAccessState ?? setAccessState;
+  const _logout = deps.logout ?? logout;
+  const _getAccess = deps.getAccess ?? getAccess;
+  const _showSignInModal = deps.showSignInModal ?? showSignInModal;
+  const _ApiError = deps.ApiError ?? ApiError;
+
+  let lastSignedInAddress = null;
+  let modalOpen = false;
+  return (acc) => {
+    // Disconnect → release any session and lock UI.
+    if (!acc.isConnected || !acc.address) {
+      const hadPriorSession = lastSignedInAddress !== null;
+      lastSignedInAddress = null;
+      // refresh() sees `addr === null` and sets state synchronously to 'anon';
+      // we still pre-set 'unknown' so soft-locks flip BEFORE the microtask.
+      _setAccessState('unknown');
+      if (hadPriorSession) {
+        _logout().catch(() => {
+          /* best-effort; cookie may expire anyway */
+        });
+      }
+      accessBanner.refresh().catch(() => {
+        /* surfaced via state */
+      });
+      return;
+    }
+    // Same address re-fired (e.g. chain switch reuses the connection). Just
+    // refresh — the existing session is still valid and the UI shouldn't flicker.
+    if (acc.address === lastSignedInAddress || modalOpen) {
+      // Rapid double-switch guard (H-1): if the SIWE modal is already open for
+      // wallet-A and the user switches to wallet-B before it closes, we still
+      // bail out of the full re-auth flow (modalOpen is true) but the UI would
+      // otherwise keep wallet-A's `'premium'` state until the modal resolves.
+      // Synchronously force-lock here whenever the address actually changed.
+      if (acc.address !== lastSignedInAddress) {
+        _setAccessState('unknown');
+      }
+      accessBanner.refresh().catch(() => {
+        /* surfaced via state */
+      });
+      return;
+    }
+    // Wallet switched (or first connect): synchronously force-lock + drop the
+    // previous JWT before any /access call. The store will be re-published by
+    // refresh()/getAccess(); during the gap the UI shows the lock.
+    _setAccessState('unknown');
+    const swap = lastSignedInAddress !== null && lastSignedInAddress !== acc.address;
+    modalOpen = true;
+    const proceed = swap
+      ? _logout().catch(() => {
+          /* server-side cookie clear is best-effort; if it 5xxs the
+             subsequent /access will still 401 because the server rotates
+             SIWE address binding on next verify, and worst case we just
+             re-SIWE under the wrong address — which the user can fix by
+             reconnecting. Not a regression vs. the prior behaviour. */
+        })
+      : Promise.resolve();
+    proceed.then(() =>
+      _getAccess()
+        .then(() => {
+          modalOpen = false;
+          lastSignedInAddress = acc.address;
+          accessBanner.refresh().catch(() => {
+            /* surfaced via state */
+          });
+        })
+        .catch((err) => {
+          if (!(err instanceof _ApiError) || err.status !== 401) {
+            modalOpen = false;
+            accessBanner.refresh().catch(() => {
+              /* surfaced via state */
+            });
+            return;
+          }
+          _showSignInModal({
+            onSuccess: () => {
+              modalOpen = false;
+              lastSignedInAddress = acc.address;
+              accessBanner.refresh().catch(() => {
+                /* surfaced via state */
+              });
+            },
+            onCancel: () => {
+              modalOpen = false;
+            },
+          });
+        }),
+    );
+  };
+}
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -192,54 +302,9 @@ function bootstrap() {
   // session. If `/access` returns 200 the cookie is still valid (refresh /
   // re-connect during 72h TTL) and we skip the SIWE popup; on 401 we open the
   // modal. We don't auto-popup on any other status (5xx / network) — let the
-  // user retry via wallet menu when backend recovers.
-  let lastSignedInAddress = null;
-  let modalOpen = false;
-  onAccountChange((acc) => {
-    if (!acc.isConnected || !acc.address) {
-      lastSignedInAddress = null;
-      accessBanner.refresh().catch(() => {
-        /* surfaced via state */
-      });
-      return;
-    }
-    if (acc.address === lastSignedInAddress || modalOpen) {
-      accessBanner.refresh().catch(() => {
-        /* surfaced via state */
-      });
-      return;
-    }
-    modalOpen = true;
-    getAccess()
-      .then(() => {
-        modalOpen = false;
-        lastSignedInAddress = acc.address;
-        accessBanner.refresh().catch(() => {
-          /* surfaced via state */
-        });
-      })
-      .catch((err) => {
-        if (!(err instanceof ApiError) || err.status !== 401) {
-          modalOpen = false;
-          accessBanner.refresh().catch(() => {
-            /* surfaced via state */
-          });
-          return;
-        }
-        showSignInModal({
-          onSuccess: () => {
-            modalOpen = false;
-            lastSignedInAddress = acc.address;
-            accessBanner.refresh().catch(() => {
-              /* surfaced via state */
-            });
-          },
-          onCancel: () => {
-            modalOpen = false;
-          },
-        });
-      });
-  });
+  // user retry via wallet menu when backend recovers. See
+  // `createAccountChangeHandler` above for the full state-machine docs.
+  onAccountChange(createAccountChangeHandler({ accessBanner }));
   // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
   // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).
   void ensureSignedIn;

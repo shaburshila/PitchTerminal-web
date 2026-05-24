@@ -26,6 +26,7 @@ const { openPayModal, mountAccessBanner, computeBuyerPay, formatPitch, buildUnis
   await import('../src/access.js');
 const referral = await import('../src/referral.js');
 const configStore = await import('../src/config-store.js');
+const accessStore = await import('../src/access-store.js');
 
 // ── Common fixtures ────────────────────────────────────────────────────────
 
@@ -108,6 +109,7 @@ beforeEach(() => {
   try { localStorage.clear(); } catch { /* ignore */ }
   configStore._resetForTests();
   referral._resetForTests();
+  accessStore._resetForTests();
   _resetForTests();
 });
 
@@ -438,5 +440,114 @@ describe('mountAccessBanner', () => {
     // Banner now empty (premium) regardless of refresh outcome.
     expect(handle._getState()).toBe('premium');
     expect(host.children.length).toBe(0);
+  });
+});
+
+// ── Wallet-switch premium-gating — issue #2 (2026-05-24) ───────────────────
+//
+// Regression coverage for the soft-launch finding: when the connected wallet
+// changes mid-session the premium UI must lock BEFORE the new wallet's
+// /access call resolves. Without these guarantees a wallet-A paid user
+// switching to an unpaid wallet-B sees premium content (Trade panel +
+// My Wallet + Orders) for the duration of the /access round trip.
+
+describe('mountAccessBanner — wallet switch', () => {
+  function getHost() {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    return host;
+  }
+  const WALLET_B = '0x3333333333333333333333333333333333333333';
+
+  it('demotes access-store from premium to unknown synchronously on wallet switch refresh', async () => {
+    // Wallet-A: paid.
+    const api = makeApiClient({ accessResp: { hasAccess: true, source: 'paid' } });
+    const host = getHost();
+    const handle = mountAccessBanner(host, { apiClient: api });
+    await flush(5);
+    expect(handle._getState()).toBe('premium');
+    expect(accessStore.get()).toBe('premium');
+
+    // Wallet-B: unpaid (but the /access mock will return whatever we set —
+    // crucially, we assert the SYNCHRONOUS pre-publish before the await
+    // resolves, not the eventual state).
+    accountState.address = WALLET_B;
+    api.getAccess = vi.fn(async () => ({ hasAccess: false, source: 'none' }));
+    const pending = handle.refresh();
+    // Before any microtask: store must already be demoted away from 'premium'
+    // so subscribed soft-locks re-render the lock for wallet-B.
+    expect(accessStore.get()).not.toBe('premium');
+
+    await pending;
+    expect(accessStore.get()).toBe('free');
+    expect(handle._getState()).toBe('free');
+  });
+
+  it('resets cached resolved address on disconnect so a re-connect re-checks /access', async () => {
+    const api = makeApiClient({ accessResp: { hasAccess: true, source: 'paid' } });
+    const host = getHost();
+    const handle = mountAccessBanner(host, { apiClient: api });
+    await flush(5);
+    expect(handle._getState()).toBe('premium');
+
+    accountState.address = null;
+    await handle.refresh();
+    expect(handle._getState()).toBe('anon');
+    expect(accessStore.get()).toBe('anon');
+
+    // Reconnect under wallet-B — /access now returns no access; the banner
+    // must re-resolve and publish 'free' (not stale 'premium').
+    accountState.address = WALLET_B;
+    api.getAccess = vi.fn(async () => ({ hasAccess: false, source: 'none' }));
+    await handle.refresh();
+    expect(handle._getState()).toBe('free');
+    expect(api.getAccess).toHaveBeenCalled();
+  });
+
+  it('does NOT demote premium for repeated refresh under the same wallet', async () => {
+    // Regression guard: the wallet-switch guard must only fire when the
+    // address actually changes — a periodic refresh under the same wallet
+    // must not flicker premium → unknown → premium.
+    const api = makeApiClient({ accessResp: { hasAccess: true, source: 'paid' } });
+    const host = getHost();
+    const handle = mountAccessBanner(host, { apiClient: api });
+    await flush(5);
+    expect(handle._getState()).toBe('premium');
+
+    // Spy on accessStore for any spurious 'unknown' publish.
+    const seen = [];
+    const unsub = accessStore.subscribe((s) => seen.push(s));
+    await handle.refresh();
+    unsub();
+    expect(seen).not.toContain('unknown');
+    expect(handle._getState()).toBe('premium');
+  });
+
+  it('keeps premium after successful payment even when refresh fires for the same wallet', async () => {
+    // Regression guard for the onPaid race: the pay-flow sets state='premium'
+    // optimistically with lastResolvedAddress=null (no pre-payment refresh
+    // succeeded). A subsequent refresh under the same wallet must NOT demote
+    // premium back to 'unknown'.
+    const api = makeApiClient({ accessResp: { hasAccess: false } });
+    const host = getHost();
+    const payment = makePaymentClient();
+    const handle = mountAccessBanner(host, { apiClient: api, payment });
+    await flush(5);
+    host.querySelector('[data-test-id="pay-banner-btn"]').click();
+    await flush(5);
+    document.querySelector('[data-test-id="pay-submit"]').click();
+    await flush(30);
+    expect(handle._getState()).toBe('premium');
+
+    // Now a refresh fires (e.g. SSE reconnect). /access returns hasAccess=true
+    // for the same wallet — the post-refresh state must remain 'premium', and
+    // there must have been no transient 'unknown' published in between.
+    api.getAccess = vi.fn(async () => ({ hasAccess: true, source: 'paid' }));
+    const seen = [];
+    const unsub = accessStore.subscribe((s) => seen.push(s));
+    await handle.refresh();
+    unsub();
+    expect(seen).not.toContain('unknown');
+    expect(handle._getState()).toBe('premium');
   });
 });

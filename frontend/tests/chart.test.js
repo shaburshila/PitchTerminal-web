@@ -187,12 +187,26 @@ describe('mountChart', () => {
     expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '5m');
     expect(created.charts.length).toBe(1);
     const series = created.charts[0].seriesList[0];
-    expect(series.kind).toBe('candle');
-    expect(series.data).toEqual(makeChartPayload().candles);
+    // Default type is `line` (see docs/known-issues.md #1 — candles look empty
+    // with sparse trades). Line data is {time, value} derived from candle.close.
+    expect(series.kind).toBe('line');
+    expect(series.data).toEqual([
+      { time: 1709000000, value: 10.5 },
+      { time: 1709000300, value: 11.8 },
+    ]);
     // Markers: only buy + sell points, "spot" is filtered out.
     expect(series.markers.length).toBe(2);
     expect(series.markers[0].position).toBe('belowBar'); // buy
     expect(series.markers[1].position).toBe('aboveBar'); // sell
+  });
+
+  it('default chart type is line (aria-pressed=true on line button)', () => {
+    const { lib } = makeChartLib();
+    mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    const line = container.querySelector('[data-test-id="chart-type-line"]');
+    const candles = container.querySelector('[data-test-id="chart-type-candles"]');
+    expect(line.getAttribute('aria-pressed')).toBe('true');
+    expect(candles.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('switching timeframe re-fetches and re-renders series', async () => {
@@ -228,25 +242,21 @@ describe('mountChart', () => {
     expect(api.getChart).not.toHaveBeenCalled();
   });
 
-  it('switching type from candles to line rebuilds with addLineSeries', async () => {
+  it('switching type from line to candles rebuilds with addCandlestickSeries', async () => {
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
     chart.setToken(makePlayer());
     await flush();
 
-    container.querySelector('[data-test-id="chart-type-line"]').click();
+    container.querySelector('[data-test-id="chart-type-candles"]').click();
     await flush();
 
     const chartInst = created.charts[0];
-    // candle series removed, line series active.
+    // line series removed, candle series active.
     const kinds = chartInst.seriesList.map((s) => s.kind);
-    expect(kinds).toContain('line');
-    const lineSeries = chartInst.seriesList.find((s) => s.kind === 'line');
-    // Line data uses {time, value} pairs derived from candle.close.
-    expect(lineSeries.data).toEqual([
-      { time: 1709000000, value: 10.5 },
-      { time: 1709000300, value: 11.8 },
-    ]);
+    expect(kinds).toContain('candle');
+    const candleSeries = chartInst.seriesList.find((s) => s.kind === 'candle');
+    expect(candleSeries.data).toEqual(makeChartPayload().candles);
   });
 
   it('unit toggle is hidden for country tokens, visible for players', () => {
@@ -294,22 +304,43 @@ describe('mountChart', () => {
     expect(changeEl.classList.contains('negative')).toBe(true);
   });
 
-  it('applyPrice updates the last candle and calls series.update', async () => {
+  it('applyPrice updates the last point and calls series.update (line default)', async () => {
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
     chart.setToken(makePlayer());
     await flush();
 
     const series = created.charts[0].seriesList[0];
+    expect(series.kind).toBe('line');
     series.update.mockClear();
     chart.applyPrice('0xAAA1', 13.5);
 
     expect(series.update).toHaveBeenCalledTimes(1);
     const arg = series.update.mock.calls[0][0];
-    expect(arg.close).toBe(13.5);
-    expect(arg.high).toBeGreaterThanOrEqual(13.5);
+    // Line series receives {time, value} updates.
+    expect(arg.value).toBe(13.5);
     // Price stat reflects new close.
     expect(container.querySelector('[data-test-id="chart-stat-price"]').textContent).toBe('13.50');
+  });
+
+  it('applyPrice updates with candle shape when type=candles', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+
+    // Switch to candles, then rebuild swaps series.
+    container.querySelector('[data-test-id="chart-type-candles"]').click();
+    await flush();
+
+    const candleSeries = created.charts[0].seriesList.find((s) => s.kind === 'candle');
+    candleSeries.update.mockClear();
+    chart.applyPrice('0xAAA1', 13.5);
+
+    expect(candleSeries.update).toHaveBeenCalledTimes(1);
+    const arg = candleSeries.update.mock.calls[0][0];
+    expect(arg.close).toBe(13.5);
+    expect(arg.high).toBeGreaterThanOrEqual(13.5);
   });
 
   it('applyPrice ignores ticks for other tokens', async () => {

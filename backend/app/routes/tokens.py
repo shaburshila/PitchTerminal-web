@@ -146,7 +146,18 @@ def list_tokens() -> Any:
 
     from shared.config import config as cfg
 
-    token_rows = fetch_all("SELECT address, name, symbol, kind, country_address, role FROM tokens")
+    # Known-issue #7: tokens must be returned sorted by current PITCH price DESC
+    # (most expensive first). LEFT JOIN to `market_state` because new tokens
+    # may not yet have a row (worker hasn't backfilled). `NULLS LAST` puts
+    # un-priced/zero-priced tokens after priced ones; `address ASC` is the
+    # stable tiebreaker so the order doesn't shuffle between requests when
+    # several tokens share the same price (very common when everything is 0).
+    token_rows = fetch_all(
+        "SELECT t.address, t.name, t.symbol, t.kind, t.country_address, t.role "
+        "FROM tokens t "
+        "LEFT JOIN market_state m ON m.token_address = t.address "
+        "ORDER BY m.price_pitch DESC NULLS LAST, t.address ASC"
+    )
     country_names = _country_name_map()
 
     players: list[dict[str, Any]] = []

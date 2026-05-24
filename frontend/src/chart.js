@@ -129,7 +129,10 @@ export function mountChart(container, options = {}) {
   const state = {
     token: null,
     tf: DEFAULT_TF,
-    type: 'candles',
+    // Default to line chart: with sparse trades (1-2/day) candles look empty
+    // and lose the trend signal. Users can still switch to candles via the
+    // toolbar toggle. See docs/known-issues.md #1.
+    type: 'line',
     unit: 'pitch',
     period: 'all',
     candles: [],

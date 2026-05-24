@@ -215,19 +215,19 @@ describe('mountSidebar', () => {
     expect(firstRow.querySelector('.change').textContent).toContain('10');
   });
 
-  it('players are sorted by changePct[period] DESC', async () => {
+  it('players are sorted by pricePitch DESC (known-issue #7)', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
     await handle.refresh();
 
     const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
-    // Default period 'all': Mbappé 20, Pulisic 5, Smith -10
+    // pricePitch: Mbappé 30 > Pulisic 12.34 > Smith 0.5.
     expect(rows[0].dataset.tokenAddress).toBe('0xaaa2');
     expect(rows[1].dataset.tokenAddress).toBe('0xaaa1');
     expect(rows[2].dataset.tokenAddress).toBe('0xaaa3');
   });
 
-  it('countries are sorted by pricePitch DESC (portable parity)', async () => {
+  it('countries are sorted by pricePitch DESC', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
     await handle.refresh();
@@ -238,6 +238,55 @@ describe('mountSidebar', () => {
     // FRA 0.01 > USA 0.002
     expect(rows[0].dataset.tokenAddress).toBe('0xccc2');
     expect(rows[1].dataset.tokenAddress).toBe('0xccc1');
+  });
+
+  it('players sort is stable on pricePitch tie — uses address ASC tiebreaker', async () => {
+    // Known-issue #7 caveat: during worker backfill every token may have
+    // pricePitch=0 (or duplicates). Order must still be deterministic so the
+    // list doesn't shuffle between renders.
+    const payload = {
+      players: [
+        { ...makePlayers()[0], address: '0xbbb', pricePitch: 0 },
+        { ...makePlayers()[1], address: '0xaaa', pricePitch: 0 },
+        { ...makePlayers()[2], address: '0xccc', pricePitch: 0 },
+      ],
+      countries: [],
+      lastUpdate: 0,
+      stale: true,
+    };
+    const api = makeApi(payload);
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    expect(rows[0].dataset.tokenAddress).toBe('0xaaa');
+    expect(rows[1].dataset.tokenAddress).toBe('0xbbb');
+    expect(rows[2].dataset.tokenAddress).toBe('0xccc');
+  });
+
+  it('non-numeric/missing pricePitch is treated as 0 in sort', async () => {
+    // Strip pricePitch off the third row so the field is undefined, not 0.5.
+    const third = { ...makePlayers()[2], address: '0xc' };
+    delete third.pricePitch;
+    const payload = {
+      players: [
+        { ...makePlayers()[0], address: '0xa', pricePitch: 5 },
+        { ...makePlayers()[1], address: '0xb', pricePitch: null },
+        third,
+      ],
+      countries: [],
+      lastUpdate: 0,
+      stale: true,
+    };
+    const api = makeApi(payload);
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // 5 first; then 0xb and 0xc tied at 0 → address ASC.
+    expect(rows[0].dataset.tokenAddress).toBe('0xa');
+    expect(rows[1].dataset.tokenAddress).toBe('0xb');
+    expect(rows[2].dataset.tokenAddress).toBe('0xc');
   });
 
   it('clicking a row fires onTokenSelect with the full token object', async () => {
@@ -440,7 +489,7 @@ describe('mountSidebar', () => {
 
     // Star Pulisic (sorted at index 1: Mbappé first).
     const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
-    // Mbappé is rows[0], Pulisic rows[1] (sorted by changePct.all DESC).
+    // Mbappé is rows[0], Pulisic rows[1] (sorted by pricePitch DESC).
     rows[1].querySelector('[data-test-id="sidebar-star"]').click();
 
     const favBtn = container.querySelector('[data-test-id="sidebar-fav-toggle"]');

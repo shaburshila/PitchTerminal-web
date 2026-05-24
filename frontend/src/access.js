@@ -779,6 +779,10 @@ export function mountAccessBanner(container, opts = {}) {
   let reqSeq = 0;
   /** @type {'unknown'|'anon'|'premium'|'free'|'error'} */
   let state = 'unknown';
+  /** Last address we resolved /access for — used to detect wallet switches
+   *  inside refresh() and synchronously lock the UI before the async round
+   *  trip resolves (issue #2 — premium-gating bypass on wallet switch). */
+  let lastResolvedAddress = null;
 
   function render() {
     container.replaceChildren();
@@ -821,6 +825,11 @@ export function mountAccessBanner(container, opts = {}) {
           // 'free'. Next account-change event (or manual refresh) will
           // reconfirm via /access.
           state = 'premium';
+          // Pin the resolved address so the wallet-switch guard in refresh()
+          // doesn't demote this freshly-paid 'premium' back to 'unknown' on
+          // the next refresh for the same wallet.
+          const paidAddr = getCurrentAddress();
+          lastResolvedAddress = paidAddr ? String(paidAddr).toLowerCase() : null;
           publishState();
           render();
           if (typeof opts.onPaid === 'function') {
@@ -849,8 +858,22 @@ export function mountAccessBanner(container, opts = {}) {
   async function refresh() {
     const seq = ++reqSeq;
     const addr = getCurrentAddress();
+    // Wallet switched (or disconnected) since the last resolved /access:
+    // synchronously demote the published state to 'unknown' before the async
+    // /access call resolves so soft-lock listeners hide premium UI for the
+    // new wallet immediately. Without this, the stale 'premium' state from
+    // wallet-A would leak through to wallet-B for the entire RTT window
+    // (#2 — security/billing bypass).
+    const normalized = addr ? String(addr).toLowerCase() : null;
+    if (normalized !== lastResolvedAddress && state === 'premium') {
+      state = 'unknown';
+      publishState();
+      // No render() here — 'unknown' renders the same empty banner as 'anon',
+      // and we're about to render again once the async resolves.
+    }
     if (!addr) {
       state = 'anon';
+      lastResolvedAddress = null;
       publishState();
       render();
       return;
@@ -859,6 +882,7 @@ export function mountAccessBanner(container, opts = {}) {
       const resp = await apiClient.getAccess();
       if (seq !== reqSeq || destroyed) return;
       state = resp?.hasAccess ? 'premium' : 'free';
+      lastResolvedAddress = normalized;
     } catch (err) {
       if (seq !== reqSeq || destroyed) return;
       const status = err && typeof err.status === 'number' ? err.status : null;
@@ -867,8 +891,11 @@ export function mountAccessBanner(container, opts = {}) {
         // pops up the sign-in modal; once that finishes, account-change
         // listener calls refresh() again.
         state = 'anon';
+        lastResolvedAddress = null;
       } else {
         state = 'error';
+        // Don't update lastResolvedAddress on transient error — next refresh
+        // will retry and the wallet-switch guard above will still fire.
       }
     }
     publishState();
@@ -883,13 +910,19 @@ export function mountAccessBanner(container, opts = {}) {
    * next refresh succeeds the store will catch up.
    */
   function publishState() {
-    if (state === 'premium' || state === 'free' || state === 'anon') {
+    if (
+      state === 'premium' ||
+      state === 'free' ||
+      state === 'anon' ||
+      state === 'unknown'
+    ) {
       setAccessState(state);
     } else if (state === 'error') {
       setAccessState('anon');
     }
-    // 'unknown' is never published — store starts in 'unknown' and stays
-    // there until our first refresh resolves.
+    // 'unknown' IS published — needed by the wallet-switch guard in refresh()
+    // to synchronously demote a previously-premium UI before the new /access
+    // resolves (issue #2). The store treats 'unknown' as locked, same as 'anon'.
   }
 
   // Re-render when shared config (price/discount) changes.

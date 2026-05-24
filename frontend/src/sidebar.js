@@ -10,9 +10,11 @@
  *                  holdersCount, changePct: { ... } }
  *
  * UI parity rules (docs/functional-spec.md §3):
- *   - Players tab: sort by changePct[period] DESC by default.
- *   - Countries tab: sort by pricePitch DESC (portable parity); period selector
- *     still affects which changePct is shown in the row, but not the order.
+ *   - Both tabs: sort by pricePitch DESC (most expensive first). The period
+ *     selector affects which changePct is shown in the row, but NOT the order.
+ *     Known-issue #7 (2026-05-24): players were sorted by changePct[period]
+ *     which produced a seemingly-random order when most tokens have pricePitch=0
+ *     during worker backfill. Unified with countries' price-sort.
  *   - Role filter visible only on Players tab.
  *
  * All DOM is built via `document.createElement` (no innerHTML).
@@ -110,12 +112,17 @@ function selectTokens(state, source) {
     return true;
   });
 
-  // Sort.
-  if (state.tab === 'countries') {
-    filtered = filtered.slice().sort((a, b) => (b.pricePitch ?? 0) - (a.pricePitch ?? 0));
-  } else {
-    filtered = filtered.slice().sort((a, b) => pctOf(b, state.period) - pctOf(a, state.period));
-  }
+  // Sort by pricePitch DESC for both tabs (known-issue #7). Stable tiebreaker
+  // on address keeps the order deterministic when several tokens share the
+  // same price (very common while everything is 0 during worker backfill).
+  filtered = filtered.slice().sort((a, b) => {
+    const pa = typeof a.pricePitch === 'number' ? a.pricePitch : 0;
+    const pb = typeof b.pricePitch === 'number' ? b.pricePitch : 0;
+    if (pb !== pa) return pb - pa;
+    const aa = typeof a.address === 'string' ? a.address : '';
+    const ab = typeof b.address === 'string' ? b.address : '';
+    return aa < ab ? -1 : aa > ab ? 1 : 0;
+  });
 
   return filtered;
 }
