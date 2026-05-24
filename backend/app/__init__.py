@@ -26,6 +26,7 @@ from app.routes import access as access_routes
 from app.routes import auth as auth_routes
 from app.routes import config as config_routes
 from app.routes import health as health_routes
+from app.routes import orders as orders_routes
 from app.routes import position as position_routes
 from app.routes import profile as profile_routes
 from app.routes import referral as referral_routes
@@ -81,6 +82,7 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
     app.register_blueprint(profile_routes.bp)
     app.register_blueprint(position_routes.bp)
     app.register_blueprint(access_routes.bp)
+    app.register_blueprint(orders_routes.bp)
 
     return app
 
