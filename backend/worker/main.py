@@ -11,6 +11,8 @@ Then loop forever every 5 seconds:
 * ``event_loop.tick()``
 * ``access_event_loop.tick()``
 * ``nonces.cleanup()``
+* ``expiry.tick()`` — sub-tick, runs at most once every
+  :data:`worker.expiry.EXPIRY_TICK_INTERVAL_SEC` (30 s) via a timestamp gate.
 
 Each tick is wrapped in its own try/except (inside the respective module),
 so a single failing tick never crashes the whole worker.
@@ -29,6 +31,7 @@ from worker import (
     access_event_loop,
     backfill,
     event_loop,
+    expiry,
     nonces,
     operator_alerts,
     price_loop,
@@ -92,11 +95,28 @@ def run() -> None:
         log.exception("worker.boot_alert_failed")
 
     log.info("worker.loop_begin", tick_interval_sec=TICK_INTERVAL_SEC)
+    # Per-loop timestamp gate for sub-ticks that run on a slower cadence than
+    # ``TICK_INTERVAL_SEC``. Initialised so the first iteration runs them
+    # immediately (we want expiry to flush any orders that aged-out while the
+    # worker was down).
+    next_expiry_at = 0.0
     while not _shutdown_requested:
         price_loop.tick()
         event_loop.tick()
         access_event_loop.tick()
         nonces.cleanup()
+
+        # Expiry tick: 30s cadence (per docs/plans/backend.md B2.4).
+        now_mono = time.monotonic()
+        if now_mono >= next_expiry_at:
+            try:
+                count = expiry.tick()
+                if count > 0:
+                    log.info("worker.expiry.expired", count=count)
+            except Exception:
+                log.exception("worker.expiry_failed")
+            next_expiry_at = now_mono + expiry.EXPIRY_TICK_INTERVAL_SEC
+
         # Sleep in 0.5s slices so SIGTERM is honored within ~500ms instead of
         # ~5s. Docker default grace-period is 10s — we want to exit well inside.
         for _ in range(TICK_INTERVAL_SEC * 2):

@@ -5,7 +5,8 @@ Per ``docs/api-spec.md`` §8:
 * Streams ``text/event-stream`` with no-cache / no-transform / X-Accel-Buffering.
 * Heartbeat ``: keepalive\\n\\n`` every 25 seconds prevents idle-proxy drops.
 * Subscribes to Postgres LISTEN channels ``pt_prices``, ``pt_events``,
-  ``pt_config`` (orders is premium-only, phase 2).
+  ``pt_config``. Premium sessions additionally subscribe to ``pt_orders``
+  (filtered to the caller's own orders) per B2.2.
 
 Architecture:
 
@@ -56,9 +57,13 @@ from typing import Any
 
 from flask import Blueprint, Response, stream_with_context
 
+from app.deps import SESSION_COOKIE
 from app.errors import abort_with_problem
 from app.routes import config as config_routes
-from shared.db import fetch_all
+from shared.access import is_premium
+from shared.db import fetch_all, fetch_one
+from shared.jwt import JwtError
+from shared.jwt import decode as jwt_decode
 from shared.log import get_logger
 from shared.notify import Listener
 
@@ -176,6 +181,54 @@ def _fetch_events(ids: list[int]) -> dict[str, Any]:
     return {"newTrades": trades}
 
 
+def _fetch_order_for_owner(order_id: int, owner_address: str) -> dict[str, Any] | None:
+    """Return order delta payload for ``order_id`` iff it belongs to ``owner_address``.
+
+    Returns ``None`` when:
+      * the row is missing (race with delete — should not happen, but defensive);
+      * the row belongs to a different owner (do NOT leak existence).
+
+    Payload shape matches docs/api-spec.md §8.3 ``event: orders`` — a dict
+    ``{"order": {id, status, executedTxHash, failReason, updatedAt}}``.
+    The signature is deliberately NOT included (premium-leaky in transit + at
+    rest in browser memory dumps).
+    """
+
+    row = fetch_one(
+        "SELECT id, owner_address, status, executed_tx_hash, fail_reason, "
+        "EXTRACT(EPOCH FROM COALESCE(last_attempt_at, created_at))::bigint "
+        "  AS updated_at_ts "
+        "FROM limit_orders WHERE id = %s",
+        (order_id,),
+    )
+    if row is None:
+        return None
+    row_owner = row["owner_address"].strip().lower()
+    if row_owner != owner_address.lower():
+        return None
+    return {
+        "order": {
+            "id": str(row["id"]),
+            "status": row["status"],
+            "executedTxHash": (
+                row["executed_tx_hash"].strip() if row.get("executed_tx_hash") else None
+            ),
+            "failReason": row.get("fail_reason"),
+            "updatedAt": int(row["updated_at_ts"]) if row.get("updated_at_ts") else 0,
+        }
+    }
+
+
+def _parse_order_id(payload: str) -> int | None:
+    """Decode a ``pt_orders`` payload — single ``limit_orders.id`` as text."""
+
+    try:
+        return int(payload.strip())
+    except (ValueError, TypeError):
+        log.warning("stream.pt_orders.bad_payload", payload=payload[:200])
+        return None
+
+
 def _parse_addresses(payload: str) -> list[str]:
     """Decode a ``pt_prices`` payload — JSON-array of lowercase addresses.
 
@@ -207,8 +260,16 @@ def _parse_event_ids(payload: str) -> list[int]:
         return []
 
 
-def _stream_generator() -> Iterator[str]:
-    """The SSE generator. Yields strings; Flask encodes to bytes."""
+def _stream_generator(premium_owner: str | None = None) -> Iterator[str]:
+    """The SSE generator. Yields strings; Flask encodes to bytes.
+
+    Args:
+        premium_owner: lowercase address of an authenticated **premium** caller.
+            When set, the listener also subscribes to ``pt_orders`` and emits
+            ``event: orders`` frames filtered to rows where
+            ``owner_address == premium_owner``. ``None`` means anonymous /
+            free-tier — no orders channel.
+    """
 
     next_id = 1
     last_keepalive = time.monotonic()
@@ -217,8 +278,12 @@ def _stream_generator() -> Iterator[str]:
     # response to the browser).
     yield _keepalive()
 
+    channels = ["pt_prices", "pt_events", "pt_config"]
+    if premium_owner is not None:
+        channels.append("pt_orders")
+
     try:
-        with Listener(["pt_prices", "pt_events", "pt_config"]) as listener:
+        with Listener(channels) as listener:
             while True:
                 got_any = False
                 # listen() blocks up to KEEPALIVE_INTERVAL_SEC; under gevent
@@ -257,9 +322,24 @@ def _stream_generator() -> Iterator[str]:
                             config_routes.invalidate_cache()
                             yield _fmt_event("config", next_id, snapshot)
                             next_id += 1
-                        # NOTE: ``pt_orders`` (premium-only, phase 2) not
-                        # handled yet — requires SIWE session (B0.10) +
-                        # premium gating (B0.12).
+                        elif channel == "pt_orders":
+                            # premium-only — channel is only listened when
+                            # ``premium_owner`` was set in the request handler.
+                            # Double-guard here in case Postgres delivers a
+                            # stale notification from a previous subscription.
+                            if premium_owner is None:
+                                continue
+                            oid = _parse_order_id(payload)
+                            if oid is None:
+                                continue
+                            order_data = _fetch_order_for_owner(oid, premium_owner)
+                            if order_data is None:
+                                # Not our order (or vanished) → skip silently
+                                # to avoid leaking existence of other users'
+                                # orders.
+                                continue
+                            yield _fmt_event("orders", next_id, order_data)
+                            next_id += 1
                     except Exception:
                         log.exception("stream.notify_handler_failed", channel=channel)
 
@@ -323,9 +403,16 @@ def stream() -> Response:
     transient failures, so a fixed-window rate-limit would lock clients out
     after a few flaps — concurrent-gauge fits the workload.
 
-    TODO (B0.11/0.12): once auth is wired, also enforce 2/address for any
-    authenticated session (api-spec §8.4). The `pt_orders` channel is
-    premium-only and will be filtered then.
+    Premium-gating (B2.2): if the request carries a valid ``pt_session``
+    cookie AND :func:`shared.access.is_premium` returns ``has_access=True``,
+    the generator additionally subscribes to ``pt_orders`` and emits
+    ``event: orders`` frames filtered to the caller's own orders. Anonymous /
+    expired / free-tier sessions silently fall through to the free channel
+    set — no error is raised (api-spec §8.1 says ``orders`` is opt-in by
+    premium, not by a separate endpoint).
+
+    TODO (post-MVP): enforce 2/address for any authenticated session
+    (api-spec §8.4) once SIWE per-session telemetry lands.
     """
 
     from flask import request
@@ -339,9 +426,27 @@ def stream() -> Response:
             detail=f"Maximum {_MAX_CONNECTIONS_PER_IP} SSE connections per IP",
         )
 
+    # Resolve premium-owner BEFORE entering the streaming generator. Any
+    # auth / RPC failure is silently swallowed — anonymous clients still get
+    # the public channels. We never raise 401/402 from /stream itself; the
+    # ``orders`` channel is opt-in by capability, not by error.
+    premium_owner: str | None = None
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        try:
+            address = jwt_decode(token)
+            status = is_premium(address)
+            if status.has_access:
+                premium_owner = address.lower()
+        except JwtError:
+            premium_owner = None
+        except Exception:
+            log.exception("stream.premium_check_failed")
+            premium_owner = None
+
     def generator_with_release():
         try:
-            yield from _stream_generator()
+            yield from _stream_generator(premium_owner=premium_owner)
         finally:
             _release_slot(client_ip)
 
