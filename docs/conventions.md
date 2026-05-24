@@ -378,6 +378,8 @@ processor, обходящий event-dict и применяющий redaction п�
 | `CHUNK_BLOCKS_DEFAULT` | worker | default 5000 (Alchemy) |
 | `CHUNK_BLOCKS_FALLBACK` | worker | default 2000 (public) |
 | `REORG_LAG_BLOCKS` | worker | default 5 (Base finality быстрая) |
+| `DOMAIN` | caddy (prod) | Домен для site-блока + Let's Encrypt (`infra/docker-compose.prod.yml`) |
+| `ACME_EMAIL` | caddy (prod) | Email для Let's Encrypt expiry-нотификаций |
 
 **Hardcoded константы** (не env — меняются только при ре-деплое pitchwc):
 - `HOOK_DEPLOY_BLOCK = 46167000` в `backend/shared/config.py` — стартовый блок

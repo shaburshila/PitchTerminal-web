@@ -1533,3 +1533,130 @@ body.mode-dashboard .pt-profile {
   font-size: 11px;
 }
 
+/* ── Trade panel (F1.1) ───────────────────────────────────────────────── */
+.pt-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.pt-trade__mode,
+.pt-trade__side,
+.pt-trade__pct {
+  display: flex;
+  gap: 4px;
+}
+
+.pt-trade__mode-btn,
+.pt-trade__side-btn,
+.pt-trade__pct-btn {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-2, #1a1f2e);
+  color: var(--text-muted, #888);
+  border: 1px solid var(--border, #2a3245);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.pt-trade__mode-btn.is-active,
+.pt-trade__side-btn.is-active {
+  background: var(--bg-3, #243049);
+  color: var(--text, #eee);
+  border-color: var(--accent, #5b8def);
+}
+
+.pt-trade__side-btn--buy.is-active {
+  border-color: #3fb950;
+  color: #3fb950;
+}
+
+.pt-trade__side-btn--sell.is-active {
+  border-color: #f85149;
+  color: #f85149;
+}
+
+.pt-trade__mode-btn[disabled],
+.pt-trade__pct-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pt-trade__balance {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+}
+
+.pt-trade__amount,
+.pt-trade__slippage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pt-trade__label {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pt-trade__input {
+  padding: 8px 10px;
+  background: var(--bg-1, #0f1320);
+  color: var(--text, #eee);
+  border: 1px solid var(--border, #2a3245);
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.pt-trade__input--narrow {
+  max-width: 90px;
+}
+
+.pt-trade__quote {
+  padding: 8px 10px;
+  background: var(--bg-1, #0f1320);
+  border: 1px solid var(--border, #2a3245);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.pt-trade__quote-out {
+  color: var(--text, #eee);
+  font-weight: 600;
+}
+
+.pt-trade__quote-min,
+.pt-trade__quote-fee {
+  color: var(--text-muted, #888);
+}
+
+.pt-trade__quote-error {
+  color: #f85149;
+}
+
+.pt-trade__cta {
+  padding: 10px;
+  font-weight: 600;
+}
+
+.pt-trade__cta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pt-trade__status {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  min-height: 14px;
+  text-align: center;
+}
+

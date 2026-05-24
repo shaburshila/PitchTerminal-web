@@ -3,6 +3,7 @@ import { mountLayout } from './layout.js';
 import { mountSidebar } from './sidebar.js';
 import { mountChart } from './chart.js';
 import { mountBottomTabs } from './components/bottom/index.js';
+import { mountTradePanel } from './trade-panel.js';
 import { openStream } from './sse.js';
 import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
@@ -41,19 +42,25 @@ function bootstrap() {
 
   const chart = mountChart(chartZone);
   const bottom = mountBottomTabs(bottomZone);
+  // F1.1: Market trade panel — read-only quote in this phase. Approve/swap
+  // (F1.2) will be wired in the next batch. Mounted BEFORE the soft-lock so
+  // the lock overlay sits on top (DOM order) and `.pt-soft-locked > *:not(.pt-soft-lock)`
+  // applies the blur to the trade panel for non-premium users.
+  const trade = mountTradePanel(layout.right);
 
   mountSidebar(layout.sidebar, {
     onTokenSelect: (token) => {
       chart.setToken(token);
       bottom.setToken(token.address);
+      trade.setToken(token);
     },
   });
 
   // F0.13: blur + lock the right-side trading panel for non-premium users.
-  // The right panel is still empty in phase 0 (trading UI is post-MVP), so
-  // the lock is the only thing rendered — it acts as a placeholder that flips
-  // off once the user pays. The Profile zone gets its own soft-lock since
-  // mode-profile hides .pt-right via CSS.
+  // The trade-panel (mounted above) provides the actual content; the soft-lock
+  // overlay sits on top and blurs the panel until the user becomes premium.
+  // The Profile zone gets its own soft-lock since mode-profile hides .pt-right
+  // via CSS.
   //
   // Save the handles so the access-store subscriptions can be cleaned up at
   // any future re-mount (currently bootstrap runs once, but tests and a
