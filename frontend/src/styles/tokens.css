@@ -1,0 +1,74 @@
+/*
+ * Design tokens — Phase 1.5 visual redesign foundation.
+ *
+ * Source: Downloads/a-main-free.html (canonical superset including --info,
+ * --up-dim, --down-dim, --warn-dim). Additional shared values
+ * (radii, shadows, blur, font stacks) extracted from pt-mockups/*.
+ *
+ * NOT yet imported anywhere — wiring happens in the first redesign batch.
+ */
+
+:root {
+  /* Surfaces — layered backgrounds + dividers. bg-0 is the page, bg-3 is
+     highest elevation used for chips / active row states. */
+  --bg-0: #0a0f0d;
+  --bg-1: #0f1614;
+  --bg-2: #141d1a;
+  --bg-3: #1a2421;
+  --line: #1f2a26;
+  --line-strong: #2a3530;
+
+  /* Text — three contrast steps. text-3 is for meta / placeholders. */
+  --text: #e8efe9;
+  --text-2: #9caea6;
+  --text-3: #6b7a74;
+
+  /* Status — semantic colors + low-alpha "dim" backgrounds used as fills
+     for badges, chips and inline highlights. */
+  --up: #3ddb8e;
+  --up-dim: rgba(61, 219, 142, 0.15);
+  --down: #ff5a5f;
+  --down-dim: rgba(255, 90, 95, 0.13);
+  --warn: #e0a93a;
+  --warn-dim: rgba(224, 169, 58, 0.12);
+  --info: #5fb0ff;
+
+  /* Brand — primary accent (matches --up by design). */
+  --accent: #3ddb8e;
+
+  /* Role colors — player role badges (best/captain/rookie) in sidebar. */
+  --best: #e0a93a;
+  --captain: #5fb0ff;
+  --rookie: #3ddb8e;
+
+  /* Radii — incrementally larger; pill is for chip-style rounded corners. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 9px;
+  --radius-pill: 14px;
+
+  /* Shadows — popover for floating menus, modal for centered dialogs. */
+  --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --shadow-modal: 0 20px 80px rgba(0, 0, 0, 0.4);
+
+  /* Backdrop blur — for modal/dialog scrim. */
+  --blur-backdrop: 14px;
+
+  /* Fonts — UI is Inter, mono is JetBrains Mono. Both must be loaded by host
+     page (Google Fonts link will be added in the layout batch). */
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Utility — apply monospace face with tabular numerals and slashed zero. */
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Utility — tabular numerals on the current font (use on numeric cells
+   that should align vertically, e.g. price columns). */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
