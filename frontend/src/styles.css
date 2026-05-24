@@ -1178,3 +1178,358 @@ body.mode-dashboard .pt-profile {
   color: var(--danger, #e25b5b);
   font-size: 12px;
 }
+
+/* F0.12 — Pay banner + modal ---------------------------------------------- */
+
+.pt-banner__pay {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  justify-content: center;
+}
+
+.pt-banner__text {
+  color: var(--text);
+}
+
+.pt-btn--sm {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.pt-banner__portable {
+  color: var(--text-muted);
+  text-decoration: underline;
+  font-size: 12px;
+}
+
+.pt-modal--pay {
+  min-width: 360px;
+  max-width: 480px;
+}
+
+.pt-modal__status {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.pt-pay__breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.pt-pay__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.pt-pay__row--strong {
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  margin-top: 4px;
+}
+
+.pt-pay__row--loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.pt-pay__ref {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.pt-pay__disclaimer {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 12px 0 0;
+}
+
+.pt-pay__links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.pt-pay__uniswap {
+  font-size: 12px;
+}
+
+.pt-pay__need {
+  color: var(--danger, #e25b5b);
+}
+
+.pt-pay__uniswap-link,
+.pt-pay__portable {
+  color: var(--accent, #4a8cff);
+  text-decoration: underline;
+}
+
+/* F0.13 — Premium soft-lock overlay -------------------------------------- */
+
+/* `position: relative` so the overlay anchors to the target. Apply via the
+   `.pt-soft-locked` class which mountSoftLock toggles. We don't blur the
+   overlay itself — only direct sibling content via `> *:not(.pt-soft-lock)`. */
+.pt-soft-locked {
+  position: relative;
+  /* Hide overflow so the blur doesn't smear past the panel edges. */
+  overflow: hidden;
+}
+
+.pt-soft-locked > *:not(.pt-soft-lock) {
+  filter: blur(6px);
+  pointer-events: none;
+  user-select: none;
+  /* Slight desaturation reinforces "this is gated" — readable but not vibrant. */
+  opacity: 0.75;
+  transition: filter 200ms ease, opacity 200ms ease;
+}
+
+.pt-soft-lock {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  background: rgba(14, 17, 23, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.pt-soft-lock[hidden] {
+  display: none;
+}
+
+.pt-soft-lock__card {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  max-width: 260px;
+  text-align: center;
+}
+
+.pt-soft-lock__icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.pt-soft-lock__label {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.pt-soft-lock__btn {
+  /* Reuse pt-btn--primary visuals; just a margin tweak so it doesn't hug
+     the label too tight. */
+  margin-top: 4px;
+}
+
+/* F0.14 — My Wallet tab -------------------------------------------------- */
+
+.pt-mywallet {
+  padding: 12px;
+  position: relative;
+  min-height: 200px;
+}
+
+.pt-mywallet__placeholder,
+.pt-mywallet__loading,
+.pt-mywallet__empty,
+.pt-mywallet__error {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.pt-mywallet__error {
+  color: var(--danger);
+}
+
+.pt-mywallet__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.pt-mywallet__stat {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.pt-mywallet__stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.pt-mywallet__stat-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.pt-mywallet__stat-value.positive {
+  color: var(--success);
+}
+
+.pt-mywallet__stat-value.negative {
+  color: var(--danger);
+}
+
+.pt-mywallet__skeleton,
+.pt-orders__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px;
+}
+
+.pt-mywallet__skel-row,
+.pt-orders__skel-row {
+  height: 18px;
+  background: var(--bg-elev-2);
+  border-radius: var(--radius-sm);
+}
+
+/* F0.14 — Orders tab ----------------------------------------------------- */
+
+.pt-orders {
+  padding: 12px;
+  position: relative;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pt-orders__placeholder,
+.pt-orders__loading,
+.pt-orders__error {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.pt-orders__error {
+  color: var(--danger);
+}
+
+.pt-orders__phase2 {
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.pt-orders__phase2-title {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.pt-orders__phase2-body {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.pt-orders__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.pt-orders__armed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pt-orders__armed-input {
+  cursor: pointer;
+}
+
+.pt-orders__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pt-orders__table th,
+.pt-orders__table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pt-orders__table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: var(--bg-elev-1);
+}
+
+.pt-orders__table td.num {
+  text-align: right;
+}
+
+.pt-orders__row--filled td.status {
+  color: var(--success);
+}
+
+.pt-orders__row--failed td.status,
+.pt-orders__row--expired td.status,
+.pt-orders__row--cancelled td.status {
+  color: var(--danger);
+}
+
+.pt-orders__row--executing td.status {
+  color: var(--accent);
+}
+
+.pt-orders__empty {
+  text-align: center !important;
+  color: var(--text-muted);
+  padding: 12px !important;
+  font-family: var(--font-stack);
+}
+
+.pt-orders__cancel {
+  padding: 2px 10px;
+  font-size: 11px;
+}
+

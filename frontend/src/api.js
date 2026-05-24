@@ -125,9 +125,14 @@ export async function apiFetch(path, opts = {}) {
 // Public/FREE endpoints
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /config — bootstrap config (FREE). See api-spec §3.2. */
-export function getConfig() {
-  return apiFetch('/config');
+/**
+ * GET /config — bootstrap config (FREE). See api-spec §3.2.
+ * @param {{ fresh?: boolean }} [opts] Pass `fresh: true` to bypass the server
+ *   cache and force an on-chain re-read of access-config (rate-limited;
+ *   used by the pay-flow as a race-guard against just-arrived `setPrice`).
+ */
+export function getConfig({ fresh = false } = {}) {
+  return apiFetch(`/config${fresh ? buildQuery({ fresh: 1 }) : ''}`);
 }
 
 /** GET /health — service health (FREE, public). See api-spec §9.1. */

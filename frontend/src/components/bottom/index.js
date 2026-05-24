@@ -1,5 +1,5 @@
 /**
- * Bottom tabs: Trades + Holders.
+ * Bottom tabs: Trades + Holders + My Wallet + Orders.
  *
  * Lives in the center column below the chart. Driven by `GET /api/v1/tokens/:t/trades`
  * (see docs/api-spec.md §4.3) which returns both `trades.items` and `wallets[]`
@@ -12,14 +12,29 @@
  *   recomputed on next user-triggered refresh or token switch — full re-derive
  *   from streaming events would require server-side support not in scope.
  *
- * My Wallet / Orders tabs (PREMIUM) are out of scope — F0.13/F0.14 will add
- * them in a separate pass.
+ * My Wallet (F0.14) — per-token PnL block, premium-only. Backed by
+ * `GET /api/v1/tokens/:t/position`; soft-locked behind paywall.
+ *
+ * Orders (F0.14) — premium-only limit-orders list + kill-switch. Backend
+ * support is phase 2 — the tab renders a "coming soon" placeholder until the
+ * route lands; UI is fully wired so no FE-redeploy is needed for activation.
+ *
+ * The premium tabs are constructed lazily on the first switch to that tab to
+ * avoid paying their network cost / SSE-channel attach for users who never
+ * open them.
  */
 
 import * as defaultApi from '../../api.js';
+import { mountMyWalletTab } from '../../my-wallet-tab.js';
+import { mountOrdersTab } from '../../orders-tab.js';
 
-const TABS = Object.freeze(['trades', 'holders']);
-const TAB_LABEL = { trades: 'Trades', holders: 'Holders' };
+const TABS = Object.freeze(['trades', 'holders', 'my-wallet', 'orders']);
+const TAB_LABEL = {
+  trades: 'Trades',
+  holders: 'Holders',
+  'my-wallet': 'My Wallet',
+  orders: 'Orders',
+};
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_TRADES_IN_MEMORY = 500;
 const BASESCAN_TX = 'https://basescan.org/tx/';
@@ -155,9 +170,48 @@ export function mountBottomTabs(container, options = {}) {
     dataset: { testId: 'bottom-pane-holders', pane: 'holders' },
     attrs: { role: 'tabpanel' },
   });
+  const myWalletPane = el('div', {
+    className: 'pt-bottom__pane',
+    dataset: { testId: 'bottom-pane-my-wallet', pane: 'my-wallet' },
+    attrs: { role: 'tabpanel' },
+  });
+  const ordersPane = el('div', {
+    className: 'pt-bottom__pane',
+    dataset: { testId: 'bottom-pane-orders', pane: 'orders' },
+    attrs: { role: 'tabpanel' },
+  });
 
   body.appendChild(tradesPane);
   body.appendChild(holdersPane);
+  body.appendChild(myWalletPane);
+  body.appendChild(ordersPane);
+
+  // Premium sub-tabs are mounted lazily on first activation so non-premium
+  // (or never-opened-this-tab) users don't pay the import / mount cost.
+  /** @type {ReturnType<typeof mountMyWalletTab> | null} */
+  let myWalletHandle = null;
+  /** @type {ReturnType<typeof mountOrdersTab> | null} */
+  let ordersHandle = null;
+
+  function ensureMyWalletMounted() {
+    if (myWalletHandle) return myWalletHandle;
+    myWalletHandle = mountMyWalletTab(myWalletPane, {
+      apiClient,
+      token: state.token,
+      softLock: options.softLock,
+    });
+    return myWalletHandle;
+  }
+
+  function ensureOrdersMounted() {
+    if (ordersHandle) return ordersHandle;
+    ordersHandle = mountOrdersTab(ordersPane, {
+      apiClient,
+      token: state.token,
+      softLock: options.softLock,
+    });
+    return ordersHandle;
+  }
 
   const status = el('div', {
     className: 'pt-bottom__status',
@@ -176,6 +230,8 @@ export function mountBottomTabs(container, options = {}) {
     }
     tradesPane.hidden = state.tab !== 'trades';
     holdersPane.hidden = state.tab !== 'holders';
+    myWalletPane.hidden = state.tab !== 'my-wallet';
+    ordersPane.hidden = state.tab !== 'orders';
   }
 
   function renderStatus() {
@@ -422,6 +478,11 @@ export function mountBottomTabs(container, options = {}) {
     const tab = target.dataset.tab;
     if (!tab || !TABS.includes(tab) || state.tab === tab) return;
     state.tab = tab;
+    // Lazy-mount premium tabs on first activation. The sub-tabs handle their
+    // own access-state gating, so they're safe to mount for free users too —
+    // they'll render the soft-lock overlay.
+    if (tab === 'my-wallet') ensureMyWalletMounted();
+    if (tab === 'orders') ensureOrdersMounted();
     renderTabsAria();
     renderStatus();
   }
@@ -440,6 +501,10 @@ export function mountBottomTabs(container, options = {}) {
     state.nextCursor = null;
     state.error = null;
     renderAll();
+    // Propagate to premium tabs if they're already mounted. We don't await —
+    // their internal data fetch is independent and shouldn't block trades.
+    if (myWalletHandle) myWalletHandle.setToken(normalized).catch(() => { /* surfaced */ });
+    if (ordersHandle) ordersHandle.setToken(normalized).catch(() => { /* surfaced */ });
     if (state.token) await fetchPage();
   }
 
@@ -470,8 +535,33 @@ export function mountBottomTabs(container, options = {}) {
     await fetchPage();
   }
 
+  /**
+   * Forward an SSE `event: orders` payload to the Orders tab (if mounted).
+   * The host owns the SSE channel — when a payload arrives, the host calls
+   * this; we no-op if Orders hasn't been opened yet (re-fetch on activation
+   * will pick up the latest state).
+   *
+   * @param {object} payload  `{ order: { id, status, ... } }`
+   */
+  function pushOrderUpdate(payload) {
+    if (ordersHandle) ordersHandle.pushOrderUpdate(payload);
+  }
+
+  /**
+   * Trigger a refresh on the My Wallet tab — call after a known PnL-affecting
+   * event (e.g. a trade by this wallet on this token came in via SSE). No-op
+   * if My Wallet hasn't been opened yet.
+   */
+  function refreshMyWallet() {
+    if (myWalletHandle) myWalletHandle.refresh().catch(() => { /* surfaced */ });
+  }
+
   function destroy() {
     tabs.removeEventListener('click', onTabClick);
+    if (myWalletHandle) { try { myWalletHandle.destroy(); } catch { /* ignore */ } }
+    if (ordersHandle) { try { ordersHandle.destroy(); } catch { /* ignore */ } }
+    myWalletHandle = null;
+    ordersHandle = null;
     container.replaceChildren();
   }
 
@@ -482,5 +572,13 @@ export function mountBottomTabs(container, options = {}) {
     });
   }
 
-  return { setToken, setMyAddress, pushTrades, refresh, destroy };
+  return {
+    setToken,
+    setMyAddress,
+    pushTrades,
+    refresh,
+    pushOrderUpdate,
+    refreshMyWallet,
+    destroy,
+  };
 }
