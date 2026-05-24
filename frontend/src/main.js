@@ -9,12 +9,13 @@ import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
 import { onAccountChange } from './wallet.js';
-import { getConfig, ApiError, getAccess } from './api.js';
+import { getConfig, getTokens, ApiError, getAccess } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
 import { mountProfile } from './profile.js';
 import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
+import { showToast } from './ui/toast.js';
 
 function bootstrap() {
   const root = document.getElementById('app');
@@ -42,19 +43,71 @@ function bootstrap() {
 
   const chart = mountChart(chartZone);
   const bottom = mountBottomTabs(bottomZone);
+  // F1.3 — address → token-row map for country tokens, populated from a
+  // one-shot getTokens() fetch below. Used by the trade panel's "Купить
+  // country" CTA: the panel hands us a lowercase address; we look up the
+  // full registry row and feed it through the same chart/bottom/trade
+  // setToken plumbing the sidebar uses.
+  const countryTokensByAddr = new Map();
+
+  function selectToken(token) {
+    if (!token || typeof token.address !== 'string') return;
+    chart.setToken(token);
+    bottom.setToken(token.address);
+    trade.setToken(token);
+  }
+
   // F1.1: Market trade panel — read-only quote in this phase. Approve/swap
   // (F1.2) will be wired in the next batch. Mounted BEFORE the soft-lock so
   // the lock overlay sits on top (DOM order) and `.pt-soft-locked > *:not(.pt-soft-lock)`
   // applies the blur to the trade panel for non-premium users.
-  const trade = mountTradePanel(layout.right);
-
-  mountSidebar(layout.sidebar, {
-    onTokenSelect: (token) => {
-      chart.setToken(token);
-      bottom.setToken(token.address);
-      trade.setToken(token);
+  const trade = mountTradePanel(layout.right, {
+    onCountrySwitch: async (addr) => {
+      const key = (addr || '').toLowerCase();
+      let row = countryTokensByAddr.get(key);
+      if (!row) {
+        // Race: getTokens() hasn't resolved yet (rare — sidebar usually
+        // primes the registry first). Try one immediate refetch before
+        // giving up so the click isn't a silent no-op.
+        try {
+          const data = await getTokens();
+          const countries = Array.isArray(data?.countries) ? data.countries : [];
+          for (const c of countries) {
+            if (c && typeof c.address === 'string' && c.address) {
+              countryTokensByAddr.set(c.address.toLowerCase(), c);
+            }
+          }
+          row = countryTokensByAddr.get(key);
+        } catch {
+          /* fall through to toast */
+        }
+      }
+      if (!row) {
+        showToast('Country-токен не найден. Перезагрузи страницу.', { kind: 'error' });
+        return;
+      }
+      selectToken(row);
     },
   });
+
+  mountSidebar(layout.sidebar, {
+    onTokenSelect: selectToken,
+  });
+
+  // Populate the country-token registry once; same /tokens endpoint the
+  // sidebar already hits, so the response is hot in the HTTP cache.
+  getTokens()
+    .then((data) => {
+      const countries = Array.isArray(data?.countries) ? data.countries : [];
+      for (const c of countries) {
+        if (c && typeof c.address === 'string' && c.address) {
+          countryTokensByAddr.set(c.address.toLowerCase(), c);
+        }
+      }
+    })
+    .catch(() => {
+      // Silent — CTA degrades to no-op if registry never loads.
+    });
 
   // F0.13: blur + lock the right-side trading panel for non-premium users.
   // The trade-panel (mounted above) provides the actual content; the soft-lock

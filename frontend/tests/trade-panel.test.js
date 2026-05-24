@@ -686,9 +686,12 @@ describe('mountTradePanel — quote flow', () => {
     vi.useFakeTimers();
     const readBalance = vi.fn().mockResolvedValue(1n * 10n ** 18n);
     const readQuote = vi.fn().mockResolvedValue(1n * 10n ** 18n);
+    // Use COUNTRY_TOKEN here to keep the generic "Недостаточно" message —
+    // F1.3 rewrites the message for player+Buy specifically, exercised by
+    // the dedicated F1.3 suite below.
     const handle = mountTradePanel(container, {
       apiClient: makeApi(),
-      token: PLAYER_TOKEN,
+      token: COUNTRY_TOKEN,
       readBalance,
       readQuote,
       debounceMs: 50,
@@ -1495,5 +1498,348 @@ describe('MAX_UINT256 constant', () => {
   it('equals 2**256 - 1', () => {
     expect(MAX_UINT256).toBe((1n << 256n) - 1n);
     expect(MAX_UINT256.toString(16).length).toBe(64);
+  });
+});
+
+// ─── F1.3: player+Buy country-balance hint + Купить country CTA ────────────
+
+describe('disabledReason — F1.3 playerBuy message', () => {
+  it('rewrites insufficient-balance message when playerBuy=true', () => {
+    const msg = disabledReason({
+      walletConnected: true,
+      chainId: 8453,
+      token: PLAYER_TOKEN,
+      contractsReady: true,
+      amountWei: 100n * 10n ** 18n,
+      balanceWei: 10n ** 18n,
+      limitMode: false,
+      playerBuy: true,
+      countrySymbol: 'BRA',
+    });
+    expect(msg).toContain('BRA');
+    expect(msg).toMatch(/Country panel/i);
+    expect(msg).toContain('100');
+  });
+
+  it('falls back to "country" word when symbol absent', () => {
+    const msg = disabledReason({
+      walletConnected: true,
+      chainId: 8453,
+      token: PLAYER_TOKEN,
+      contractsReady: true,
+      amountWei: 5n * 10n ** 18n,
+      balanceWei: 0n,
+      limitMode: false,
+      playerBuy: true,
+      countrySymbol: null,
+    });
+    expect(msg).toMatch(/country/i);
+  });
+
+  it('keeps generic message when playerBuy=false', () => {
+    expect(
+      disabledReason({
+        walletConnected: true,
+        chainId: 8453,
+        token: COUNTRY_TOKEN,
+        contractsReady: true,
+        amountWei: 100n * 10n ** 18n,
+        balanceWei: 10n ** 18n,
+        limitMode: false,
+        playerBuy: false,
+      }),
+    ).toMatch(/Недостаточно/);
+  });
+});
+
+function makeApiWithTokens(countries = [{ address: PLAYER_TOKEN.countryAddress, symbol: 'BRA' }]) {
+  return {
+    getConfig: vi.fn().mockResolvedValue(CONFIG),
+    getTokens: vi.fn().mockResolvedValue({ players: [], countries }),
+  };
+}
+
+describe('mountTradePanel — F1.3 country hint block', () => {
+  it('renders required/balance hint on player+Buy once quote+balance land', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const hint = container.querySelector('[data-test-id="trade-country-hint"]');
+    expect(hint.hidden).toBe(false);
+    const required = container.querySelector('[data-test-id="trade-country-required"]').textContent;
+    const balance = container.querySelector('[data-test-id="trade-country-balance"]').textContent;
+    // amountIn for buy = 5 (the wei we typed); balance = 100; symbol = "BRA"
+    expect(required).toContain('5');
+    expect(required).toContain('BRA');
+    expect(balance).toContain('100');
+    expect(balance).toContain('BRA');
+    handle.destroy();
+  });
+
+  it('hint hidden on country venue', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: COUNTRY_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-test-id="trade-country-hint"]').hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('hint hidden on player+Sell (input = player token, not country)', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    container.querySelector('[data-test-id="side-sell"]').click();
+    for (let i = 0; i < 2; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-test-id="trade-country-hint"]').hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('hides hint while quote is stale (debounce window)', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    // First quote for amount '5' resolves → hint visible.
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const hint = container.querySelector('[data-test-id="trade-country-hint"]');
+    expect(hint.hidden).toBe(false);
+    // User types '10' but debounce hasn't flushed → state.quote still holds
+    // amountInWei for '5'. Hint must hide because the quote is stale.
+    input.value = '10';
+    input.dispatchEvent(new Event('input'));
+    // Do NOT advance past debounceMs; only flush microtasks so renderHint runs.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hint.hidden).toBe(true);
+    handle.destroy();
+  });
+});
+
+describe('mountTradePanel — F1.3 insufficient-country CTA', () => {
+  it('shows explicit message + "Купить BRA" CTA when player+Buy insufficient', async () => {
+    vi.useFakeTimers();
+    const onCountrySwitch = vi.fn();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(1n * 10n ** 18n), // only 1 country
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+      onCountrySwitch,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '100'; // > 1 balance
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    const status = container.querySelector('[data-test-id="trade-status"]');
+    expect(cta.disabled).toBe(true);
+    expect(status.textContent).toContain('100');
+    expect(status.textContent).toContain('BRA');
+    expect(status.textContent).toMatch(/Country panel/i);
+
+    const countryCta = container.querySelector('[data-test-id="trade-country-cta"]');
+    expect(countryCta.hidden).toBe(false);
+    expect(countryCta.textContent).toContain('BRA');
+    handle.destroy();
+  });
+
+  it('clicking Купить country CTA fires onCountrySwitch with the country address', async () => {
+    vi.useFakeTimers();
+    const onCountrySwitch = vi.fn();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(1n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+      onCountrySwitch,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '100';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+
+    const countryCta = container.querySelector('[data-test-id="trade-country-cta"]');
+    expect(countryCta.hidden).toBe(false);
+    countryCta.click();
+    expect(onCountrySwitch).toHaveBeenCalledTimes(1);
+    expect(onCountrySwitch.mock.calls[0][0]).toBe(PLAYER_TOKEN.countryAddress.toLowerCase());
+    handle.destroy();
+  });
+
+  it('Купить country CTA hidden when balance is sufficient', async () => {
+    vi.useFakeTimers();
+    const onCountrySwitch = vi.fn();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(1000n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+      onCountrySwitch,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-test-id="trade-country-cta"]').hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('Купить country CTA hidden when onCountrySwitch is not wired', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(1n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+      // onCountrySwitch intentionally omitted
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '100';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-test-id="trade-country-cta"]').hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('Купить country CTA hidden on country venue (insufficient PITCH)', async () => {
+    vi.useFakeTimers();
+    const onCountrySwitch = vi.fn();
+    const payment = makePayment({ readAllowance: vi.fn().mockResolvedValue(1000n * 10n ** 18n) });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: COUNTRY_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(1n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+      onCountrySwitch,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '100';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(50);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-test-id="trade-country-cta"]').hidden).toBe(true);
+    handle.destroy();
+  });
+});
+
+describe('mountTradePanel — F1.3 balance line symbol', () => {
+  it('player+Buy balance line shows the country symbol', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment();
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(7n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
+    expect(txt).toContain('7');
+    expect(txt).toContain('BRA');
+    handle.destroy();
+  });
+
+  it('country venue Buy balance line shows PITCH', async () => {
+    vi.useFakeTimers();
+    const payment = makePayment();
+    const handle = mountTradePanel(container, {
+      apiClient: makeApiWithTokens(),
+      token: COUNTRY_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(42n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      debounceMs: 50,
+    });
+    await wallet.connectWallet('injected');
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(0);
+    const txt = container.querySelector('[data-test-id="trade-balance"]').textContent;
+    expect(txt).toContain('42');
+    expect(txt).toContain('PITCH');
+    handle.destroy();
   });
 });

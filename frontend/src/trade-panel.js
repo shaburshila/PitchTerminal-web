@@ -1,5 +1,5 @@
 /**
- * Trade panel (Market) — F1.1 + F1.2.
+ * Trade panel (Market) — F1.1 + F1.2 + F1.3.
  *
  * Right-column market-trade widget. Implements:
  *   - Toggle Market / Limit (Limit disabled — phase 2)
@@ -13,6 +13,12 @@
  *     allowance < amountIn, max-approve write tx, swap (`buy`/`sell`) via the
  *     Router, pending → success/error toast, balance + quote refresh on
  *     success.
+ *   - F1.3: player+Buy UX — explicit "required <X> <country>" hint, balance
+ *     line shows country symbol, "insufficient country" CTA labels the
+ *     missing country amount and exposes a "Купить country" shortcut that
+ *     hops the sidebar selection to the country token row. Country symbols
+ *     come from a one-shot `getTokens()` fetch at mount (cached map);
+ *     unresolved addresses fall back to `0xcccc…0001` short-form.
  *
  * Venue resolution:
  *   - token has `countryAddress` (truthy)  → player venue, hook = playerHook,
@@ -262,6 +268,12 @@ export function resolveVenue(token, pitchAddr) {
  * sees the in-flight tx state rather than getting bumped back to an earlier
  * reason if their balance briefly drops mid-tx (e.g. post-approve gas spend).
  *
+ * F1.3: when `playerBuy` is true (player venue + Buy side) AND the balance
+ * shortfall fires, the message is rewritten to spell out the missing country
+ * amount + nudge towards the Country panel. The branch sits at the SAME
+ * priority as the generic insufficient-balance check (just specialises the
+ * text) — pending flags still win above.
+ *
  * @param {{
  *   walletConnected: boolean,
  *   chainId: number|null,
@@ -273,6 +285,8 @@ export function resolveVenue(token, pitchAddr) {
  *   approvePending?: boolean,
  *   swapPending?: boolean,
  *   allowanceLoading?: boolean,
+ *   playerBuy?: boolean,
+ *   countrySymbol?: string|null,
  * }} ctx
  * @returns {string|null}
  */
@@ -285,7 +299,14 @@ export function disabledReason(ctx) {
   if (!ctx.token) return 'Выберите токен';
   if (!ctx.contractsReady) return 'Загрузка конфига…';
   if (!ctx.amountWei || ctx.amountWei <= 0n) return 'Введите сумму';
-  if (ctx.balanceWei != null && ctx.amountWei > ctx.balanceWei) return 'Недостаточно средств';
+  if (ctx.balanceWei != null && ctx.amountWei > ctx.balanceWei) {
+    if (ctx.playerBuy) {
+      const sym = ctx.countrySymbol || 'country';
+      const need = formatWei(ctx.amountWei, 6);
+      return `Нужно ${need} ${sym}. Купи на Country panel.`;
+    }
+    return 'Недостаточно средств';
+  }
   // F1.2 fix: while allowance is being read we can't decide approve-vs-swap.
   // Block the CTA to prevent a null-allowance race where the user clicks
   // "Buy" before refreshAllowance resolves and the swap reverts on ERC20
@@ -450,6 +471,13 @@ function el(tag, { className, dataset, attrs, text } = {}) {
  *                                            F1.2: override for tests (default uses options.payment)
  * @property {TradePaymentClient} [payment]   F1.2: full on-chain seam (read+write)
  * @property {number} [debounceMs]
+ * @property {(countryAddress: string) => void} [onCountrySwitch]
+ *                                            F1.3: invoked when user clicks the
+ *                                            "Купить country" shortcut (insufficient
+ *                                            country balance during player+Buy).
+ *                                            Argument is the lowercase address;
+ *                                            wiring in main.js looks the row up
+ *                                            in the sidebar registry.
  */
 
 /**
@@ -480,6 +508,13 @@ export function mountTradePanel(container, options = {}) {
   // viem/wagmi client on first use.
   const paymentOverride = options.payment ?? null;
 
+  // F1.3 — callback to ask the host to switch to the country token row.
+  // Optional — if absent the "Купить country" CTA is hidden entirely so the
+  // standalone panel still degrades gracefully.
+  const onCountrySwitch = typeof options.onCountrySwitch === 'function'
+    ? options.onCountrySwitch
+    : null;
+
   container.replaceChildren();
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -507,6 +542,11 @@ export function mountTradePanel(container, options = {}) {
     allowanceGen: 0,
     // Debounce timer.
     quoteTimer: null,
+    // F1.3 — `address(lowercase) → symbol` map for country tokens, populated
+    // by a single getTokens() fetch on mount. Used to render real symbols
+    // (e.g. "BRA") instead of the `shortenAddress` fallback in the country
+    // balance line, hint block, and disabledReason text.
+    countrySymbolMap: new Map(),
   };
 
   // ── Build skeleton (build-once) ────────────────────────────────────────
@@ -631,6 +671,26 @@ export function mountTradePanel(container, options = {}) {
   quoteBlock.appendChild(quoteFeeLine);
   quoteBlock.appendChild(quoteErrLine);
 
+  // F1.3 — player+Buy hint block: shows "Требуется: X CC / Ваш баланс: Y CC".
+  // Hidden whenever the conditions don't hold (not player venue / not Buy /
+  // no quote yet). Kept separate from `pt-trade__quote` because that block is
+  // already overloaded with quote+fee+error lines.
+  const hintBlock = el('div', {
+    className: 'pt-trade__hint',
+    dataset: { testId: 'trade-country-hint' },
+  });
+  hintBlock.hidden = true;
+  const hintRequiredLine = el('div', {
+    className: 'pt-trade__hint-required',
+    dataset: { testId: 'trade-country-required' },
+  });
+  const hintBalanceLine = el('div', {
+    className: 'pt-trade__hint-balance',
+    dataset: { testId: 'trade-country-balance' },
+  });
+  hintBlock.appendChild(hintRequiredLine);
+  hintBlock.appendChild(hintBalanceLine);
+
   // CTA button (disabled in F1.1 — wired in F1.2).
   const cta = el('button', {
     className: 'pt-btn pt-btn--primary pt-trade__cta',
@@ -638,6 +698,18 @@ export function mountTradePanel(container, options = {}) {
     attrs: { type: 'button', disabled: 'disabled' },
     text: 'Buy',
   });
+
+  // F1.3 — secondary CTA: "Купить country". Shown only when player+Buy AND
+  // insufficient country balance AND a `onCountrySwitch` callback was wired.
+  // Click delegates back to the host (sidebar/router) — the panel never
+  // touches navigation itself.
+  const countryCta = el('button', {
+    className: 'pt-btn pt-trade__country-cta',
+    dataset: { testId: 'trade-country-cta' },
+    attrs: { type: 'button' },
+    text: 'Купить country',
+  });
+  countryCta.hidden = true;
 
   const status = el('div', {
     className: 'pt-trade__status',
@@ -651,7 +723,9 @@ export function mountTradePanel(container, options = {}) {
   root.appendChild(pctRow);
   root.appendChild(slipWrap);
   root.appendChild(quoteBlock);
+  root.appendChild(hintBlock);
   root.appendChild(cta);
+  root.appendChild(countryCta);
   root.appendChild(status);
   container.appendChild(root);
 
@@ -692,6 +766,50 @@ export function mountTradePanel(container, options = {}) {
     };
   }
 
+  /**
+   * Resolve a display symbol for a country-token address. Returns the cached
+   * symbol when getTokens() has filled the map; falls back to the shortened
+   * address (e.g. `0xcccc…0001`) otherwise. F1.3 helper.
+   */
+  function symbolForCountry(addr) {
+    if (typeof addr !== 'string' || !addr) return 'country';
+    const cached = state.countrySymbolMap.get(addr.toLowerCase());
+    if (cached) return cached;
+    return shortenAddress(addr);
+  }
+
+  /**
+   * Compute the symbol of the *input* token for the current side+venue. Used
+   * by the balance line and the F1.3 hint. Returns null when we can't
+   * resolve (no token / contracts not loaded) so the caller can pick a
+   * generic label.
+   */
+  function inputTokenSymbol() {
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return null;
+    if (state.side === 'buy') {
+      // Buy → input is the quote token. Player venue: country; country
+      // venue: PITCH.
+      if (v.venue === 'player') return symbolForCountry(state.token?.countryAddress);
+      return 'PITCH';
+    }
+    // Sell → input is the traded (base) token = the currently-selected token.
+    return state.token?.symbol || shortenAddress(state.token?.address);
+  }
+
+  /**
+   * True when the user is staring at a player token in Buy mode (input = the
+   * country token). Drives the F1.3 hint + insufficient-country CTA path.
+   */
+  function isPlayerBuy() {
+    return (
+      state.side === 'buy' &&
+      state.token != null &&
+      typeof state.token.countryAddress === 'string' &&
+      !!state.token.countryAddress
+    );
+  }
+
   // ── Renderers ──────────────────────────────────────────────────────────
   function renderSideAria() {
     for (const side of TABS) {
@@ -714,7 +832,38 @@ export function mountTradePanel(container, options = {}) {
       balanceLine.textContent = 'Баланс: —';
       return;
     }
-    balanceLine.textContent = `Баланс: ${formatWei(state.balanceWei, 6)}`;
+    // F1.3: suffix the symbol of the *input* token so the user knows what the
+    // balance refers to (e.g. on player+Buy this is the country balance, not
+    // the player token's). Falls back to an unsuffixed label if we can't
+    // resolve.
+    const sym = inputTokenSymbol();
+    const value = formatWei(state.balanceWei, 6);
+    balanceLine.textContent = sym ? `Баланс: ${value} ${sym}` : `Баланс: ${value}`;
+  }
+
+  /**
+   * F1.3 — player+Buy hint block. Renders "Требуется: X CC / Ваш баланс: Y CC"
+   * once we have BOTH a quote (so we know how much country is needed) AND a
+   * balance read (so the user can compare). Hidden in every other case so it
+   * doesn't add empty rows on the country panel or pre-quote.
+   */
+  function renderHint() {
+    const liveAmountWei = parseAmountToWei(state.amountStr);
+    if (
+      !isPlayerBuy() ||
+      !state.quote ||
+      state.balanceWei == null ||
+      state.quote.amountInWei !== liveAmountWei
+    ) {
+      hintBlock.hidden = true;
+      return;
+    }
+    const sym = symbolForCountry(state.token?.countryAddress);
+    const need = formatWei(state.quote.amountInWei, 6);
+    const have = formatWei(state.balanceWei, 6);
+    hintRequiredLine.textContent = `Требуется: ${need} ${sym}`;
+    hintBalanceLine.textContent = `Ваш баланс: ${have} ${sym}`;
+    hintBlock.hidden = false;
   }
 
   function renderQuote() {
@@ -748,6 +897,8 @@ export function mountTradePanel(container, options = {}) {
 
   function renderCta() {
     const amountWei = parseAmountToWei(state.amountStr);
+    const playerBuy = isPlayerBuy();
+    const countrySymbol = playerBuy ? symbolForCountry(state.token?.countryAddress) : null;
     const reason = disabledReason({
       walletConnected: state.account.isConnected,
       chainId: state.account.chainId,
@@ -759,7 +910,38 @@ export function mountTradePanel(container, options = {}) {
       approvePending: state.approvePending,
       swapPending: state.swapPending,
       allowanceLoading: state.allowanceLoading,
+      playerBuy,
+      countrySymbol,
     });
+
+    // F1.3 — toggle "Купить country" shortcut. Visible only when:
+    //   * a host wired `onCountrySwitch` (otherwise click is no-op anyway),
+    //   * we're in player+Buy mode,
+    //   * a balance is known and is short of the requested amount, AND
+    //   * no tx is in flight (so we don't surprise-navigate mid-approve/swap).
+    // The disabledReason for this case is the explicit
+    // "Нужно X CC. Купи на Country panel." string — the CTA reinforces it.
+    const insufficientCountry =
+      playerBuy &&
+      state.balanceWei != null &&
+      amountWei != null &&
+      amountWei > 0n &&
+      amountWei > state.balanceWei;
+    const showCountryCta =
+      onCountrySwitch != null &&
+      insufficientCountry &&
+      !state.approvePending &&
+      !state.swapPending;
+    countryCta.hidden = !showCountryCta;
+    if (showCountryCta) {
+      // Best-effort symbol label so the user sees "Купить BRA" not
+      // "Купить country" once the registry has loaded.
+      const sym = countrySymbol && countrySymbol !== 'country' ? countrySymbol : null;
+      countryCta.textContent = sym ? `Купить ${sym}` : 'Купить country';
+      countryCta.dataset.countryAddress = (state.token?.countryAddress ?? '').toLowerCase();
+    } else {
+      delete countryCta.dataset.countryAddress;
+    }
 
     // F1.2 — CTA label & mode (swap vs approve).
     // When user must approve before swap, swap the label to "Approve" so the
@@ -794,6 +976,7 @@ export function mountTradePanel(container, options = {}) {
     renderSideAria();
     renderBalance();
     renderQuote();
+    renderHint();
     renderCta();
   }
 
@@ -833,6 +1016,7 @@ export function mountTradePanel(container, options = {}) {
     if (!sideInfo || !state.account.isConnected || !state.account.address) {
       state.balanceWei = null;
       renderBalance();
+      renderHint();
       renderCta();
       return;
     }
@@ -857,6 +1041,7 @@ export function mountTradePanel(container, options = {}) {
       if (myGen === state.balanceGen) {
         state.balanceLoading = false;
         renderBalance();
+        renderHint();
         renderCta();
       }
     }
@@ -870,6 +1055,7 @@ export function mountTradePanel(container, options = {}) {
       state.quoteError = null;
       state.quoteLoading = false;
       renderQuote();
+      renderHint();
       renderCta();
       return;
     }
@@ -913,6 +1099,7 @@ export function mountTradePanel(container, options = {}) {
       if (myGen === state.quoteGen) {
         state.quoteLoading = false;
         renderQuote();
+        renderHint();
         renderCta();
       }
     }
@@ -1018,6 +1205,11 @@ export function mountTradePanel(container, options = {}) {
   function onAmountInput() {
     state.amountStr = amountInput.value;
     renderCta();
+    // The previous quote (if any) is now stale relative to the live input.
+    // renderHint() compares quote.amountInWei to the live amount and hides
+    // the country-required block during the debounce window so we never show
+    // "Требуется: 5 BRA" while the user is typing "10".
+    renderHint();
     scheduleQuote();
   }
 
@@ -1171,12 +1363,25 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
+  // F1.3 — country shortcut: fires only when the button is visible (gated by
+  // `renderCta`). Calls back to the host with the lowercase address — the
+  // host (main.js) resolves it against the sidebar registry and dispatches
+  // the same `onTokenSelect` callback the sidebar uses, keeping a single
+  // token-switch path.
+  function onCountryCtaClick() {
+    if (countryCta.hidden || !onCountrySwitch) return;
+    const addr = countryCta.dataset.countryAddress;
+    if (typeof addr !== 'string' || !addr) return;
+    onCountrySwitch(addr);
+  }
+
   modeRow.addEventListener('click', onModeClick);
   sideRow.addEventListener('click', onSideClick);
   amountInput.addEventListener('input', onAmountInput);
   slipInput.addEventListener('input', onSlippageInput);
   pctRow.addEventListener('click', onPctClick);
   cta.addEventListener('click', onCtaClick);
+  countryCta.addEventListener('click', onCountryCtaClick);
 
   // ── Wallet subscription ────────────────────────────────────────────────
   const unsubscribeAccount = onAccountChange((acc) => {
@@ -1224,6 +1429,38 @@ export function mountTradePanel(container, options = {}) {
       // Stays in "config loading" disabled state. A future retry path
       // (F1.4 polish) can re-fetch; for now the user can refresh the page.
     });
+
+  // F1.3 — populate the country symbol map from /tokens. One-shot; if it
+  // fails the UI degrades to `shortenAddress` labels. Same endpoint the
+  // sidebar already uses, so the response is hot in the HTTP cache on a
+  // typical bootstrap. No `getTokens` on the apiClient → skip silently
+  // (mainly the older standalone test fixtures that only stub getConfig).
+  if (typeof apiClient.getTokens === 'function') {
+    Promise.resolve()
+      .then(() => apiClient.getTokens())
+      .then((data) => {
+        const countries = Array.isArray(data?.countries) ? data.countries : [];
+        for (const c of countries) {
+          if (
+            c &&
+            typeof c.address === 'string' &&
+            c.address &&
+            typeof c.symbol === 'string' &&
+            c.symbol
+          ) {
+            state.countrySymbolMap.set(c.address.toLowerCase(), c.symbol);
+          }
+        }
+        // Re-render the affected surfaces so the new symbols replace any
+        // shortenAddress placeholders that rendered during the initial paint.
+        renderBalance();
+        renderHint();
+        renderCta();
+      })
+      .catch(() => {
+        // Silent — the address-based fallback still works.
+      });
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────
   function setToken(token) {
@@ -1274,6 +1511,7 @@ export function mountTradePanel(container, options = {}) {
     slipInput.removeEventListener('input', onSlippageInput);
     pctRow.removeEventListener('click', onPctClick);
     cta.removeEventListener('click', onCtaClick);
+    countryCta.removeEventListener('click', onCountryCtaClick);
     unsubscribeAccount();
     container.replaceChildren();
   }
