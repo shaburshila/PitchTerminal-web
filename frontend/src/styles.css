@@ -37,9 +37,16 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-stack);
+  /* Phase 1.5 batch 2: pull surface + brand-font tokens from tokens.css so
+     the shell adopts the redesign palette + Inter UI face. The legacy
+     `--bg`/`--text` vars in styles.css are still used by component
+     internals (sidebar rows, chart toolbar, etc) — batches 3–7 will
+     migrate those incrementally. The fallback chain at the end keeps
+     existing tests rendering correctly even if tokens.css fails to
+     load. */
+  background: var(--bg-0, var(--bg));
+  color: var(--text, #e6edf3);
+  font-family: var(--font-ui, var(--font-stack));
   font-size: 14px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
@@ -87,6 +94,30 @@ button {
 
 .pt-header__right {
   justify-self: end;
+  /* Phase 1.5 batch 2: cluster Profile + Referral buttons next to the
+     wallet-area so the three controls read as one unit. `flex` keeps the
+     wallet-chip aligned right and the buttons compact + same-baseline. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pt-header__action {
+  /* Slimmer than the default .pt-btn to keep the cluster from crowding the
+     wallet-chip. Uses the redesign accent (Inter face, tabular zeros) so
+     the buttons read as "secondary actions" against the primary connect
+     CTA / wallet-chip on the right. */
+  font-family: var(--font-ui, inherit);
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: var(--radius-pill, var(--radius-md));
+}
+
+.pt-header__wallet-area {
+  /* Inline-flex so any future multi-element render (chip + switch button)
+     stays on the baseline. */
+  display: inline-flex;
+  align-items: center;
 }
 
 .pt-header__logo {

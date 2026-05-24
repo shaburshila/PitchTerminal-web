@@ -52,9 +52,34 @@ function buildHeader() {
   });
   center.appendChild(netBadge);
 
-  // Right: wallet area (anonymous by default — single "connect" button)
+  // Right side cluster — [Profile] [Referral] [wallet-area]. The cluster
+  // itself is a flex container; the wallet-area is the placeholder that
+  // `mountWalletChip` populates (kept on the same `[data-test-id="wallet-area"]`
+  // selector for backward compat with main.js + tests). Profile/Referral
+  // buttons are wired up in main.js (phase 1.5 batch 2, closes known-issues
+  // #4 + #5).
   const right = el('div', {
     className: 'pt-header__right',
+  });
+
+  const profileBtn = el('button', {
+    className: 'pt-btn pt-header__action',
+    dataset: { testId: 'header-profile-btn' },
+    attrs: { type: 'button', 'aria-label': 'Open profile' },
+    text: 'Profile',
+  });
+
+  const referralBtn = el('button', {
+    className: 'pt-btn pt-header__action',
+    dataset: { testId: 'header-referral-btn' },
+    attrs: { type: 'button', 'aria-label': 'Copy referral link' },
+    text: 'Referral',
+  });
+
+  // Wallet-area placeholder — `mountWalletChip` (F0.9/F0.10) replaces its
+  // children with the connect-button → chip flow on every `onAccountChange`.
+  const walletArea = el('div', {
+    className: 'pt-header__wallet-area',
     dataset: { testId: 'wallet-area' },
   });
   const connectBtn = el('button', {
@@ -66,7 +91,11 @@ function buildHeader() {
   // F0.9 will attach the actual wagmi click handler — until then the button
   // exists as a visible CTA but has no listener (no dead-no-op handler that
   // would leak listeners on re-mount).
-  right.appendChild(connectBtn);
+  walletArea.appendChild(connectBtn);
+
+  right.appendChild(profileBtn);
+  right.appendChild(referralBtn);
+  right.appendChild(walletArea);
 
   header.appendChild(left);
   header.appendChild(center);

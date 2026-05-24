@@ -65,6 +65,21 @@ describe('mountLayout', () => {
     expect(handle.profile.getAttribute('aria-label')).toMatch(/profile/i);
   });
 
+  it('renders Profile and Referral buttons to the left of wallet-area (phase 1.5)', () => {
+    mountLayout(root);
+    const profileBtn = root.querySelector('[data-test-id="header-profile-btn"]');
+    const referralBtn = root.querySelector('[data-test-id="header-referral-btn"]');
+    const walletArea = root.querySelector('[data-test-id="wallet-area"]');
+    expect(profileBtn).not.toBeNull();
+    expect(referralBtn).not.toBeNull();
+    expect(walletArea).not.toBeNull();
+    // Sibling order — all three live inside .pt-header__right.
+    const right = walletArea.parentElement;
+    expect(right.classList.contains('pt-header__right')).toBe(true);
+    const order = Array.from(right.children).map((c) => c.dataset.testId);
+    expect(order).toEqual(['header-profile-btn', 'header-referral-btn', 'wallet-area']);
+  });
+
   it('renders the anonymous-state connect button by default', () => {
     mountLayout(root);
     const btn = root.querySelector('[data-test-id="connect-btn"]');

@@ -24,6 +24,7 @@ import { mountProfile } from './profile.js';
 import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
 import { showToast } from './ui/toast.js';
+import { mountHeaderActions } from './components/header-actions.js';
 
 // Exported for unit tests. The bootstrap() flow wires this into
 // `onAccountChange`; tests drive the returned handler directly with deps
@@ -263,6 +264,20 @@ function bootstrap() {
       });
     }
     layout.setMode('profile');
+  }
+
+  // Phase 1.5 batch 2: wire header Profile + Referral buttons (closes
+  // known-issues #4 + #5). Buttons themselves are built by layout.js; we
+  // attach the click handlers here so they share the live activateProfile()
+  // + api / wallet plumbing.
+  const profileBtn = layout.header.querySelector('[data-test-id="header-profile-btn"]');
+  const referralBtn = layout.header.querySelector('[data-test-id="header-referral-btn"]');
+  if (profileBtn instanceof HTMLElement && referralBtn instanceof HTMLElement) {
+    mountHeaderActions({
+      profileBtn,
+      referralBtn,
+      onProfile: activateProfile,
+    });
   }
 
   // F0.9/F0.10: header wallet area. We need `/config` for the WC projectId
