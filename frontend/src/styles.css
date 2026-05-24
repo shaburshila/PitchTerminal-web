@@ -1664,6 +1664,472 @@ body.mode-dashboard .pt-profile {
   font-size: 11px;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+ * Phase 1.5 batch 6 — Bottom-tab visual redesign (My Wallet + Orders).
+ *
+ * Mockups: ~/Downloads/pt-mockups/pt-my-wallet-tab.html and
+ *          ~/Downloads/pt-mockups/pt-orders-tab.html
+ *
+ * Adds: tab-count badges in the tab strip, redesigned My Wallet header strip
+ * + token row + illustrated empty state, redesigned Orders filter chips +
+ * status pills + colored Side badge + flag column + illustrated empty state.
+ * All colors via var(--*) from tokens.css. Existing legacy test-ids preserved.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/* Tab-strip refinement: label + count badge inside each tab button. The
+   tab buttons themselves keep their existing geometry — only the inner
+   label/count split is added. */
+.pt-bottom__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pt-bottom__tab-label {
+  font-family: inherit;
+}
+.pt-bottom__tab-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3, var(--text-muted));
+  background: var(--bg-2, #141d1a);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  min-width: 18px;
+  text-align: center;
+}
+.pt-bottom__tab[aria-selected='true'] .pt-bottom__tab-count {
+  color: var(--text);
+  background: var(--bg-3, #1a2421);
+}
+
+/* ── My Wallet redesign ─────────────────────────────────────────────── */
+.pt-mywallet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+}
+.pt-mywallet__totals {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.pt-mywallet__head-label {
+  font-size: 10px;
+  color: var(--text-3, var(--text-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+}
+.pt-mywallet__head-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.pt-mywallet__head-cur {
+  font-size: 12px;
+  color: var(--text-3, var(--text-muted));
+  margin-left: 4px;
+  font-weight: 500;
+}
+.pt-mywallet__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pt-mywallet__pnl {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.pt-mywallet__pnl.is-positive {
+  background: var(--up-dim);
+  border: 1px solid rgba(61, 219, 142, 0.3);
+  color: var(--up, var(--success));
+}
+.pt-mywallet__pnl.is-negative {
+  background: var(--down-dim);
+  border: 1px solid rgba(255, 90, 95, 0.3);
+  color: var(--down, var(--danger));
+}
+.pt-mywallet__pnl-pct {
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+.pt-mywallet__thead {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 90px 100px 110px 130px;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--text-3, var(--text-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line, var(--border));
+  background: var(--bg-2, #141d1a);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+}
+.pt-mywallet__th:not(:first-child) {
+  text-align: right;
+}
+.pt-mywallet__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 90px 100px 110px 130px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--bg-2, #141d1a);
+  transition: background 120ms ease;
+}
+.pt-mywallet__row:hover {
+  background: var(--bg-2, #141d1a);
+}
+.pt-mywallet__who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pt-mywallet__flag {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--line, var(--border));
+}
+.pt-mywallet__flag--placeholder {
+  background: var(--bg-3, #1a2421);
+  box-shadow: 0 0 0 1px var(--line, var(--border));
+}
+.pt-mywallet__ident {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pt-mywallet__name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-mywallet__tick {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3, var(--text-muted));
+}
+.pt-mywallet__num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.pt-mywallet__pnl-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.pt-mywallet__pnl-abs {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.pt-mywallet__pnl-pct {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.pt-mywallet__pnl-abs.is-positive,
+.pt-mywallet__pnl-pct.is-positive {
+  color: var(--up, var(--success));
+}
+.pt-mywallet__pnl-abs.is-negative,
+.pt-mywallet__pnl-pct.is-negative {
+  color: var(--down, var(--danger));
+}
+
+.pt-mywallet__details-label {
+  margin-top: 14px;
+  margin-bottom: 6px;
+  font-size: 10px;
+  color: var(--text-3, var(--text-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+/* Illustrated empty state — matches the mockup's icon + heading + body. */
+.pt-mywallet__empty {
+  padding: 36px 18px;
+  text-align: center;
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+}
+.pt-mywallet__empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  margin: 0 auto 12px;
+  background: var(--bg-3, #1a2421);
+  border: 1px solid var(--line, var(--border));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3, var(--text-muted));
+}
+.pt-mywallet__empty-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.pt-mywallet__empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.pt-mywallet__empty-body {
+  font-size: 11.5px;
+  color: var(--text-3, var(--text-muted));
+  line-height: 1.5;
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* ── Orders redesign ────────────────────────────────────────────────── */
+.pt-orders__filters {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.pt-orders__chip {
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-sm);
+  color: var(--text-2, var(--text-muted));
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.pt-orders__chip:hover {
+  color: var(--text);
+  border-color: var(--line-strong, var(--border));
+}
+.pt-orders__chip.is-active {
+  background: var(--bg-3, #1a2421);
+  color: var(--text);
+  border-color: var(--line-strong, var(--border));
+}
+.pt-orders__chip-count {
+  color: var(--text-3, var(--text-muted));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 4px;
+  background: var(--bg-2, #141d1a);
+  border-radius: 3px;
+}
+.pt-orders__chip.is-active .pt-orders__chip-count {
+  color: var(--text-2, var(--text-muted));
+}
+
+/* Side badge on rows — short BUY/SELL pill. */
+.pt-orders__table td.side {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.pt-orders__table td.side--buy {
+  color: var(--up, var(--success));
+}
+.pt-orders__table td.side--sell {
+  color: var(--down, var(--danger));
+}
+
+/* Who cell — flag + name + ticker. */
+.pt-orders__who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pt-orders__flag {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--line, var(--border));
+}
+.pt-orders__flag--placeholder {
+  background: var(--bg-3, #1a2421);
+  box-shadow: 0 0 0 1px var(--line, var(--border));
+}
+.pt-orders__ident {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pt-orders__name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-orders__tick {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3, var(--text-muted));
+}
+
+/* Status pill with colored dot. */
+.pt-orders__table .status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pt-orders__table .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pt-orders__table .status--pending {
+  background: var(--up-dim);
+  color: var(--up, var(--accent));
+  border: 1px solid rgba(61, 219, 142, 0.3);
+}
+.pt-orders__table .status--pending .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(61, 219, 142, 0.6);
+}
+.pt-orders__table .status--executing {
+  background: var(--up-dim);
+  color: var(--accent);
+  border: 1px solid rgba(61, 219, 142, 0.3);
+}
+.pt-orders__table .status--executing .status-dot {
+  background: var(--accent);
+}
+.pt-orders__table .status--filled {
+  background: var(--up-dim);
+  color: var(--up, var(--success));
+  border: 1px solid rgba(61, 219, 142, 0.3);
+}
+.pt-orders__table .status--filled .status-dot {
+  background: var(--up, var(--success));
+}
+.pt-orders__table .status--cancelled {
+  background: var(--bg-3, #1a2421);
+  color: var(--text-3, var(--text-muted));
+  border: 1px solid var(--line-strong, var(--border));
+}
+.pt-orders__table .status--cancelled .status-dot {
+  background: var(--text-3, var(--text-muted));
+}
+.pt-orders__table .status--expired {
+  background: var(--warn-dim, rgba(224, 169, 58, 0.12));
+  color: var(--warn, #e0a93a);
+  border: 1px solid rgba(224, 169, 58, 0.3);
+}
+.pt-orders__table .status--expired .status-dot {
+  background: var(--warn, #e0a93a);
+}
+.pt-orders__table .status--failed {
+  background: var(--down-dim);
+  color: var(--down, var(--danger));
+  border: 1px solid rgba(255, 90, 95, 0.3);
+}
+.pt-orders__table .status--failed .status-dot {
+  background: var(--down, var(--danger));
+}
+
+.pt-orders__table td.who {
+  min-width: 0;
+}
+.pt-orders__table td.status-cell {
+  text-align: right;
+}
+
+/* Illustrated empty / phase2 states (shared icon style). */
+.pt-orders__empty-panel,
+.pt-orders__phase2 {
+  padding: 36px 18px;
+  text-align: center;
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+}
+.pt-orders__empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  margin: 0 auto 12px;
+  background: var(--bg-3, #1a2421);
+  border: 1px solid var(--line, var(--border));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3, var(--text-muted));
+}
+.pt-orders__empty-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.pt-orders__empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.pt-orders__empty-body {
+  font-size: 11.5px;
+  color: var(--text-3, var(--text-muted));
+  line-height: 1.5;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
 /* ── Trade panel (F1.1) ───────────────────────────────────────────────── */
 .pt-trade {
   display: flex;

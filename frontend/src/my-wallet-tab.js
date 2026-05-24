@@ -33,6 +33,7 @@
 import * as defaultApi from './api.js';
 import { mountSoftLock } from './soft-lock.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
+import { flagSrc, hasFlag } from './flags.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -63,6 +64,11 @@ function formatSigned(value, digits = 4) {
   return `${sign}${formatNumber(value, digits)}`;
 }
 
+function shortAddr(addr) {
+  if (typeof addr !== 'string' || addr.length < 10) return addr ?? '—';
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
 function pnlClass(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return '';
   return value > 0 ? ' positive' : ' negative';
@@ -72,8 +78,13 @@ function pnlClass(value) {
  * @typedef {object} MyWalletOpts
  * @property {{ getPosition: typeof defaultApi.getPosition }} [apiClient]
  * @property {string|null} [token]    Initial selected token (lowercase address).
+ * @property {{ symbol?: string, name?: string, kind?: 'player'|'country' }|null} [tokenMeta]
+ *   Phase 1.5 batch 6 — optional token meta for flag + name rendering.
  * @property {{ openPayModal?: Function, payOpts?: object }} [softLock]
  *   Pass-through options forwarded to mountSoftLock (lets tests inject mocks).
+ * @property {(count: number|null) => void} [onTabCount]
+ *   Phase 1.5 batch 6 — host callback fired with the current position count
+ *   (0 / 1 / null). Used by the bottom-tabs shell to render the tab badge.
  */
 
 /**
@@ -87,11 +98,14 @@ export function mountMyWalletTab(container, opts = {}) {
 
   const apiClient = opts.apiClient ?? defaultApi;
   const softLockOpts = opts.softLock ?? {};
+  const onTabCount = typeof opts.onTabCount === 'function' ? opts.onTabCount : null;
 
   container.replaceChildren();
 
   const state = {
     token: typeof opts.token === 'string' && opts.token ? opts.token.toLowerCase() : null,
+    /** Phase 1.5 batch 6: optional token meta for flag + name rendering. */
+    tokenMeta: opts.tokenMeta && typeof opts.tokenMeta === 'object' ? opts.tokenMeta : null,
     accessState: getAccessState(),
     loading: false,
     error: null,
@@ -99,6 +113,23 @@ export function mountMyWalletTab(container, opts = {}) {
     /** Generation counter — discards stale in-flight responses. */
     gen: 0,
   };
+
+  function emitTabCount() {
+    if (!onTabCount) return;
+    // Count = 1 if we have an active position on this token, else 0. The
+    // mockup shows a numeric count next to the tab label so users see "how
+    // many tokens you hold". Single-token API limits us to 0/1 — multi-token
+    // portfolio is deferred (see header note).
+    if (state.accessState !== 'premium') {
+      onTabCount(null);
+      return;
+    }
+    if (!state.token || !state.data) {
+      onTabCount(null);
+      return;
+    }
+    onTabCount(state.data.hasActivity === false ? 0 : 1);
+  }
 
   // Two siblings: the content host (rendered for premium) and the lock host
   // (used when not premium). Always exactly one is in the DOM via render().
@@ -182,13 +213,26 @@ export function mountMyWalletTab(container, opts = {}) {
   function renderEmpty() {
     root.replaceChildren();
     tearDownLock();
-    root.appendChild(
-      el('div', {
-        className: 'pt-mywallet__empty',
-        dataset: { testId: 'mywallet-empty' },
-        text: 'No trades for this token — position is empty.',
+    // Phase 1.5 batch 6 — illustrated empty state matches the "No tokens yet"
+    // panel in the my-wallet-tab mockup (icon + heading + body copy).
+    const wrap = el('div', {
+      className: 'pt-mywallet__empty',
+      dataset: { testId: 'mywallet-empty' },
+    });
+    const icon = el('div', { className: 'pt-mywallet__empty-icon' });
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+      '<path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>' +
+      '<path d="M17 12h2"/><path d="M3 9h18"/></svg>';
+    wrap.appendChild(icon);
+    wrap.appendChild(el('h4', { className: 'pt-mywallet__empty-title', text: 'No position yet' }));
+    wrap.appendChild(
+      el('p', {
+        className: 'pt-mywallet__empty-body',
+        text: 'You have no trades on this token. Browse the markets to buy your first position.',
       }),
     );
+    root.appendChild(wrap);
   }
 
   function buildStat(label, value, { testId, className = '' } = {}) {
@@ -206,10 +250,159 @@ export function mountMyWalletTab(container, opts = {}) {
     return cell;
   }
 
+  /**
+   * Phase 1.5 batch 6 — build the redesigned header strip with the total
+   * position value + a PnL pill on the right. Mirrors the `mw-head` block
+   * from `~/Downloads/pt-mockups/pt-my-wallet-tab.html`.
+   */
+  function buildMwHead(d) {
+    const head = el('div', {
+      className: 'pt-mywallet__head',
+      dataset: { testId: 'mywallet-head' },
+    });
+    const totals = el('div', { className: 'pt-mywallet__totals' });
+    totals.appendChild(
+      el('span', { className: 'pt-mywallet__head-label', text: 'Total holdings' }),
+    );
+    const valueWrap = el('span', { className: 'pt-mywallet__head-value' });
+    valueWrap.appendChild(
+      el('span', {
+        text: formatNumber(d.positionValue, 4),
+        dataset: { testId: 'mywallet-head-value' },
+      }),
+    );
+    valueWrap.appendChild(el('span', { className: 'pt-mywallet__head-cur', text: 'PITCH' }));
+    totals.appendChild(valueWrap);
+    head.appendChild(totals);
+
+    const meta = el('div', { className: 'pt-mywallet__meta' });
+    const totalPnl = typeof d.totalPnl === 'number' ? d.totalPnl : null;
+    const totalPnlPct = typeof d.totalPnlPct === 'number' ? d.totalPnlPct : null;
+    if (totalPnl != null) {
+      const isPositive = totalPnl >= 0;
+      const pill = el('span', {
+        className: `pt-mywallet__pnl${isPositive ? ' is-positive' : ' is-negative'}`,
+        dataset: { testId: 'mywallet-head-pnl' },
+      });
+      pill.appendChild(
+        el('span', {
+          className: 'pt-mywallet__pnl-abs',
+          text: `${formatSigned(totalPnl, 4)} PITCH`,
+        }),
+      );
+      if (totalPnlPct != null) {
+        pill.appendChild(
+          el('span', { className: 'pt-mywallet__pnl-pct', text: formatPct(totalPnlPct) }),
+        );
+      }
+      meta.appendChild(pill);
+    }
+    head.appendChild(meta);
+    return head;
+  }
+
+  /**
+   * Phase 1.5 batch 6 — render a single redesigned "wt-row" for the currently-
+   * selected token. The PnL detail grid lives below this row (preserves the
+   * existing detailed-stat test IDs).
+   */
+  function buildTokenRow(d) {
+    const row = el('div', {
+      className: 'pt-mywallet__row',
+      dataset: { testId: 'mywallet-row' },
+    });
+    // Identity cell: flag + name + symbol/kind line. We have meta only if the
+    // host (main.js) passed it via setToken(addr, meta). Fall back to short-
+    // address rendering when no meta is available.
+    const who = el('div', { className: 'pt-mywallet__who' });
+    const meta = state.tokenMeta || {};
+    const symbol = typeof meta.symbol === 'string' ? meta.symbol : null;
+    const kind = meta.kind === 'country' ? 'country' : meta.kind === 'player' ? 'player' : null;
+    const name =
+      typeof meta.name === 'string' && meta.name ? meta.name : symbol || shortAddr(state.token);
+
+    if (symbol && kind === 'country' && hasFlag(symbol)) {
+      const img = el('img', {
+        className: 'pt-mywallet__flag',
+        dataset: { testId: 'mywallet-flag' },
+        attrs: { src: flagSrc(symbol), alt: '', 'aria-hidden': 'true' },
+      });
+      who.appendChild(img);
+    } else {
+      // Placeholder dot to keep layout consistent for player tokens.
+      who.appendChild(
+        el('span', { className: 'pt-mywallet__flag pt-mywallet__flag--placeholder' }),
+      );
+    }
+
+    const ident = el('div', { className: 'pt-mywallet__ident' });
+    ident.appendChild(el('div', { className: 'pt-mywallet__name', text: name }));
+    const tick = symbol ? `${symbol} · ${kind || 'token'}` : shortAddr(state.token);
+    ident.appendChild(el('span', { className: 'pt-mywallet__tick', text: tick }));
+    who.appendChild(ident);
+    row.appendChild(who);
+
+    // Numeric cells — Balance / Avg buy / Current / PnL.
+    row.appendChild(
+      el('span', { className: 'pt-mywallet__num', text: formatNumber(d.position, 4) }),
+    );
+    row.appendChild(el('span', { className: 'pt-mywallet__num', text: formatNumber(d.avgBuy, 6) }));
+    row.appendChild(
+      el('span', { className: 'pt-mywallet__num', text: formatNumber(d.currentPrice, 6) }),
+    );
+
+    // PnL cell — absolute + percent stacked.
+    const pnlCell = el('span', { className: 'pt-mywallet__pnl-cell' });
+    const pnlAbs = typeof d.totalPnl === 'number' ? d.totalPnl : null;
+    const pnlPct = typeof d.totalPnlPct === 'number' ? d.totalPnlPct : null;
+    if (pnlAbs != null) {
+      const sign = pnlAbs >= 0 ? ' is-positive' : ' is-negative';
+      pnlCell.appendChild(
+        el('span', {
+          className: `pt-mywallet__pnl-abs${sign}`,
+          text: `${formatSigned(pnlAbs, 4)} PITCH`,
+        }),
+      );
+      if (pnlPct != null) {
+        pnlCell.appendChild(
+          el('span', {
+            className: `pt-mywallet__pnl-pct${sign}`,
+            text: formatPct(pnlPct),
+          }),
+        );
+      }
+    } else {
+      pnlCell.appendChild(el('span', { className: 'pt-mywallet__pnl-abs', text: '—' }));
+    }
+    row.appendChild(pnlCell);
+
+    return row;
+  }
+
   function renderData() {
     root.replaceChildren();
     tearDownLock();
     const d = state.data || {};
+    // New layout: header strip + token row, then the legacy stat grid as
+    // a "Details" sub-section (preserves existing tests + UX completeness).
+    root.appendChild(buildMwHead(d));
+
+    const tableHead = el('div', {
+      className: 'pt-mywallet__thead',
+      dataset: { testId: 'mywallet-thead' },
+    });
+    for (const label of ['Token', 'Balance', 'Avg buy', 'Current', 'PnL']) {
+      tableHead.appendChild(el('span', { className: 'pt-mywallet__th', text: label }));
+    }
+    root.appendChild(tableHead);
+    root.appendChild(buildTokenRow(d));
+
+    const detailsLabel = el('div', {
+      className: 'pt-mywallet__details-label',
+      text: 'Details',
+    });
+    root.appendChild(detailsLabel);
+
     const grid = el('div', {
       className: 'pt-mywallet__grid',
       dataset: { testId: 'mywallet-grid' },
@@ -282,18 +475,22 @@ export function mountMyWalletTab(container, opts = {}) {
   function render() {
     if (state.accessState !== 'premium') {
       renderLock();
+      emitTabCount();
       return;
     }
     if (!state.token) {
       renderNoToken();
+      emitTabCount();
       return;
     }
     if (state.loading) {
       renderLoading();
+      emitTabCount();
       return;
     }
     if (state.error) {
       renderError();
+      emitTabCount();
       return;
     }
     if (!state.data) {
@@ -301,13 +498,16 @@ export function mountMyWalletTab(container, opts = {}) {
       // briefly between setToken and fetchPosition kicking off. Show loading
       // rather than a blank pane.
       renderLoading();
+      emitTabCount();
       return;
     }
     if (state.data.hasActivity === false) {
       renderEmpty();
+      emitTabCount();
       return;
     }
     renderData();
+    emitTabCount();
   }
 
   async function fetchPosition() {
@@ -356,10 +556,25 @@ export function mountMyWalletTab(container, opts = {}) {
   });
 
   // Public API ──────────────────────────────────────────────────────────────
-  async function setToken(token) {
+  /**
+   * @param {string|null} token
+   * @param {{ symbol?: string, name?: string, kind?: string }|null} [meta]
+   *   Phase 1.5 batch 6 — optional token meta for flag + name rendering.
+   */
+  async function setToken(token, meta) {
     const normalized = typeof token === 'string' && token ? token.toLowerCase() : null;
-    if (normalized === state.token) return;
+    const newMeta = meta && typeof meta === 'object' ? meta : null;
+    if (normalized === state.token) {
+      // Token unchanged — update meta without re-fetching data (display-only).
+      // Avoids a spurious fetch when callers rebuild the meta object literal.
+      if (newMeta !== state.tokenMeta) {
+        state.tokenMeta = newMeta;
+        render();
+      }
+      return;
+    }
     state.token = normalized;
+    state.tokenMeta = newMeta;
     state.data = null;
     state.error = null;
     state.gen += 1;

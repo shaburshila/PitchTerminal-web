@@ -182,6 +182,29 @@ describe('mountMyWalletTab', () => {
     expect(api.getPosition).toHaveBeenCalledTimes(2);
   });
 
+  it('setToken with same address but fresh meta literal does not re-fetch', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const api = makeApi();
+    const handle = mountMyWalletTab(c, {
+      apiClient: api,
+      token: TOKEN,
+      tokenMeta: { symbol: 'FRA', kind: 'country' },
+    });
+    await flush();
+    expect(api.getPosition).toHaveBeenCalledTimes(1);
+
+    // Caller rebuilds the meta object literal — reference inequality, but
+    // address unchanged. Guard should treat this as display-only update.
+    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
+    await flush();
+    expect(api.getPosition).toHaveBeenCalledTimes(1);
+
+    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
+    await flush();
+    expect(api.getPosition).toHaveBeenCalledTimes(1);
+  });
+
   it('setToken(null) clears and shows no-token placeholder', async () => {
     accessStore.set('premium');
     const c = makeContainer();
@@ -211,6 +234,91 @@ describe('mountMyWalletTab', () => {
     accessStore.set('premium');
     await flush();
     expect(api.getPosition).not.toHaveBeenCalled();
+  });
+
+  // ── Phase 1.5 batch 6 — visual redesign ────────────────────────────────
+  describe('Phase 1.5 batch 6 redesign', () => {
+    it('renders the head strip with total holdings value + positive PnL pill', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi(makePosition({ positionValue: 42.5, totalPnl: 5.25, totalPnlPct: 14.2 }));
+      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const head = c.querySelector('[data-test-id="mywallet-head"]');
+      expect(head).toBeTruthy();
+      expect(c.querySelector('[data-test-id="mywallet-head-value"]').textContent).toContain('42.5');
+      const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
+      expect(pill).toBeTruthy();
+      expect(pill.className).toContain('is-positive');
+      expect(pill.textContent).toContain('+5.25');
+      expect(pill.textContent).toContain('+14.20%');
+    });
+
+    it('PnL pill flips to is-negative when totalPnl is negative', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi(makePosition({ totalPnl: -3.1, totalPnlPct: -8.7 }));
+      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
+      expect(pill.className).toContain('is-negative');
+      expect(pill.textContent).toContain('-3.1');
+    });
+
+    it('renders flag image when tokenMeta has country symbol with hasFlag mapping', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      mountMyWalletTab(c, {
+        apiClient: makeApi(),
+        token: TOKEN,
+        tokenMeta: { symbol: 'BRA', kind: 'country', name: 'Brazil' },
+      });
+      await flush();
+      const img = c.querySelector('[data-test-id="mywallet-flag"]');
+      expect(img).toBeTruthy();
+      expect(img.getAttribute('src')).toBe('/flags/br.svg');
+      const name = c.querySelector('.pt-mywallet__name');
+      expect(name.textContent).toBe('Brazil');
+    });
+
+    it('renders placeholder flag (no img) when no tokenMeta is provided', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-flag"]')).toBeFalsy();
+      expect(c.querySelector('.pt-mywallet__flag--placeholder')).toBeTruthy();
+    });
+
+    it('illustrated empty state has icon + title "No position yet"', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ configured: true, hasActivity: false });
+      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const empty = c.querySelector('[data-test-id="mywallet-empty"]');
+      expect(empty).toBeTruthy();
+      expect(empty.querySelector('.pt-mywallet__empty-title').textContent).toContain('No position');
+      expect(empty.querySelector('.pt-mywallet__empty-icon svg')).toBeTruthy();
+    });
+
+    it('emits onTabCount=1 when a position with activity loads, null when downgraded', async () => {
+      accessStore._resetForTests();
+      accessStore.set('premium');
+      const c = makeContainer();
+      const counts = [];
+      mountMyWalletTab(c, {
+        apiClient: makeApi(),
+        token: TOKEN,
+        onTabCount: (n) => counts.push(n),
+      });
+      await flush();
+      expect(counts[counts.length - 1]).toBe(1);
+
+      accessStore.set('free');
+      await flush();
+      expect(counts[counts.length - 1]).toBeNull();
+    });
   });
 
   it('discards stale response from a previous token', async () => {

@@ -119,6 +119,11 @@ export function mountBottomTabs(container, options = {}) {
   const state = {
     tab: 'trades',
     token: options.token ?? null,
+    // Phase 1.5 batch 6: optional token meta forwarded to premium sub-tabs
+    // (My Wallet / Orders) so they can render the country flag + symbol.
+    // The host (main.js) may upgrade `setToken(addr)` to `setToken(addr, meta)`
+    // when calling selectToken. Backward-compatible: undefined = no meta.
+    tokenMeta: null,
     myAddress: options.myAddress ?? null,
     trades: [],
     wallets: [],
@@ -143,6 +148,7 @@ export function mountBottomTabs(container, options = {}) {
     attrs: { role: 'tablist', 'aria-label': 'Trades and holders' },
   });
   const tabButtons = {};
+  const tabCounters = {};
   for (const tab of TABS) {
     const btn = el('button', {
       className: 'pt-bottom__tab',
@@ -152,8 +158,17 @@ export function mountBottomTabs(container, options = {}) {
         role: 'tab',
         'aria-selected': tab === state.tab ? 'true' : 'false',
       },
-      text: TAB_LABEL[tab],
     });
+    // Phase 1.5 batch 6: label + count badge (e.g. "Trades 249"). Counter is
+    // hidden until populated to avoid the "0" flash on initial mount.
+    btn.appendChild(el('span', { className: 'pt-bottom__tab-label', text: TAB_LABEL[tab] }));
+    const counter = el('span', {
+      className: 'pt-bottom__tab-count',
+      dataset: { testId: `bottom-tab-count-${tab}` },
+    });
+    counter.hidden = true;
+    btn.appendChild(counter);
+    tabCounters[tab] = counter;
     tabButtons[tab] = btn;
     tabs.appendChild(btn);
   }
@@ -198,7 +213,9 @@ export function mountBottomTabs(container, options = {}) {
     myWalletHandle = mountMyWalletTab(myWalletPane, {
       apiClient,
       token: state.token,
+      tokenMeta: state.tokenMeta,
       softLock: options.softLock,
+      onTabCount: (n) => setTabCount('my-wallet', n),
     });
     return myWalletHandle;
   }
@@ -208,7 +225,9 @@ export function mountBottomTabs(container, options = {}) {
     ordersHandle = mountOrdersTab(ordersPane, {
       apiClient,
       token: state.token,
+      tokenMeta: state.tokenMeta,
       softLock: options.softLock,
+      onTabCount: (n) => setTabCount('orders', n),
     });
     return ordersHandle;
   }
@@ -232,6 +251,37 @@ export function mountBottomTabs(container, options = {}) {
     holdersPane.hidden = state.tab !== 'holders';
     myWalletPane.hidden = state.tab !== 'my-wallet';
     ordersPane.hidden = state.tab !== 'orders';
+  }
+
+  /**
+   * Update the small count badge next to a tab label (Phase 1.5 batch 6).
+   * @param {string} tab        One of 'trades' | 'holders' | 'my-wallet' | 'orders'.
+   * @param {number|null} count Numeric count, or null to hide the badge.
+   */
+  function setTabCount(tab, count) {
+    const counter = tabCounters[tab];
+    if (!counter) return;
+    if (count == null || !Number.isFinite(count) || count < 0) {
+      counter.hidden = true;
+      counter.textContent = '';
+      return;
+    }
+    counter.hidden = false;
+    counter.textContent = String(count);
+  }
+
+  function renderTradeCounts() {
+    // Trades count = total known (server-reported when present, otherwise
+    // local rows). Holders count = number of positive-position wallets.
+    if (state.token) {
+      const tradesCount = state.totalTrades > 0 ? state.totalTrades : state.trades.length;
+      setTabCount('trades', tradesCount);
+      const holdersCount = state.wallets.filter((w) => (w?.position ?? 0) > 0).length;
+      setTabCount('holders', holdersCount);
+    } else {
+      setTabCount('trades', null);
+      setTabCount('holders', null);
+    }
   }
 
   function renderStatus() {
@@ -424,6 +474,7 @@ export function mountBottomTabs(container, options = {}) {
     renderTabsAria();
     renderTrades();
     renderHolders();
+    renderTradeCounts();
     renderStatus();
   }
 
@@ -488,11 +539,38 @@ export function mountBottomTabs(container, options = {}) {
   tabs.addEventListener('click', onTabClick);
 
   // ── Public API ──────────────────────────────────────────────────────────
-  async function setToken(token) {
+  /**
+   * @param {string|null} token Lowercase token address (or null to clear).
+   * @param {{ symbol?: string, name?: string, kind?: 'player'|'country' }} [meta]
+   *   Optional. Phase 1.5 batch 6 — when provided, premium sub-tabs render the
+   *   country flag + symbol/name in row identification. Existing callers that
+   *   pass only the address keep working (sub-tabs gracefully fall back to a
+   *   short-address rendering).
+   */
+  async function setToken(token, meta) {
     const normalized = typeof token === 'string' && token ? token.toLowerCase() : null;
-    if (normalized === state.token) return;
+    const newMeta = meta && typeof meta === 'object' ? meta : null;
+    if (normalized === state.token) {
+      // Token unchanged — update meta without re-fetching data (display-only).
+      // Reference-equality on tokenMeta is brittle: callers often build a fresh
+      // object literal per invocation, so we always forward the new meta to
+      // child handles but skip the network round-trip.
+      if (newMeta !== state.tokenMeta) {
+        state.tokenMeta = newMeta;
+        if (myWalletHandle)
+          myWalletHandle.setToken(normalized, newMeta).catch(() => {
+            /* surfaced */
+          });
+        if (ordersHandle)
+          ordersHandle.setToken(normalized, newMeta).catch(() => {
+            /* surfaced */
+          });
+      }
+      return;
+    }
     state.gen += 1;
     state.token = normalized;
+    state.tokenMeta = newMeta;
     state.trades = [];
     state.wallets = [];
     state.totalTrades = 0;
@@ -502,11 +580,11 @@ export function mountBottomTabs(container, options = {}) {
     // Propagate to premium tabs if they're already mounted. We don't await —
     // their internal data fetch is independent and shouldn't block trades.
     if (myWalletHandle)
-      myWalletHandle.setToken(normalized).catch(() => {
+      myWalletHandle.setToken(normalized, newMeta).catch(() => {
         /* surfaced */
       });
     if (ordersHandle)
-      ordersHandle.setToken(normalized).catch(() => {
+      ordersHandle.setToken(normalized, newMeta).catch(() => {
         /* surfaced */
       });
     if (state.token) await fetchPage();
@@ -531,6 +609,7 @@ export function mountBottomTabs(container, options = {}) {
     state.trades = fresh.concat(state.trades).slice(0, MAX_TRADES_IN_MEMORY);
     state.totalTrades += fresh.length;
     renderTrades();
+    renderTradeCounts();
   }
 
   async function refresh() {

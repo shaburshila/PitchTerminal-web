@@ -41,6 +41,7 @@
 import * as defaultApi from './api.js';
 import { mountSoftLock } from './soft-lock.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
+import { flagSrc, hasFlag } from './flags.js';
 
 const STATUS_LABEL = {
   pending: 'Pending',
@@ -53,6 +54,23 @@ const STATUS_LABEL = {
 const SIDE_LABEL = {
   'limit-buy': 'Limit buy',
   'take-profit': 'Take-profit',
+};
+
+// Phase 1.5 batch 6: short uppercase side badge ("BUY" / "SELL") for the
+// redesigned row. limit-buy → BUY, take-profit → SELL (it's a sell trigger).
+const SIDE_SHORT = {
+  'limit-buy': 'BUY',
+  'take-profit': 'SELL',
+};
+
+// Filter chips order matches the orders-tab mockup. 'all' is the default.
+const FILTERS = Object.freeze(['all', 'pending', 'filled', 'cancelled', 'expired']);
+const FILTER_LABEL = {
+  all: 'All',
+  pending: 'Pending',
+  filled: 'Filled',
+  cancelled: 'Cancelled',
+  expired: 'Expired',
 };
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -82,6 +100,11 @@ function formatWeiNumber(weiStr, decimals = 18, digits = 6) {
     .replace(/0+$/, '');
   const out = frac ? `${whole}.${frac}` : whole;
   return neg ? `-${out}` : out;
+}
+
+function shortOrderToken(addr) {
+  if (typeof addr !== 'string' || addr.length < 10) return addr ?? '—';
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 function formatTtl(expiresAt, nowSec) {
@@ -128,6 +151,10 @@ function isPhase2Unavailable(err) {
  * @property {() => number} [now]   ms epoch — injected for deterministic TTL tests.
  * @property {(action:string, info?:object) => void} [onActionDone]
  *   Test hook fired after cancel / armed-toggle resolves (success or error).
+ * @property {{ symbol?: string, name?: string, kind?: string }|null} [tokenMeta]
+ *   Phase 1.5 batch 6 — optional token meta for flag + name rendering in rows.
+ * @property {(count: number|null) => void} [onTabCount]
+ *   Phase 1.5 batch 6 — host callback fired with the current orders count.
  */
 
 /**
@@ -141,6 +168,7 @@ export function mountOrdersTab(container, opts = {}) {
 
   const apiClient = opts.apiClient ?? defaultApi;
   const softLockOpts = opts.softLock ?? {};
+  const onTabCount = typeof opts.onTabCount === 'function' ? opts.onTabCount : null;
   const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now();
   const fireAction = (action, info) => {
     if (typeof opts.onActionDone === 'function') {
@@ -156,6 +184,8 @@ export function mountOrdersTab(container, opts = {}) {
 
   const state = {
     token: typeof opts.token === 'string' && opts.token ? opts.token.toLowerCase() : null,
+    /** Phase 1.5 batch 6: optional token meta for flag + name rendering. */
+    tokenMeta: opts.tokenMeta && typeof opts.tokenMeta === 'object' ? opts.tokenMeta : null,
     accessState: getAccessState(),
     orders: /** @type {object[]} */ ([]),
     armed: true,
@@ -165,8 +195,23 @@ export function mountOrdersTab(container, opts = {}) {
     phase2: false,
     busyOrderId: null,
     busyArmed: false,
+    /** Phase 1.5 batch 6: active filter chip — 'all' | status string. */
+    filter: 'all',
     gen: 0,
   };
+
+  function emitTabCount() {
+    if (!onTabCount) return;
+    if (state.accessState !== 'premium') {
+      onTabCount(null);
+      return;
+    }
+    if (state.phase2) {
+      onTabCount(null);
+      return;
+    }
+    onTabCount(state.orders.length);
+  }
 
   const root = el('div', { className: 'pt-orders', dataset: { testId: 'orders' } });
   container.appendChild(root);
@@ -249,18 +294,25 @@ export function mountOrdersTab(container, opts = {}) {
     stopTicker();
     root.replaceChildren();
     tearDownLock();
+    // Phase 1.5 batch 6 — illustrated "coming soon" empty state. Uses the
+    // same icon block as the orders-tab mockup empty state.
     const wrap = el('div', {
       className: 'pt-orders__phase2',
       dataset: { testId: 'orders-phase2' },
     });
+    const icon = el('div', { className: 'pt-orders__empty-icon' });
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+      '<path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/></svg>';
+    wrap.appendChild(icon);
     wrap.appendChild(
-      el('div', {
+      el('h4', {
         className: 'pt-orders__phase2-title',
         text: 'Limit orders — coming soon',
       }),
     );
     wrap.appendChild(
-      el('div', {
+      el('p', {
         className: 'pt-orders__phase2-body',
         text:
           'The limit-order keeper (off-chain executor + EIP-712 signing) ships ' +
@@ -337,6 +389,46 @@ export function mountOrdersTab(container, opts = {}) {
     return bar;
   }
 
+  /**
+   * Phase 1.5 batch 6 — build the who-cell (flag + name + ticker line) for an
+   * order row, using the same fallback path as my-wallet-tab (no meta → short
+   * address).
+   */
+  function buildOrderWho(order) {
+    const who = el('div', { className: 'pt-orders__who' });
+    const meta =
+      state.tokenMeta ||
+      (order && (order.tokenSymbol || order.tokenKind)
+        ? { symbol: order.tokenSymbol, kind: order.tokenKind, name: order.tokenSymbol }
+        : null) ||
+      {};
+    const symbol = typeof meta.symbol === 'string' ? meta.symbol : null;
+    const kind = meta.kind === 'country' ? 'country' : meta.kind === 'player' ? 'player' : null;
+    const name =
+      typeof meta.name === 'string' && meta.name
+        ? meta.name
+        : symbol || shortOrderToken(order.token);
+
+    if (symbol && kind === 'country' && hasFlag(symbol)) {
+      who.appendChild(
+        el('img', {
+          className: 'pt-orders__flag',
+          dataset: { testId: 'orders-flag' },
+          attrs: { src: flagSrc(symbol), alt: '', 'aria-hidden': 'true' },
+        }),
+      );
+    } else {
+      who.appendChild(el('span', { className: 'pt-orders__flag pt-orders__flag--placeholder' }));
+    }
+
+    const ident = el('div', { className: 'pt-orders__ident' });
+    ident.appendChild(el('div', { className: 'pt-orders__name', text: name }));
+    const tick = symbol ? `${symbol} · ${kind || 'token'}` : shortOrderToken(order.token);
+    ident.appendChild(el('span', { className: 'pt-orders__tick', text: tick }));
+    who.appendChild(ident);
+    return who;
+  }
+
   function buildRow(order) {
     const now = Math.floor(nowFn() / 1000);
     const tr = el('tr', {
@@ -344,12 +436,21 @@ export function mountOrdersTab(container, opts = {}) {
       dataset: { testId: 'order-row', orderId: String(order.id ?? ''), status: order.status ?? '' },
     });
 
+    // Side badge — BUY (green) / SELL (red).
+    const sideShort =
+      SIDE_SHORT[order.side] || (order.side === 'sell' ? 'SELL' : SIDE_LABEL[order.side] || '—');
     tr.appendChild(
       el('td', {
-        className: 'side',
-        text: SIDE_LABEL[order.side] ?? order.side ?? '—',
+        className: `side side--${sideShort.toLowerCase()}`,
+        text: sideShort,
       }),
     );
+
+    // Who cell — flag + name + ticker line.
+    const whoCell = el('td', { className: 'who' });
+    whoCell.appendChild(buildOrderWho(order));
+    tr.appendChild(whoCell);
+
     tr.appendChild(
       el('td', {
         className: 'num',
@@ -380,12 +481,16 @@ export function mountOrdersTab(container, opts = {}) {
     });
     tr.appendChild(ttlCell);
 
-    tr.appendChild(
-      el('td', {
-        className: `status status--${order.status ?? 'unknown'}`,
-        text: STATUS_LABEL[order.status] ?? order.status ?? '—',
-      }),
-    );
+    // Status pill with colored dot.
+    const statusCell = el('td', { className: 'status-cell' });
+    const pill = el('span', {
+      className: `status status--${order.status ?? 'unknown'}`,
+      dataset: { testId: 'orders-status', status: order.status ?? '' },
+    });
+    pill.appendChild(el('span', { className: 'status-dot' }));
+    pill.appendChild(el('span', { text: STATUS_LABEL[order.status] ?? order.status ?? '—' }));
+    statusCell.appendChild(pill);
+    tr.appendChild(statusCell);
 
     const actionCell = el('td', { className: 'actions' });
     if (order.status === 'pending') {
@@ -408,11 +513,91 @@ export function mountOrdersTab(container, opts = {}) {
     return tr;
   }
 
+  /**
+   * Phase 1.5 batch 6 — filter chip strip (All / Pending / Filled / Cancelled /
+   * Expired) with live count next to each label. Counts are derived from the
+   * full `state.orders` list (NOT from the currently-filtered view), so the
+   * chips always reflect the underlying dataset.
+   */
+  function buildFilters() {
+    const counts = { all: state.orders.length };
+    for (const o of state.orders) {
+      const k = String(o?.status ?? '');
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    const bar = el('div', {
+      className: 'pt-orders__filters',
+      dataset: { testId: 'orders-filters' },
+    });
+    for (const f of FILTERS) {
+      const c = counts[f] ?? 0;
+      const chip = el('button', {
+        className: `pt-orders__chip${state.filter === f ? ' is-active' : ''}`,
+        dataset: { testId: `orders-filter-${f}`, filter: f },
+        attrs: { type: 'button' },
+      });
+      chip.appendChild(el('span', { text: FILTER_LABEL[f] }));
+      chip.appendChild(el('span', { className: 'pt-orders__chip-count', text: String(c) }));
+      chip.addEventListener('click', () => {
+        if (state.filter === f) return;
+        state.filter = f;
+        render();
+      });
+      bar.appendChild(chip);
+    }
+    return bar;
+  }
+
+  /** Empty state used when the active filter has zero matches but orders exist. */
+  function buildFilteredEmptyRow() {
+    const tr = el('tr', { dataset: { testId: 'orders-empty-filtered' } });
+    const td = el('td', {
+      text: `No ${state.filter === 'all' ? '' : state.filter + ' '}orders`,
+      attrs: { colspan: '8' },
+    });
+    td.className = 'pt-orders__empty';
+    tr.appendChild(td);
+    return tr;
+  }
+
+  /** Illustrated empty state when there are NO orders at all. */
+  function buildEmptyPanel() {
+    const wrap = el('div', {
+      className: 'pt-orders__empty-panel',
+      dataset: { testId: 'orders-empty-panel' },
+    });
+    const icon = el('div', { className: 'pt-orders__empty-icon' });
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+      '<path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/></svg>';
+    wrap.appendChild(icon);
+    wrap.appendChild(el('h4', { className: 'pt-orders__empty-title', text: 'No orders yet' }));
+    wrap.appendChild(
+      el('p', {
+        className: 'pt-orders__empty-body',
+        text: "You haven't placed any limit orders. Place your first limit order from the trade panel.",
+      }),
+    );
+    return wrap;
+  }
+
   function renderData() {
     root.replaceChildren();
     tearDownLock();
 
     root.appendChild(buildToolbar());
+    root.appendChild(buildFilters());
+
+    // When there are no orders at all, show the illustrated empty panel
+    // INSTEAD of the table — matches the mockup. We still preserve the
+    // `orders-empty` test id by attaching it to the panel.
+    if (state.orders.length === 0) {
+      const panel = buildEmptyPanel();
+      panel.dataset.testId = 'orders-empty';
+      root.appendChild(panel);
+      startTicker();
+      return;
+    }
 
     const table = el('table', {
       className: 'pt-orders__table',
@@ -420,21 +605,22 @@ export function mountOrdersTab(container, opts = {}) {
     });
     const thead = el('thead');
     const headRow = el('tr');
-    for (const label of ['Type', 'Target', 'Amount', 'Slippage', 'TTL', 'Status', '']) {
+    for (const label of ['Side', 'Token', 'Target', 'Amount', 'Slippage', 'TTL', 'Status', '']) {
       headRow.appendChild(el('th', { text: label }));
     }
     thead.appendChild(headRow);
     table.appendChild(thead);
 
     const tbody = el('tbody');
-    if (state.orders.length === 0) {
-      const tr = el('tr', { dataset: { testId: 'orders-empty' } });
-      const td = el('td', { text: 'No orders', attrs: { colspan: '7' } });
-      td.className = 'pt-orders__empty';
-      tr.appendChild(td);
-      tbody.appendChild(tr);
+    const visible =
+      state.filter === 'all'
+        ? state.orders
+        : state.orders.filter((o) => String(o?.status) === state.filter);
+
+    if (visible.length === 0) {
+      tbody.appendChild(buildFilteredEmptyRow());
     } else {
-      for (const order of state.orders) {
+      for (const order of visible) {
         tbody.appendChild(buildRow(order));
       }
     }
@@ -447,25 +633,31 @@ export function mountOrdersTab(container, opts = {}) {
   function render() {
     if (state.accessState !== 'premium') {
       renderLock();
+      emitTabCount();
       return;
     }
     if (!state.token) {
       renderNoToken();
+      emitTabCount();
       return;
     }
     if (state.phase2) {
       renderPhase2();
+      emitTabCount();
       return;
     }
     if (state.loading) {
       renderLoading();
+      emitTabCount();
       return;
     }
     if (state.error) {
       renderError();
+      emitTabCount();
       return;
     }
     renderData();
+    emitTabCount();
   }
 
   // ── Data layer ─────────────────────────────────────────────────────────
@@ -603,10 +795,25 @@ export function mountOrdersTab(container, opts = {}) {
   });
 
   // ── Public API ─────────────────────────────────────────────────────────
-  async function setToken(token) {
+  /**
+   * @param {string|null} token
+   * @param {{ symbol?: string, name?: string, kind?: string }|null} [meta]
+   *   Phase 1.5 batch 6 — optional token meta for flag + name rendering.
+   */
+  async function setToken(token, meta) {
     const normalized = typeof token === 'string' && token ? token.toLowerCase() : null;
-    if (normalized === state.token) return;
+    const newMeta = meta && typeof meta === 'object' ? meta : null;
+    if (normalized === state.token) {
+      // Token unchanged — update meta without re-fetching data (display-only).
+      // Avoids a spurious fetch when callers rebuild the meta object literal.
+      if (newMeta !== state.tokenMeta) {
+        state.tokenMeta = newMeta;
+        render();
+      }
+      return;
+    }
     state.token = normalized;
+    state.tokenMeta = newMeta;
     state.orders = [];
     state.error = null;
     state.phase2 = false;

@@ -410,6 +410,62 @@ describe('mountBottomTabs', () => {
     }
   });
 
+  // ── Phase 1.5 batch 6 — visual redesign ────────────────────────────────
+  describe('Phase 1.5 batch 6 redesign', () => {
+    it('renders tab labels + hidden count badges initially', () => {
+      const api = makeApi(makeTradesResponse());
+      mountBottomTabs(container, { apiClient: api });
+      // Each tab has a label span + a count span (initially hidden).
+      const labelTrades = container.querySelector(
+        '[data-test-id="bottom-tab-trades"] .pt-bottom__tab-label',
+      );
+      expect(labelTrades).toBeTruthy();
+      expect(labelTrades.textContent).toBe('Trades');
+      const counter = container.querySelector('[data-test-id="bottom-tab-count-trades"]');
+      expect(counter).toBeTruthy();
+      expect(counter.hidden).toBe(true);
+    });
+
+    it('populates trades + holders count badges after setToken loads data', async () => {
+      const api = makeApi(
+        makeTradesResponse({
+          items: sampleTrades(),
+          wallets: sampleWallets(),
+          totalTrades: 42,
+        }),
+      );
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+
+      const tradesCount = container.querySelector('[data-test-id="bottom-tab-count-trades"]');
+      const holdersCount = container.querySelector('[data-test-id="bottom-tab-count-holders"]');
+      expect(tradesCount.hidden).toBe(false);
+      expect(tradesCount.textContent).toBe('42');
+      // Holders = positive-position wallets = 2 (third has position=0).
+      expect(holdersCount.hidden).toBe(false);
+      expect(holdersCount.textContent).toBe('2');
+    });
+
+    it('setToken accepts (addr, meta) and threads meta to lazy sub-tabs without crashing', async () => {
+      const api = makeApi(makeTradesResponse());
+      const handle = mountBottomTabs(container, { apiClient: api });
+      // Just ensure the 2-arg signature is accepted (and no exception thrown).
+      await handle.setToken(TOKEN_A, { symbol: 'FRA', kind: 'country', name: 'France' });
+      expect(api.getTrades).toHaveBeenCalledWith(TOKEN_A, { limit: 100, cursor: null });
+    });
+
+    it('setToken with same address but fresh meta literal does not re-fetch trades', async () => {
+      const api = makeApi(makeTradesResponse());
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A, { symbol: 'FRA', kind: 'country' });
+      expect(api.getTrades).toHaveBeenCalledTimes(1);
+      // Same address, fresh literal — reference-inequal but data unchanged.
+      await handle.setToken(TOKEN_A, { symbol: 'FRA', kind: 'country' });
+      await handle.setToken(TOKEN_A, { symbol: 'FRA', kind: 'country' });
+      expect(api.getTrades).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('destroy clears container', async () => {
     const api = makeApi(makeTradesResponse());
     const handle = mountBottomTabs(container, { apiClient: api });

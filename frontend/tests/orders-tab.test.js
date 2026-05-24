@@ -387,6 +387,28 @@ describe('mountOrdersTab', () => {
     expect(api.getOrders).toHaveBeenLastCalledWith({ token: '0xbbb2' });
   });
 
+  it('setToken with same address but fresh meta literal does not re-fetch', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const api = makeApi({ items: [] });
+    const handle = mountOrdersTab(c, {
+      apiClient: api,
+      token: TOKEN,
+      tokenMeta: { symbol: 'FRA', kind: 'country' },
+    });
+    await flush();
+    expect(api.getOrders).toHaveBeenCalledTimes(1);
+
+    // Same address, different object literal — should NOT trigger refetch.
+    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
+    await flush();
+    expect(api.getOrders).toHaveBeenCalledTimes(1);
+
+    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
+    await flush();
+    expect(api.getOrders).toHaveBeenCalledTimes(1);
+  });
+
   it('auto-fetches when access flips from free to premium', async () => {
     accessStore.set('free');
     const c = makeContainer();
@@ -418,5 +440,130 @@ describe('mountOrdersTab', () => {
     mountOrdersTab(c, { apiClient: makeApi({ items: [] }), token: TOKEN });
     await flush();
     expect(c.querySelector('[data-test-id="orders-empty"]')).toBeTruthy();
+  });
+
+  // ── Phase 1.5 batch 6 — visual redesign ────────────────────────────────
+  describe('Phase 1.5 batch 6 redesign', () => {
+    it('renders filter chips with status counts and switches active chip on click', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({
+        items: [
+          makeOrder({ id: '1', status: 'pending' }),
+          makeOrder({ id: '2', status: 'pending' }),
+          makeOrder({ id: '3', status: 'filled' }),
+          makeOrder({ id: '4', status: 'cancelled' }),
+        ],
+      });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+
+      const filters = c.querySelector('[data-test-id="orders-filters"]');
+      expect(filters).toBeTruthy();
+      // Counts inside the chips
+      const allChip = c.querySelector('[data-test-id="orders-filter-all"]');
+      const pendingChip = c.querySelector('[data-test-id="orders-filter-pending"]');
+      expect(allChip.textContent).toContain('4');
+      expect(pendingChip.textContent).toContain('2');
+      expect(allChip.className).toContain('is-active');
+      expect(pendingChip.className).not.toContain('is-active');
+
+      // Click pending → only pending rows visible.
+      pendingChip.click();
+      const rows = c.querySelectorAll('[data-test-id="order-row"]');
+      expect(rows.length).toBe(2);
+      for (const r of rows) expect(r.dataset.status).toBe('pending');
+      expect(c.querySelector('[data-test-id="orders-filter-pending"]').className).toContain(
+        'is-active',
+      );
+    });
+
+    it('side-badge cell renders BUY/SELL and uses side-buy / side-sell class', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({
+        items: [
+          makeOrder({ id: '1', side: 'limit-buy', status: 'pending' }),
+          makeOrder({ id: '2', side: 'take-profit', status: 'pending' }),
+        ],
+      });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+
+      const rows = c.querySelectorAll('[data-test-id="order-row"]');
+      const side0 = rows[0].querySelector('td.side');
+      const side1 = rows[1].querySelector('td.side');
+      expect(side0.textContent).toBe('BUY');
+      expect(side0.className).toContain('side--buy');
+      expect(side1.textContent).toBe('SELL');
+      expect(side1.className).toContain('side--sell');
+    });
+
+    it('status pill renders with dot + uppercase label inside a colored span', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ items: [makeOrder({ status: 'filled' })] });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const pill = c.querySelector('[data-test-id="orders-status"]');
+      expect(pill).toBeTruthy();
+      expect(pill.dataset.status).toBe('filled');
+      expect(pill.className).toContain('status--filled');
+      expect(pill.querySelector('.status-dot')).toBeTruthy();
+      expect(pill.textContent).toContain('Filled');
+    });
+
+    it('renders flag image when tokenMeta has a country symbol with hasFlag mapping', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ items: [makeOrder()] });
+      mountOrdersTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        tokenMeta: { symbol: 'FRA', kind: 'country', name: 'France' },
+      });
+      await flush();
+      const img = c.querySelector('[data-test-id="orders-flag"]');
+      expect(img).toBeTruthy();
+      expect(img.getAttribute('src')).toBe('/flags/fr.svg');
+      // Name renders too.
+      expect(c.querySelector('.pt-orders__name').textContent).toContain('France');
+    });
+
+    it('illustrated empty-state has data-test-id orders-empty + matches "No orders yet"', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      mountOrdersTab(c, { apiClient: makeApi({ items: [] }), token: TOKEN });
+      await flush();
+      const panel = c.querySelector('[data-test-id="orders-empty"]');
+      expect(panel).toBeTruthy();
+      expect(panel.querySelector('.pt-orders__empty-title').textContent).toContain('No orders yet');
+      // Filter chips still render above (with all counts = 0) — the toolbar is
+      // a persistent part of the redesigned tab. No table or order rows.
+      expect(c.querySelector('[data-test-id="orders-table"]')).toBeFalsy();
+      expect(c.querySelectorAll('[data-test-id="order-row"]').length).toBe(0);
+    });
+
+    it('emits onTabCount when orders load and on access-state transitions', async () => {
+      accessStore._resetForTests();
+      accessStore.set('premium');
+      const c = makeContainer();
+      const counts = [];
+      const api = makeApi({
+        items: [makeOrder({ id: '1' }), makeOrder({ id: '2' })],
+      });
+      mountOrdersTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        onTabCount: (n) => counts.push(n),
+      });
+      await flush();
+      // Last emitted count after data load should be 2.
+      expect(counts[counts.length - 1]).toBe(2);
+
+      accessStore.set('free');
+      await flush();
+      expect(counts[counts.length - 1]).toBeNull();
+    });
   });
 });
