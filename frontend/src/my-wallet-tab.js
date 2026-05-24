@@ -85,6 +85,12 @@ function pnlClass(value) {
  * @property {(count: number|null) => void} [onTabCount]
  *   Phase 1.5 batch 6 — host callback fired with the current position count
  *   (0 / 1 / null). Used by the bottom-tabs shell to render the tab badge.
+ * @property {(addr: string|null, balance: number) => void} [onBalance]
+ *   Phase 1.5 batch 4 wiring — host callback fired with the freshly-fetched
+ *   token balance in display units (NOT wei). `chart.setOwnBalance` consumes
+ *   this to render the Net pos overlay line. Fired with 0 when the token
+ *   has no activity, and with the previous addr + 0 when the token changes
+ *   so the chart can clear the stale line before the new balance arrives.
  */
 
 /**
@@ -99,6 +105,13 @@ export function mountMyWalletTab(container, opts = {}) {
   const apiClient = opts.apiClient ?? defaultApi;
   const softLockOpts = opts.softLock ?? {};
   const onTabCount = typeof opts.onTabCount === 'function' ? opts.onTabCount : null;
+  const onBalance = typeof opts.onBalance === 'function' ? opts.onBalance : null;
+
+  function emitBalance() {
+    if (!onBalance) return;
+    const pos = Number(state.data?.position);
+    onBalance(state.token, Number.isFinite(pos) ? pos : 0);
+  }
 
   container.replaceChildren();
 
@@ -530,6 +543,7 @@ export function mountMyWalletTab(container, opts = {}) {
       if (myGen === state.gen) {
         state.loading = false;
         render();
+        emitBalance();
       }
     }
   }
@@ -573,6 +587,11 @@ export function mountMyWalletTab(container, opts = {}) {
       }
       return;
     }
+    // Clear stale balance on the previous token before swapping — otherwise
+    // the chart's Net pos line keeps the old number until the new fetch lands.
+    if (onBalance && state.token && state.token !== normalized) {
+      onBalance(state.token, 0);
+    }
     state.token = normalized;
     state.tokenMeta = newMeta;
     state.data = null;
@@ -581,6 +600,8 @@ export function mountMyWalletTab(container, opts = {}) {
     render();
     if (state.token && state.accessState === 'premium') {
       await fetchPosition();
+    } else {
+      emitBalance();
     }
   }
 

@@ -161,7 +161,12 @@ function bootstrap() {
   layout.center.appendChild(bottomZone);
 
   const chart = mountChart(chartZone);
-  const bottom = mountBottomTabs(bottomZone);
+  // Phase 1.5 batch 4 wiring — when my-wallet-tab fetches a fresh position,
+  // feed the balance (display units, NOT wei) into chart.setOwnBalance so
+  // the Net pos overlay line shows. Cleared to 0 on token swap / no-data.
+  const bottom = mountBottomTabs(bottomZone, {
+    onBalance: (addr, balance) => chart.setOwnBalance(addr, balance),
+  });
   // F1.3 — address → token-row map for country tokens, populated from a
   // one-shot getTokens() fetch below. Used by the trade panel's "Купить
   // country" CTA: the panel hands us a lowercase address; we look up the

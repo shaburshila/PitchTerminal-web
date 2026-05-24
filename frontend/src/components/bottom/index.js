@@ -97,6 +97,8 @@ function formatPercent(value) {
  *   token?: string|null,
  *   myAddress?: string|null,
  *   pageSize?: number,
+ *   softLock?: object,
+ *   onBalance?: (addr: string|null, balance: number) => void,
  * }} [options]
  * @returns {{
  *   setToken: (token: string|null) => Promise<void>,
@@ -216,6 +218,7 @@ export function mountBottomTabs(container, options = {}) {
       tokenMeta: state.tokenMeta,
       softLock: options.softLock,
       onTabCount: (n) => setTabCount('my-wallet', n),
+      onBalance: options.onBalance ?? null,
     });
     return myWalletHandle;
   }
