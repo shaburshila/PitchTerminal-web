@@ -1,0 +1,128 @@
+name: Deploy
+
+# Auto-deploy на VPS после успешного прохождения CI на main.
+#
+# Триггер: `workflow_run` от ci.yml. Запускается ТОЛЬКО если CI завершился
+# успешно (см. `if:` на job'е). Альтернатива (composite в ci.yml через
+# `needs:`) хуже тем, что смешивает обязанности и делает невозможным
+# отдельный `workflow_dispatch` для ручного re-deploy без перезапуска CI.
+#
+# Также поддерживается ручной запуск через `workflow_dispatch` — для
+# случаев, когда нужно передеплоить ту же ревизию (например, после
+# ротации `.env` на VPS).
+#
+# ВНИМАНИЕ: `workflow_dispatch` НЕ проверяет CI-статус выбранной ревизии.
+# Деплоит HEAD ветки as-is. Оператор обязан вручную убедиться, что последний
+# CI run на этой ветке зелёный, прежде чем запускать dispatch (см. runbook §12).
+# Для защиты от случайного bypass — input `confirm_no_ci_check` (must be true).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm_no_ci_check:
+        description: "Подтверждаю: CI на HEAD ветки зелёный (workflow_dispatch его не проверяет)"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # workflow_run триггерится при ЛЮБОМ завершении CI (success/failure/cancelled).
+    # Деплоим только на success. Для workflow_dispatch — github.event.workflow_run
+    # отсутствует, разрешаем явно, НО требуем явного подтверждения
+    # `confirm_no_ci_check`, так как dispatch CI-статус не проверяет.
+    if: >
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirm_no_ci_check == true) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    steps:
+      - name: Checkout (for reference only)
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        # Pinned to full commit SHA (v1.0.3) — third-party action имеет доступ
+        # к VPS_SSH_KEY через `envs`. Тег может быть переписан при компрометации
+        # maintainer-аккаунта; SHA-pin защищает supply-chain.
+        # Обновлять: проверить changelog, получить новый SHA через
+        #   curl -sS https://api.github.com/repos/appleboy/ssh-action/git/ref/tags/<vX.Y.Z>
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: ${{ secrets.VPS_PORT }}
+          username: deploy
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Таймаут на установку соединения и на выполнение команд.
+          timeout: 30s
+          command_timeout: 10m
+          # `script_stop: true` — упасть на первой ошибке (set -e в стиле action).
+          script_stop: true
+          # Передаём commit SHA, до которого нужно деплоить (и до которого
+          # откатываться при rollback). Используем head_sha из workflow_run,
+          # для workflow_dispatch — текущий github.sha (HEAD ветки, на которой
+          # запущен workflow).
+          envs: DEPLOY_SHA
+          script: |
+            set -euo pipefail
+            cd /home/deploy/pitchterminal
+
+            # Сохранить предыдущий SHA для возможного rollback.
+            PREVIOUS_SHA="$(git rev-parse HEAD)"
+            echo "Previous SHA: ${PREVIOUS_SHA}"
+            echo "Target SHA:   ${DEPLOY_SHA}"
+
+            # Обновляем код. reset --hard — защита от случайных локальных
+            # модификаций на VPS (которых не должно быть, но мы консервативны).
+            git fetch origin main
+            git reset --hard "${DEPLOY_SHA}"
+
+            cd infra
+
+            # Образы Backend/worker/caddy собираются локально на VPS
+            # (см. docker-compose.yml — build: ../backend). pull нужен только
+            # для postgres:16-alpine.
+            docker compose --env-file ../.env \
+              -f docker-compose.yml -f docker-compose.prod.yml pull postgres
+            docker compose --env-file ../.env \
+              -f docker-compose.yml -f docker-compose.prod.yml build
+            # --remove-orphans: убрать контейнеры, которые остались от старых
+            # compose-конфигов (например, переименованный/удалённый сервис).
+            # Без флага состояние стека может расходиться с compose-файлами.
+            docker compose --env-file ../.env \
+              -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Cold-start пауза: миграции (Backend.entrypoint делает
+            # alembic upgrade head), healthcheck окно (start_period: 15s),
+            # Caddy ACME renewal (если cert близок к expire).
+            echo "Waiting 30s for cold-start..."
+            sleep 30
+
+            # Health check изнутри VPS — bypass'ит Caddy/TLS, проверяем
+            # api healthcheck endpoint. Caddy сам прокинет наружу при success.
+            # Используем docker exec — гарантирует, что мы смотрим именно
+            # на наш свежий контейнер.
+            if docker exec pt-api curl -fsS --max-time 5 http://localhost:8000/api/v1/health > /dev/null; then
+              echo "Health check passed."
+            else
+              echo "Health check FAILED — rolling back to ${PREVIOUS_SHA}"
+              cd /home/deploy/pitchterminal
+              bash scripts/rollback.sh "${PREVIOUS_SHA}"
+              exit 1
+            fi
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}

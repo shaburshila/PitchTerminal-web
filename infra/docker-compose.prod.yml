@@ -1,0 +1,30 @@
+# Production overlay поверх docker-compose.yml.
+#
+# Использование на VPS (см. docs/runbook.md):
+#   docker compose \
+#     --env-file ../.env \
+#     -f docker-compose.yml \
+#     -f docker-compose.prod.yml \
+#     up -d
+#
+# Отличия от base / override.yml:
+#   - caddy публикует и 80, и 443 (для Let's Encrypt + HTTPS).
+#   - caddy подхватывает infra/Caddyfile.prod (auto_https, ${DOMAIN}).
+#   - postgres / api не публикуют порты наружу (никаких 127.0.0.1-биндов:
+#     override.yml в этом стеке НЕ подключаем).
+#
+# ВАЖНО: на проде НЕ передавать -f docker-compose.override.yml.
+
+services:
+  caddy:
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+    environment:
+      # Caddyfile.prod подставляет ${DOMAIN} в site-блок.
+      DOMAIN: ${DOMAIN:?DOMAIN is required (e.g. pitchterminal.app)}
+      # ACME email для Let's Encrypt — обязателен для production-cert'ов.
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required (e.g. ops@pitchterminal.app)}

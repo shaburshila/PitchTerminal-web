@@ -1,0 +1,72 @@
+# PitchTerminal-web — Caddy конфиг (production).
+#
+# Использовать через docker-compose.prod.yml (mount как
+# /etc/caddy/Caddyfile). Требует env DOMAIN и ACME_EMAIL.
+#
+# Маршруты (идентичны dev-Caddyfile):
+#   /api/*   → reverse_proxy api:8000 (SSE-friendly буферизация выключена)
+#   /*       → static SPA из /srv/frontend
+#
+# Отличие от dev:
+#   - auto_https ON (по дефолту) — Let's Encrypt получит cert по http-01.
+#   - сайт-блок именован по ${DOMAIN} вместо :80.
+#   - email для ACME — обязателен.
+
+{
+	# Отключаем admin API (как и в dev).
+	admin off
+
+	# ACME email — Let's Encrypt пришлёт expiry-нотификации сюда.
+	email {$ACME_EMAIL}
+
+	# rate_limit — не встроенный директив.
+	order rate_limit before basicauth
+}
+
+{$DOMAIN} {
+	# ── Базовые security-headers ──────────────────────────────────────────
+	header {
+		# HSTS: год + subdomains. Включаем только в проде (после первого
+		# успешного cert) — Caddy ставит cert ДО ответа, так что safe.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Убираем Server: Caddy header.
+		-Server
+	}
+
+	# ── API под /api/* ─────────────────────────────────────────────────────
+	handle /api/* {
+		rate_limit {
+			zone api_global {
+				key {remote_host}
+				events 600
+				window 1m
+			}
+		}
+
+		reverse_proxy api:8000 {
+			# SSE-friendly.
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				read_buffer 4KB
+			}
+		}
+	}
+
+	# ── SPA fallback ───────────────────────────────────────────────────────
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Логи в stdout — Docker подбирает.
+	log {
+		output stdout
+		format json
+	}
+}
