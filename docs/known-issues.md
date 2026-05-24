@@ -58,7 +58,14 @@
 - **Fix:** добавить overlay-tools панель. Дизайн взять из portable
   PitchTerminal (там это было). Гейтить по premium.
 - **Found:** 2026-05-24.
-- **Status:** open.
+- **Status:** ✅ done — Phase 1.5 Batch 4. `chart.js` теперь рендерит overlay-
+  чекбоксы **My / Others / Avg** в правом краю toolbar (см. mockup
+  `a-main.html` `.toolbar` + `.tb-check`). Состояние персистится в
+  `localStorage` (`pt:chart:overlays`); `main.js#onAccountChange` вызывает
+  `chart.setOwnAddress(addr)` для корректной My/Others-классификации.
+  Avg — volume-weighted average по собственным трейдам, рендерится через
+  `series.createPriceLine`. Buys/sells-only фильтры пока не сделаны — текущий
+  набор закрывает основную пользовательскую жалобу. +5 тестов.
 
 ### #4 [header] Profile кнопка должна быть отдельно от Connect Wallet
 - **Severity:** P2.

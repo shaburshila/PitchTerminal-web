@@ -32,6 +32,52 @@ const UNITS = Object.freeze(['pitch', 'country']);
 const TYPE_LABEL = { candles: 'Candles', line: 'Line' };
 const UNIT_LABEL = { pitch: 'PITCH', country: 'Country' };
 
+// Overlay-checkboxes — Batch 4 (closes known-issues #3).
+// "my" — markers for own trades, "others" — markers for everyone else,
+// "avg" — horizontal price-line at the volume-weighted average of own
+// trades, "netPos" — horizontal price-line at the current spot price
+// of the active token when the user holds a nonzero balance (visual
+// marker for "here is my open position"; the price source is the last
+// candle close — same value the stats bar shows).
+//
+// Mockup parity: a-main.html shows 4 boxes [My][Others][Avg buy][Net pos]
+// rendered inline in the toolbar row (.tb-check, separated by .tb-sep
+// from the unit toggle, right-aligned via margin-left:auto). The
+// floating-card slot above the chart is reserved for OHLC crosshair
+// data (batch 4.5). Defaults reproduce mockup state: My on, Others off,
+// Avg off, Net pos on.
+const OVERLAYS = Object.freeze(['my', 'others', 'avg', 'netPos']);
+const OVERLAY_LABEL = { my: 'My', others: 'Others', avg: 'Avg buy', netPos: 'Net pos' };
+const OVERLAY_STORAGE_KEY = 'pt:chart:overlays';
+
+function readPersistedOverlays() {
+  // Best-effort — happy-dom + node env localStorage missing or quota errors
+  // must never break chart mount.
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(OVERLAY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const out = {};
+    for (const k of OVERLAYS) {
+      if (typeof parsed[k] === 'boolean') out[k] = parsed[k];
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function persistOverlays(show) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(show));
+  } catch {
+    /* ignore */
+  }
+}
+
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -100,6 +146,17 @@ function pointToMarker(point) {
 }
 
 /**
+ * Decide whether a point's trader matches the current "own address" for
+ * the purposes of My/Others filtering. Case-insensitive; missing address
+ * means "not mine".
+ */
+function isOwnTrade(trader, ownAddress) {
+  if (!ownAddress) return false;
+  if (typeof trader !== 'string' || !trader) return false;
+  return trader.toLowerCase() === ownAddress.toLowerCase();
+}
+
+/**
  * Default factory: dynamically import `lightweight-charts`. Tests pass a
  * synchronous factory returning a stub.
  */
@@ -126,6 +183,7 @@ export function mountChart(container, options = {}) {
 
   container.replaceChildren();
 
+  const persistedShow = readPersistedOverlays();
   const state = {
     token: null,
     tf: DEFAULT_TF,
@@ -141,6 +199,29 @@ export function mountChart(container, options = {}) {
     error: null,
     // Latest in-flight request id so stale fetches don't overwrite newer ones.
     reqSeq: 0,
+    // Batch 4 — overlay-checkbox state (closes known-issues #3). `my` and
+    // `others` filter trade markers by trader-address; `avg` renders a
+    // horizontal price-line at the volume-weighted average of own trades;
+    // `netPos` renders a horizontal line at the current spot price when
+    // the user holds a nonzero balance for the active token. Defaults
+    // reproduce mockup state (a-main.html): My on, Others off, Avg off,
+    // Net pos on.
+    show: {
+      my: persistedShow?.my ?? true,
+      others: persistedShow?.others ?? false,
+      avg: persistedShow?.avg ?? false,
+      netPos: persistedShow?.netPos ?? true,
+    },
+    // Lowercased current wallet address (or null). Used to split markers
+    // into my/others. Wired by main.js via setOwnAddress().
+    ownAddress: null,
+    // Map of lowercased token-address → balance (number, in display units;
+    // 0 / undefined / negative = no position). Net-pos line renders only
+    // for tokens with a nonzero balance here. Wired via setOwnBalance().
+    // Until batch 6 (My Wallet tab) plumbs real balances, this stays empty
+    // and the Net-pos toggle is a no-op on the live app — the setter
+    // exists so tests can drive the behaviour today.
+    ownBalances: new Map(),
   };
 
   // ── Skeleton ────────────────────────────────────────────────────────────
@@ -212,9 +293,44 @@ export function mountChart(container, options = {}) {
     unitGroup.appendChild(btn);
   }
 
+  // Overlay-checkboxes group (My / Others / Avg buy / Net pos) — Batch 4.
+  // Inline in the toolbar row, right-aligned via margin-left:auto, with
+  // a separator on its left edge — mirrors a-main.html .tb-check group
+  // sitting next to the unit toggle. The floating overlay slot above the
+  // canvas is reserved for OHLC crosshair data (batch 4.5).
+  const overlaySep = el('span', {
+    className: 'pt-chart__tb-sep',
+    attrs: { 'aria-hidden': 'true' },
+  });
+  const overlayGroup = el('div', {
+    className: 'pt-chart__overlays',
+    dataset: { testId: 'chart-overlays' },
+    attrs: { role: 'group', 'aria-label': 'Chart overlays' },
+  });
+  const overlayButtons = {};
+  for (const key of OVERLAYS) {
+    const btn = el('button', {
+      className: 'pt-chart__overlay-btn',
+      dataset: { overlay: key, testId: `chart-overlay-${key}` },
+      attrs: {
+        type: 'button',
+        role: 'checkbox',
+        'aria-checked': state.show[key] ? 'true' : 'false',
+      },
+    });
+    const cb = el('span', { className: 'pt-chart__overlay-cb', attrs: { 'aria-hidden': 'true' } });
+    const label = el('span', { className: 'pt-chart__overlay-label', text: OVERLAY_LABEL[key] });
+    btn.appendChild(cb);
+    btn.appendChild(label);
+    overlayButtons[key] = btn;
+    overlayGroup.appendChild(btn);
+  }
+
   toolbar.appendChild(tfGroup);
   toolbar.appendChild(typeGroup);
   toolbar.appendChild(unitGroup);
+  toolbar.appendChild(overlaySep);
+  toolbar.appendChild(overlayGroup);
 
   // Stats bar: price · change% · supply · marketCap · holders.
   const statsBar = el('div', {
@@ -243,7 +359,9 @@ export function mountChart(container, options = {}) {
   statsBar.appendChild(mcapStat.cell);
   statsBar.appendChild(holdersStat.cell);
 
-  // Chart canvas host.
+  // Chart canvas host. position:relative is set in styles.css so the
+  // future OHLC crosshair overlay (batch 4.5) can absolutely-position
+  // itself inside this slot.
   const canvasHost = el('div', {
     className: 'pt-chart__canvas',
     dataset: { testId: 'chart-canvas' },
@@ -309,6 +427,120 @@ export function mountChart(container, options = {}) {
     return null;
   }
 
+  function computeMarkers() {
+    // Filter points by overlay state, then map to lightweight-charts markers.
+    // lightweight-charts v4 requires markers sorted ascending by time.
+    return state.points
+      .filter((p) => {
+        if (!p || (p.type !== 'buy' && p.type !== 'sell')) return false;
+        const mine = isOwnTrade(p.trader, state.ownAddress);
+        if (mine && !state.show.my) return false;
+        if (!mine && !state.show.others) return false;
+        return true;
+      })
+      .map(pointToMarker)
+      .filter(Boolean)
+      .sort((a, b) => a.time - b.time);
+  }
+
+  /** Volume-weighted average price across own trades. NaN if no own data. */
+  function computeOwnAvgPrice() {
+    let sum = 0;
+    let weight = 0;
+    for (const p of state.points) {
+      if (!isOwnTrade(p?.trader, state.ownAddress)) continue;
+      if (p.type !== 'buy' && p.type !== 'sell') continue;
+      const price = Number(p.price);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const vol = Number(p.volume);
+      const w = Number.isFinite(vol) && vol > 0 ? vol : 1;
+      sum += price * w;
+      weight += w;
+    }
+    if (weight === 0) return NaN;
+    return sum / weight;
+  }
+
+  let avgPriceLine = null;
+  let netPosPriceLine = null;
+
+  function renderAvgLine() {
+    if (!series) return;
+    if (avgPriceLine && typeof series.removePriceLine === 'function') {
+      try {
+        series.removePriceLine(avgPriceLine);
+      } catch {
+        /* ignore */
+      }
+    }
+    avgPriceLine = null;
+    if (!state.show.avg) return;
+    if (typeof series.createPriceLine !== 'function') return;
+    const avg = computeOwnAvgPrice();
+    if (!Number.isFinite(avg)) return;
+    try {
+      avgPriceLine = series.createPriceLine({
+        price: avg,
+        color: '#e0a93a',
+        lineWidth: 1,
+        lineStyle: 2, // dashed (lightweight-charts LineStyle.Dashed = 2)
+        axisLabelVisible: true,
+        title: 'Avg',
+      });
+    } catch {
+      avgPriceLine = null;
+    }
+  }
+
+  /**
+   * Return the current user's balance for the active token, in display
+   * units (number). 0 (or unknown) means "no position" → no line.
+   *
+   * Best-effort interpretation: the mockup shows Net pos as a marker
+   * indicating an open position. We treat the line as "render at current
+   * spot price iff the wallet holds >0 of the active token". When batch 6
+   * (My Wallet tab) plumbs real balances via setOwnBalance(), this lights
+   * up; until then the toggle is a controlled no-op on the live app.
+   */
+  function currentOwnBalance() {
+    const addr = state.token?.address;
+    if (!addr) return 0;
+    const b = state.ownBalances.get(addr.toLowerCase());
+    return typeof b === 'number' && Number.isFinite(b) && b > 0 ? b : 0;
+  }
+
+  function renderNetPosLine() {
+    if (!series) return;
+    if (netPosPriceLine && typeof series.removePriceLine === 'function') {
+      try {
+        series.removePriceLine(netPosPriceLine);
+      } catch {
+        /* ignore */
+      }
+    }
+    netPosPriceLine = null;
+    if (!state.show.netPos) return;
+    if (!state.ownAddress) return; // disconnected → no position to draw
+    if (currentOwnBalance() <= 0) return;
+    if (typeof series.createPriceLine !== 'function') return;
+    const price = lastCandleClose();
+    if (typeof price !== 'number' || !Number.isFinite(price)) return;
+    try {
+      netPosPriceLine = series.createPriceLine({
+        price,
+        // Use the design-system accent with an inline fallback — tokens.css
+        // owns the canonical value; we don't introduce new tokens here.
+        color: 'var(--accent, #3ddb8e)',
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        axisLabelVisible: true,
+        title: 'Pos',
+      });
+    } catch {
+      netPosPriceLine = null;
+    }
+  }
+
   function setSeriesData(s) {
     if (!s) return;
     if (state.type === 'candles') {
@@ -318,12 +550,7 @@ export function mountChart(container, options = {}) {
       if (typeof s.setData === 'function') s.setData(lineData);
     }
     if (typeof s.setMarkers === 'function') {
-      // lightweight-charts v4 requires markers sorted ascending by time.
-      const markers = state.points
-        .map(pointToMarker)
-        .filter(Boolean)
-        .sort((a, b) => a.time - b.time);
-      s.setMarkers(markers);
+      s.setMarkers(computeMarkers());
     }
   }
 
@@ -376,8 +603,13 @@ export function mountChart(container, options = {}) {
         /* ignore */
       }
     }
+    // Old series is gone — its priceLine handles are invalid.
+    avgPriceLine = null;
+    netPosPriceLine = null;
     series = createSeries();
     setSeriesData(series);
+    renderAvgLine();
+    renderNetPosLine();
   }
 
   // ── Stats / status rendering ────────────────────────────────────────────
@@ -435,6 +667,11 @@ export function mountChart(container, options = {}) {
     }
     for (const u of UNITS) {
       unitButtons[u].setAttribute('aria-pressed', u === state.unit ? 'true' : 'false');
+    }
+    for (const k of OVERLAYS) {
+      const on = !!state.show[k];
+      overlayButtons[k].setAttribute('aria-checked', on ? 'true' : 'false');
+      overlayButtons[k].classList.toggle('is-on', on);
     }
   }
 
@@ -524,9 +761,27 @@ export function mountChart(container, options = {}) {
     // F0.6 ships the control; backend extension is out of scope.
   }
 
+  function onOverlayClick(e) {
+    const btn = e.target.closest('[data-overlay]');
+    if (!btn) return;
+    const key = btn.dataset.overlay;
+    if (!OVERLAYS.includes(key)) return;
+    state.show[key] = !state.show[key];
+    persistOverlays(state.show);
+    applyToolbarAria();
+    // My/Others changes affect which markers render. Avg and Net pos
+    // change horizontal price-lines. All are cheap — just refresh.
+    if (series && typeof series.setMarkers === 'function') {
+      series.setMarkers(computeMarkers());
+    }
+    renderAvgLine();
+    renderNetPosLine();
+  }
+
   tfGroup.addEventListener('click', onTfClick);
   typeGroup.addEventListener('click', onTypeClick);
   unitGroup.addEventListener('click', onUnitClick);
+  overlayGroup.addEventListener('click', onOverlayClick);
 
   // ── Public API ──────────────────────────────────────────────────────────
   function setToken(token) {
@@ -568,6 +823,8 @@ export function mountChart(container, options = {}) {
     } else if (typeof series.update === 'function') {
       series.update({ time: updated.time, value: updated.close });
     }
+    // Net-pos line tracks current spot — refresh when price ticks.
+    if (state.show.netPos) renderNetPosLine();
   }
 
   /**
@@ -594,11 +851,11 @@ export function mountChart(container, options = {}) {
       trader: trade.trader || '',
     });
     if (series && typeof series.setMarkers === 'function') {
-      const markers = state.points
-        .map(pointToMarker)
-        .filter(Boolean)
-        .sort((a, b) => a.time - b.time);
-      series.setMarkers(markers);
+      series.setMarkers(computeMarkers());
+    }
+    // Own trade may shift the avg — refresh the price-line if visible.
+    if (state.show.avg && isOwnTrade(trade.trader, state.ownAddress)) {
+      renderAvgLine();
     }
   }
 
@@ -606,8 +863,49 @@ export function mountChart(container, options = {}) {
     tfGroup.removeEventListener('click', onTfClick);
     typeGroup.removeEventListener('click', onTypeClick);
     unitGroup.removeEventListener('click', onUnitClick);
+    overlayGroup.removeEventListener('click', onOverlayClick);
     destroyChart();
     container.replaceChildren();
+  }
+
+  /**
+   * Wire the current wallet address (or null). Used for the My/Others
+   * marker split and the own-trades volume-weighted Avg line. Pass lower-
+   * or mixed-case; comparison is case-insensitive.
+   */
+  function setOwnAddress(addr) {
+    const next = typeof addr === 'string' && addr ? addr.toLowerCase() : null;
+    if (next === state.ownAddress) return;
+    state.ownAddress = next;
+    if (next === null) {
+      // Disconnect → forget balances too (next connect re-supplies).
+      state.ownBalances.clear();
+    }
+    if (series && typeof series.setMarkers === 'function') {
+      series.setMarkers(computeMarkers());
+    }
+    renderAvgLine();
+    renderNetPosLine();
+  }
+
+  /**
+   * Set the current user's balance for a token (display units; not wei).
+   * Pass 0 / negative / non-number to clear. Triggers a Net-pos line
+   * re-render when the token is the active one. Wired by main.js when
+   * batch 6 (My Wallet tab) ships real balances; until then the live app
+   * leaves Net pos as a controlled no-op.
+   */
+  function setOwnBalance(tokenAddress, balance) {
+    if (typeof tokenAddress !== 'string' || !tokenAddress) return;
+    const key = tokenAddress.toLowerCase();
+    const num = typeof balance === 'number' && Number.isFinite(balance) ? balance : 0;
+    if (num > 0) {
+      state.ownBalances.set(key, num);
+    } else {
+      state.ownBalances.delete(key);
+    }
+    const active = state.token?.address?.toLowerCase();
+    if (active === key) renderNetPosLine();
   }
 
   // Initial state.
@@ -621,6 +919,8 @@ export function mountChart(container, options = {}) {
     setPeriod,
     applyPrice,
     applyTrade,
+    setOwnAddress,
+    setOwnBalance,
     refresh: loadChart,
     destroy,
     // Test seams — read-only views.

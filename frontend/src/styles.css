@@ -746,6 +746,79 @@ body.mode-dashboard .pt-profile {
   outline-offset: 1px;
 }
 
+/* Overlay-checkboxes (My / Others / Avg buy / Net pos) — Batch 4, closes
+   known-issues #3. Inline in the toolbar row, right-aligned via margin-left
+   auto, with a separator on the left edge — mirrors a-main.html .tb-check
+   group (.toolbar > .tb-sep + .tb-check[]). The floating slot above the
+   canvas is reserved for OHLC crosshair data (batch 4.5). */
+
+.pt-chart__tb-sep {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px 0 auto;
+  background: var(--line, var(--border));
+}
+
+.pt-chart__overlays {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-ui, inherit);
+}
+
+.pt-chart__overlay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-2, var(--text-muted));
+  border: none;
+  padding: 0 2px;
+  font-size: 11px;
+  font-family: inherit;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease;
+}
+
+.pt-chart__overlay-btn:hover {
+  color: var(--text);
+}
+
+.pt-chart__overlay-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pt-chart__overlay-cb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--line-strong, var(--border));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--bg-0, #0a0f0d);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pt-chart__overlay-btn.is-on .pt-chart__overlay-cb {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pt-chart__overlay-btn.is-on .pt-chart__overlay-cb::after {
+  content: '\2713'; /* check mark */
+}
+
+.pt-chart__overlay-btn.is-on {
+  color: var(--text);
+}
+
 .pt-chart__stats {
   display: flex;
   flex-wrap: wrap;

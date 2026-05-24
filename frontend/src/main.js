@@ -439,14 +439,22 @@ function bootstrap() {
   // Phase 1.5 batch 3: refresh position dots whenever the wallet flips.
   // Disconnect → /profile 401 → positionByAddr cleared, dots vanish.
   // Connect → /profile resolves with the new wallet's country balances.
-  // Runs as a second listener so it stays independent of the SIWE/access
+  // Runs as a separate listener so it stays independent of the SIWE/access
   // state machine in createAccountChangeHandler (which has its own race
   // semantics we don't want to entangle with).
   onAccountChange(() => {
     refreshPositions();
   });
-  // Kick once on boot so a returning user (cookie still valid) sees their
-  // dots on first paint instead of after the next wallet event.
+  // Phase 1.5 batch 4: keep chart's My/Others filter and Avg/Net-pos
+  // overlays in sync with the active wallet. `setOwnAddress(null)` on
+  // disconnect also clears the chart's internal balance map (Net pos line
+  // disappears cleanly). Balances themselves (chart.setOwnBalance) are
+  // not plumbed yet — follow-up wires bottom.setToken → chart.setOwnBalance.
+  onAccountChange((acc) => {
+    chart.setOwnAddress(acc?.address ?? null);
+  });
+  // Kick positions once on boot so a returning user (cookie still valid)
+  // sees their dots on first paint instead of after the next wallet event.
   refreshPositions();
   // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
   // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).

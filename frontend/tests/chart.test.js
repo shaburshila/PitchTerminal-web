@@ -19,6 +19,7 @@ function makeChartLib() {
       data: null,
       markers: null,
       updates: [],
+      priceLines: [],
       setData: vi.fn(function (d) {
         this.data = d;
       }),
@@ -27,6 +28,15 @@ function makeChartLib() {
       }),
       update: vi.fn(function (point) {
         this.updates.push(point);
+      }),
+      createPriceLine: vi.fn(function (opts) {
+        const line = { opts, removed: false };
+        this.priceLines.push(line);
+        return line;
+      }),
+      removePriceLine: vi.fn(function (line) {
+        if (line) line.removed = true;
+        this.priceLines = this.priceLines.filter((l) => l !== line);
       }),
     };
     return series;
@@ -135,6 +145,13 @@ describe('mountChart', () => {
     document.body.replaceChildren();
     container = document.createElement('section');
     document.body.appendChild(container);
+    // Batch 4: chart overlays persist to localStorage. Clear between tests
+    // so prior toggles don't leak default state.
+    try {
+      localStorage.removeItem('pt:chart:overlays');
+    } catch {
+      /* ignore */
+    }
   });
 
   it('throws when container is not an HTMLElement', () => {
@@ -155,6 +172,21 @@ describe('mountChart', () => {
     expect(container.querySelector('[data-test-id="chart-type-line"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="chart-unit-pitch"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="chart-unit-country"]')).not.toBeNull();
+    // Batch 4 — overlay checkboxes My / Others / Avg buy / Net pos
+    // rendered inline in the toolbar row (a-main.html .tb-check parity).
+    // The floating slot above the canvas is reserved for OHLC crosshair
+    // data (batch 4.5).
+    const overlays = container.querySelector('[data-test-id="chart-overlays"]');
+    expect(overlays).not.toBeNull();
+    const toolbar = container.querySelector('[data-test-id="chart-toolbar"]');
+    expect(toolbar.contains(overlays)).toBe(true);
+    const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+    expect(canvas.contains(overlays)).toBe(false);
+    for (const key of ['my', 'others', 'avg', 'netPos']) {
+      const btn = container.querySelector(`[data-test-id="chart-overlay-${key}"]`);
+      expect(btn).not.toBeNull();
+      expect(btn.getAttribute('role')).toBe('checkbox');
+    }
     expect(container.querySelector('[data-test-id="chart-stats"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="chart-canvas"]')).not.toBeNull();
   });
@@ -181,6 +213,9 @@ describe('mountChart', () => {
     const api = makeApi();
     const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
 
+    // Mockup default is others=off — this test asserts on all markers,
+    // so turn Others on to keep its non-overlay-specific intent.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
     chart.setToken(makePlayer());
     await flush();
 
@@ -358,6 +393,8 @@ describe('mountChart', () => {
   it('applyTrade appends a marker for the active token', async () => {
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    // Mockup default others=off — turn on so all markers render.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
     chart.setToken(makePlayer());
     await flush();
     const series = created.charts[0].seriesList[0];
@@ -371,6 +408,7 @@ describe('mountChart', () => {
   it('applyTrade accepts SSE shape with `timestamp` field (api-spec §8.3)', async () => {
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
     chart.setToken(makePlayer());
     await flush();
     const series = created.charts[0].seriesList[0];
@@ -417,6 +455,227 @@ describe('mountChart', () => {
     chart.destroy();
     expect(created.charts[0].removed).toBe(true);
     expect(container.children.length).toBe(0);
+  });
+
+  // ── Batch 4: overlay-checkboxes (My / Others / Avg) — closes #3 ──────────
+
+  it('default overlays match mockup: my=on, others=off, avg=off, netPos=on', () => {
+    const { lib } = makeChartLib();
+    mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    const my = container.querySelector('[data-test-id="chart-overlay-my"]');
+    const others = container.querySelector('[data-test-id="chart-overlay-others"]');
+    const avg = container.querySelector('[data-test-id="chart-overlay-avg"]');
+    const netPos = container.querySelector('[data-test-id="chart-overlay-netPos"]');
+    expect(my.getAttribute('aria-checked')).toBe('true');
+    expect(others.getAttribute('aria-checked')).toBe('false');
+    expect(avg.getAttribute('aria-checked')).toBe('false');
+    expect(netPos.getAttribute('aria-checked')).toBe('true');
+    expect(my.classList.contains('is-on')).toBe(true);
+    expect(others.classList.contains('is-on')).toBe(false);
+    expect(avg.classList.contains('is-on')).toBe(false);
+    expect(netPos.classList.contains('is-on')).toBe(true);
+  });
+
+  it('toggling "Others" hides others-only markers, keeps "my" markers', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [
+        { time: 1709000100, price: 10.7, volume: 5, type: 'buy', trader: '0xMe' },
+        { time: 1709000200, price: 11.2, volume: 3, type: 'sell', trader: '0xOther' },
+      ],
+    });
+    const chart = mountChart(container, {
+      apiClient: makeApi(payload),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(makePlayer());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    // Mockup default: my=on, others=off → only my marker rendered.
+    expect(series.markers.length).toBe(1);
+    expect(series.markers[0].position).toBe('belowBar'); // my=buy
+
+    // Toggle Others ON → both markers.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
+    expect(series.markers.length).toBe(2);
+
+    // Toggle Others OFF → only my marker remains.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
+    expect(series.markers.length).toBe(1);
+    expect(series.markers[0].position).toBe('belowBar');
+
+    // Toggle My OFF → no markers.
+    container.querySelector('[data-test-id="chart-overlay-my"]').click();
+    expect(series.markers.length).toBe(0);
+
+    // Toggle Others back ON → only others marker.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
+    expect(series.markers.length).toBe(1);
+    expect(series.markers[0].position).toBe('aboveBar'); // other=sell
+  });
+
+  it('toggling "Avg" creates a price-line at volume-weighted own-trade average', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [
+        { time: 1709000100, price: 10, volume: 1, type: 'buy', trader: '0xMe' },
+        { time: 1709000200, price: 20, volume: 3, type: 'buy', trader: '0xMe' },
+        // Other trade ignored for avg even with high volume.
+        { time: 1709000250, price: 999, volume: 100, type: 'sell', trader: '0xOther' },
+      ],
+    });
+    const chart = mountChart(container, {
+      apiClient: makeApi(payload),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(makePlayer());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    expect(series.priceLines.length).toBe(0); // avg off by default
+
+    container.querySelector('[data-test-id="chart-overlay-avg"]').click();
+    expect(series.priceLines.length).toBe(1);
+    // Volume-weighted avg = (10*1 + 20*3) / (1+3) = 70/4 = 17.5.
+    expect(series.priceLines[0].opts.price).toBeCloseTo(17.5, 5);
+
+    // Toggle off → price-line removed.
+    container.querySelector('[data-test-id="chart-overlay-avg"]').click();
+    expect(series.priceLines.length).toBe(0);
+  });
+
+  it('overlay state persists via localStorage across remounts', async () => {
+    const { lib } = makeChartLib();
+    const chart1 = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    // From mockup defaults (my=on, others=off, avg=off, netPos=on), flip
+    // each one once so we know persistence respects per-key state.
+    container.querySelector('[data-test-id="chart-overlay-my"]').click(); // my → off
+    container.querySelector('[data-test-id="chart-overlay-others"]').click(); // others → on
+    container.querySelector('[data-test-id="chart-overlay-avg"]').click(); // avg → on
+    container.querySelector('[data-test-id="chart-overlay-netPos"]').click(); // netPos → off
+    chart1.destroy();
+
+    const container2 = document.createElement('section');
+    document.body.appendChild(container2);
+    const { lib: lib2 } = makeChartLib();
+    mountChart(container2, { apiClient: makeApi(), chartLibFactory: () => lib2 });
+
+    expect(
+      container2.querySelector('[data-test-id="chart-overlay-my"]').getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(
+      container2.querySelector('[data-test-id="chart-overlay-others"]').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      container2.querySelector('[data-test-id="chart-overlay-avg"]').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      container2.querySelector('[data-test-id="chart-overlay-netPos"]').getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('setOwnAddress re-classifies markers without refetching data', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [
+        { time: 1709000100, price: 10, volume: 1, type: 'buy', trader: '0xMe' },
+        { time: 1709000200, price: 11, volume: 1, type: 'sell', trader: '0xOther' },
+      ],
+    });
+    const api = makeApi(payload);
+    const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    expect(api.getChart).toHaveBeenCalledTimes(1);
+
+    // Mockup default: others=off. With no own address, both points are
+    // "others", and others=off, so nothing is shown.
+    const series = created.charts[0].seriesList[0];
+    expect(series.markers.length).toBe(0);
+
+    // Now identify ourselves → 0xMe's marker should appear (my still on).
+    chart.setOwnAddress('0xme');
+    expect(api.getChart).toHaveBeenCalledTimes(1); // no refetch
+    expect(series.markers.length).toBe(1);
+    expect(series.markers[0].position).toBe('belowBar');
+  });
+
+  it('setOwnAddress(null) clears avg price-line when avg is on', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [{ time: 1709000100, price: 10, volume: 1, type: 'buy', trader: '0xMe' }],
+    });
+    const chart = mountChart(container, {
+      apiClient: makeApi(payload),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(makePlayer());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    container.querySelector('[data-test-id="chart-overlay-avg"]').click(); // avg → on
+    expect(series.priceLines.length).toBeGreaterThanOrEqual(1);
+    const hadAvg = series.priceLines.some((l) => l.opts?.title === 'Avg');
+    expect(hadAvg).toBe(true);
+
+    // Disconnect → avg has no own-trades → line goes away.
+    chart.setOwnAddress(null);
+    const stillHasAvg = series.priceLines.some((l) => l.opts?.title === 'Avg');
+    expect(stillHasAvg).toBe(false);
+  });
+
+  it('Net pos line renders at spot when balance>0 and clears on disconnect', async () => {
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    // netPos default = on, but no balance set → no line.
+    let netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(netLines.length).toBe(0);
+
+    // Supply a balance → line appears at last candle close (11.8 per payload).
+    chart.setOwnBalance(player.address, 5);
+    netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(netLines.length).toBe(1);
+    expect(netLines[0].opts.price).toBeCloseTo(11.8, 5);
+
+    // Disconnect → net pos line cleared (ownAddress null → no position).
+    chart.setOwnAddress(null);
+    netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(netLines.length).toBe(0);
+  });
+
+  it('toggling Net pos off removes the line without affecting balance state', async () => {
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    chart.setOwnBalance(player.address, 5);
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
+
+    container.querySelector('[data-test-id="chart-overlay-netPos"]').click(); // off
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+
+    container.querySelector('[data-test-id="chart-overlay-netPos"]').click(); // on
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
   });
 
   it('stale fetch does not overwrite newer response', async () => {
