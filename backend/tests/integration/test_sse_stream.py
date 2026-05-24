@@ -99,9 +99,7 @@ class TestSSEKeepalive:
             resp.close()
 
 
-@pytest.mark.skip(
-    reason="See TestSSEKeepalive skip — streaming-client/threading limitation."
-)
+@pytest.mark.skip(reason="See TestSSEKeepalive skip — streaming-client/threading limitation.")
 class TestSSEPtConfigPassthrough:
     """Send a NOTIFY pt_config via a sidecar psycopg connection and expect
     the SSE stream to emit ``event: config`` carrying the payload."""
@@ -121,9 +119,7 @@ class TestSSEPtConfigPassthrough:
                 "txHash": "0x" + "a" * 64,
                 "test_marker": "sse_passthrough",
             }
-            with psycopg.connect(
-                os.environ["DATABASE_URL"], autocommit=True
-            ) as sidecar:
+            with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as sidecar:
                 sidecar.execute("SELECT pg_notify('pt_config', %s)", (json.dumps(payload),))
 
             data = _consume_with_deadline(resp.response, deadline_sec=2.0)
@@ -134,9 +130,7 @@ class TestSSEPtConfigPassthrough:
             resp.close()
 
 
-@pytest.mark.skip(
-    reason="See TestSSEKeepalive skip — streaming-client/threading limitation."
-)
+@pytest.mark.skip(reason="See TestSSEKeepalive skip — streaming-client/threading limitation.")
 class TestSSEPtPricesIntegration:
     """Verify that a NOTIFY pt_prices triggers a market_state lookup and the
     resulting ``event: prices`` frame contains the expected token address.
@@ -182,9 +176,7 @@ class TestSSEPtPricesIntegration:
         resp = client.get("/api/v1/stream", buffered=False)
         try:
             time.sleep(0.3)
-            with psycopg.connect(
-                os.environ["DATABASE_URL"], autocommit=True
-            ) as sidecar:
+            with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as sidecar:
                 sidecar.execute(
                     "SELECT pg_notify('pt_prices', %s)",
                     (json.dumps([dummy_addr]),),

@@ -115,9 +115,7 @@ def _make_w3(eth_balance: int, multicall_returns: list[bytes]) -> Any:
     # Build the aggregate3 fake.
     contract = MagicMock()
     aggregate3_fn = MagicMock()
-    aggregate3_fn.return_value.call.return_value = [
-        (len(r) > 0, r) for r in multicall_returns
-    ]
+    aggregate3_fn.return_value.call.return_value = [(len(r) > 0, r) for r in multicall_returns]
     contract.functions.aggregate3 = aggregate3_fn
     w3.eth.contract.return_value = contract
     return w3

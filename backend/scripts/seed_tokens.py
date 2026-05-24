@@ -156,9 +156,7 @@ def seed_from_data(
     for p in players:
         country_sym = p["country"]
         if country_sym not in symbol_to_addr:
-            raise ValueError(
-                f"player {p.get('symbol')!r}: unknown country symbol {country_sym!r}"
-            )
+            raise ValueError(f"player {p.get('symbol')!r}: unknown country symbol {country_sym!r}")
         role = p["role"]
         if role not in _VALID_ROLES:
             raise ValueError(f"player {p.get('symbol')!r}: invalid role {role!r}")
@@ -180,8 +178,7 @@ def seed_from_data(
         )
 
     prepared_countries: list[tuple[str, str, str]] = [
-        (_normalize_address(c["address"]), str(c["name"]), str(c["symbol"]))
-        for c in countries
+        (_normalize_address(c["address"]), str(c["name"]), str(c["symbol"])) for c in countries
     ]
 
     if dry_run:
@@ -207,9 +204,7 @@ def _connect_default() -> Any:
 
     url = os.environ.get("DATABASE_URL")
     if not url:
-        raise RuntimeError(
-            "DATABASE_URL not set — put it in backend/.env or export it"
-        )
+        raise RuntimeError("DATABASE_URL not set — put it in backend/.env or export it")
     # Normalize `postgresql+psycopg://` (SQLAlchemy-style) to plain
     # `postgresql://` for raw psycopg.
     if url.startswith("postgresql+psycopg://"):

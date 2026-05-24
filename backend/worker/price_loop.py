@@ -80,9 +80,7 @@ def _addr_padded(addr: str) -> bytes:
 def _load_tokens() -> list[dict[str, Any]]:
     """Return rows ``{address, kind, country_address}`` for every token."""
 
-    return fetch_all(
-        "SELECT address, kind, country_address FROM tokens ORDER BY kind, address"
-    )
+    return fetch_all("SELECT address, kind, country_address FROM tokens ORDER BY kind, address")
 
 
 def _build_calls(
@@ -115,9 +113,7 @@ def _build_calls(
     return calls, plan
 
 
-def _decode_results(
-    plan: list[tuple[str, str]], results: list[bytes]
-) -> dict[str, dict[str, int]]:
+def _decode_results(plan: list[tuple[str, str]], results: list[bytes]) -> dict[str, dict[str, int]]:
     """Group raw multicall returns into ``{address: {"price": w, "supply": w}}``."""
 
     if len(plan) != len(results):

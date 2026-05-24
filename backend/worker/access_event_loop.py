@@ -71,11 +71,7 @@ def tick() -> None:
 
         # On the very first tick the cursor key may be missing — fall back to
         # access_deploy_block (env) or head (so we don't scan from 0).
-        default_cursor = (
-            int(config.access_deploy_block)
-            if config.access_deploy_block > 0
-            else head
-        )
+        default_cursor = int(config.access_deploy_block) if config.access_deploy_block > 0 else head
         last_scanned = state.get_int_key("access_last_scanned_block", default_cursor)
         from_block = last_scanned + 1
         if from_block > head:

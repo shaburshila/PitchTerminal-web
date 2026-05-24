@@ -85,9 +85,7 @@ class TestSend:
             operator_alerts.send("hi")
 
     def test_swallows_generic_exception(self, _with_creds: Any) -> None:
-        with patch.object(
-            operator_alerts.httpx, "post", side_effect=RuntimeError("network down")
-        ):
+        with patch.object(operator_alerts.httpx, "post", side_effect=RuntimeError("network down")):
             operator_alerts.send("hi")
 
     def test_logs_warning_on_4xx(self, _with_creds: Any) -> None:

@@ -19,9 +19,7 @@ def cleanup() -> None:
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM auth_nonces WHERE created_at < now() - interval '10 minutes'"
-            )
+            cur.execute("DELETE FROM auth_nonces WHERE created_at < now() - interval '10 minutes'")
             deleted = cur.rowcount
             conn.commit()
         if deleted:

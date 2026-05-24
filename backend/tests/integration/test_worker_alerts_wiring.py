@@ -35,11 +35,10 @@ class TestEventLoopWiring:
         with patch.object(event_loop._w3, "get_w3", side_effect=RuntimeError("rpc")):
             object.__setattr__(event_loop.config, "player_hook", "0xabc")
             try:
-                with patch.object(
-                    operator_alerts, "record_tick_failure"
-                ) as fail_mock, patch.object(
-                    operator_alerts, "record_tick_success"
-                ) as ok_mock:
+                with (
+                    patch.object(operator_alerts, "record_tick_failure") as fail_mock,
+                    patch.object(operator_alerts, "record_tick_success") as ok_mock,
+                ):
                     event_loop.tick()
                     assert fail_mock.call_count == 1
                     assert fail_mock.call_args.args[0] == "event_loop"

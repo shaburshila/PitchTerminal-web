@@ -68,9 +68,7 @@ def _build_siwe(
         chain_id=chain_id,
         nonce=nonce,
         issued_at=issued_at.isoformat().replace("+00:00", "Z"),
-        expiration_time=(issued_at + timedelta(minutes=5))
-        .isoformat()
-        .replace("+00:00", "Z"),
+        expiration_time=(issued_at + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
         statement="Sign in to PitchTerminal.",
     )
     return msg.prepare_message()
@@ -133,9 +131,7 @@ def test_invalid_signature_returns_401(app) -> None:
     msg = _build_siwe(address=acct.address, nonce=nonce)
     sig = _sign(msg, other.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 401
     assert _problem_body(resp)["code"] == "auth.siwe.invalid_signature"
 
@@ -145,9 +141,7 @@ def test_unknown_nonce_returns_invalid_nonce(app) -> None:
     msg = _build_siwe(address=acct.address, nonce="nope" + "x" * 12)
     sig = _sign(msg, acct.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 401
     assert _problem_body(resp)["code"] == "auth.siwe.invalid_nonce"
 
@@ -159,9 +153,7 @@ def test_stale_nonce_returns_invalid_nonce(app) -> None:
     msg = _build_siwe(address=acct.address, nonce=nonce)
     sig = _sign(msg, acct.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 401
     assert _problem_body(resp)["code"] == "auth.siwe.invalid_nonce"
 
@@ -172,9 +164,7 @@ def test_wrong_domain_returns_invalid_domain(app) -> None:
     msg = _build_siwe(address=acct.address, nonce=nonce, domain="evil.example")
     sig = _sign(msg, acct.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 401
     assert _problem_body(resp)["code"] == "auth.siwe.invalid_domain"
 

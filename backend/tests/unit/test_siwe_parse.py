@@ -186,7 +186,8 @@ class TestNonceConsumption:
         # that path exactly once with a DELETE statement.
         with (
             patch.object(
-                siwe_mod, "fetch_one",
+                siwe_mod,
+                "fetch_one",
                 return_value={"created_at": datetime.now(UTC)},
             ) as fo,
             patch.object(siwe_mod, "execute", return_value=1),
@@ -201,7 +202,8 @@ class TestNonceConsumption:
         sig = _sign(msg, pk)
         with (
             patch.object(
-                siwe_mod, "fetch_one",
+                siwe_mod,
+                "fetch_one",
                 return_value={"created_at": datetime.now(UTC)},
             ),
             patch.object(siwe_mod, "execute", return_value=1) as ex,

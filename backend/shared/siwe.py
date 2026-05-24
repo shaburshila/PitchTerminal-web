@@ -138,8 +138,7 @@ def _consume_nonce_atomic(nonce: str) -> None:
 
     cutoff = datetime.now(UTC) - timedelta(seconds=NONCE_TTL_SEC)
     row = fetch_one(
-        "DELETE FROM auth_nonces WHERE nonce = %s AND created_at > %s "
-        "RETURNING created_at",
+        "DELETE FROM auth_nonces WHERE nonce = %s AND created_at > %s " "RETURNING created_at",
         (nonce, cutoff),
     )
     if row is None:
@@ -223,9 +222,7 @@ def verify_message(
     # controlling a malicious front-end on our domain could inject phishing
     # text into the wallet prompt while keeping domain/uri/chain valid.
     if parsed.statement != REQUIRED_STATEMENT:
-        raise InvalidDomain(
-            f"Statement mismatch — expected exactly {REQUIRED_STATEMENT!r}"
-        )
+        raise InvalidDomain(f"Statement mismatch — expected exactly {REQUIRED_STATEMENT!r}")
 
     # 4) Address binding.
     if parsed.address.lower() != expected_address.lower():

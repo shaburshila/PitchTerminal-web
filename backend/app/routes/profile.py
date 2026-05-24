@@ -97,9 +97,7 @@ def _load_all_country_addresses() -> list[str]:
     """All ``kind='country'`` token addresses, ascending — used as the
     Multicall target list for the ``balances.countries`` block."""
 
-    rows = fetch_all(
-        "SELECT address FROM tokens WHERE kind = 'country' ORDER BY address"
-    )
+    rows = fetch_all("SELECT address FROM tokens WHERE kind = 'country' ORDER BY address")
     return [r["address"].strip() for r in rows]
 
 
@@ -374,7 +372,9 @@ def get_profile() -> Any:
         realized = received - avg_buy * sold
         # Unrealized is denominated in the token's *base* (country for players,
         # PITCH for countries). Multiply by ``rate`` to convert to PITCH.
-        unreal_base = position * meta["price_pitch"] / rate - avg_buy * position if rate > 0 else 0.0
+        unreal_base = (
+            position * meta["price_pitch"] / rate - avg_buy * position if rate > 0 else 0.0
+        )
         realized_pitch += realized * rate
         fees_pitch += float(a["fees"]) * rate
         spent_pitch += spent * rate
@@ -399,9 +399,7 @@ def get_profile() -> Any:
                     "avgBuy": round(avg_buy, 6),
                     # ``currentPrice`` in the portable API was the price in the
                     # token's *base* (country for players); we keep that.
-                    "currentPrice": round(
-                        (meta["price_pitch"] / rate) if rate > 0 else 0.0, 6
-                    ),
+                    "currentPrice": round((meta["price_pitch"] / rate) if rate > 0 else 0.0, 6),
                     "valuePitch": round(pv, 2),
                     "unrealizedPnlPitch": round(unreal_base * rate, 2),
                     "unrealizedPct": round((unreal_base / cost * 100) if cost > 0 else 0.0, 1),
@@ -442,29 +440,22 @@ def get_profile() -> Any:
     # Events are stored ASC; spec §1.5 requires DESC for trades. Reverse-sort
     # in Python (events list is already in memory) then slice the cursor window.
 
-    desc_events = sorted(
-        events, key=lambda e: (e["block_number"], e["log_index"]), reverse=True
-    )
+    desc_events = sorted(events, key=lambda e: (e["block_number"], e["log_index"]), reverse=True)
     if cursor is not None:
         b, li = cursor
         desc_events = [
             e
             for e in desc_events
-            if (e["block_number"] < b)
-            or (e["block_number"] == b and e["log_index"] < li)
+            if (e["block_number"] < b) or (e["block_number"] == b and e["log_index"] < li)
         ]
     page = desc_events[: limit + 1]
     next_cursor: str | None = None
     if len(page) > limit:
         page = page[:limit]
         last = page[-1]
-        next_cursor = encode_cursor(
-            {"b": int(last["block_number"]), "l": int(last["log_index"])}
-        )
+        next_cursor = encode_cursor({"b": int(last["block_number"]), "l": int(last["log_index"])})
 
-    trade_items = [
-        _build_trade_item(ev, token_meta.get(ev["token_address"], {})) for ev in page
-    ]
+    trade_items = [_build_trade_item(ev, token_meta.get(ev["token_address"], {})) for ev in page]
 
     # ─── Stats ─────────────────────────────────────────────────────────────
     buys = sum(int(a["buys"]) for a in agg.values())
@@ -555,17 +546,12 @@ def get_profile() -> Any:
             "feesPaidPitch": round(fees_pitch, 2),
             "closedPositions": closed_count,
             "winRatePct": round(win_rate, 1),
-            "best": (
-                {"symbol": best[0], "pnlPitch": round(best[1], 2)} if best else None
-            ),
-            "worst": (
-                {"symbol": worst[0], "pnlPitch": round(worst[1], 2)} if worst else None
-            ),
+            "best": ({"symbol": best[0], "pnlPitch": round(best[1], 2)} if best else None),
+            "worst": ({"symbol": worst[0], "pnlPitch": round(worst[1], 2)} if worst else None),
         },
         "allocation": {
             "byCountry": {
-                k: round(v, 2)
-                for k, v in sorted(alloc_country.items(), key=lambda kv: -kv[1])
+                k: round(v, 2) for k, v in sorted(alloc_country.items(), key=lambda kv: -kv[1])
             },
             "byRole": {k: round(v, 2) for k, v in alloc_role.items()},
             "players": round(alloc_players, 2),

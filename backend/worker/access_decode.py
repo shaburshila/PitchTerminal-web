@@ -108,9 +108,7 @@ def decode_access_log(log: Any) -> AccessEvent | None:
     if topic0 == rs_topic:
         raw = _to_bytes(data)
         if len(raw) < 64:
-            raise ValueError(
-                f"ReferralSplitUpdated data too short: {len(raw)} bytes (need ≥64)"
-            )
+            raise ValueError(f"ReferralSplitUpdated data too short: {len(raw)} bytes (need ≥64)")
         # Each uint16 is right-aligned in its 32-byte slot; reading the full 32
         # bytes as big-endian and casting to int gives the value (no masking
         # needed because the high bits are zero by the encoding rule).

@@ -111,9 +111,7 @@ class TestListenerLifecycle:
         with pytest.raises(RuntimeError, match="not entered"):
             list(listener.listen(timeout=0.1))
 
-    def test_context_manager_opens_and_closes(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_context_manager_opens_and_closes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_conn = MagicMock()
         mock_conn.notifies.return_value = iter([])
 

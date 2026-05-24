@@ -197,9 +197,7 @@ class TestProfileAggregates:
     def test_trades_pagination(self, app) -> None:
         # Insert 5 wallet trades; request limit=2 → expect nextCursor + items=2.
         for i in range(5):
-            _insert_event(
-                200 + i, 0, _PLAYER, _WALLET, "buy", 10**18, 10**18, 10**16
-            )
+            _insert_event(200 + i, 0, _PLAYER, _WALLET, "buy", 10**18, 10**18, 10**16)
 
         client = app.test_client()
         _set_session(client, _WALLET)
@@ -219,10 +217,7 @@ class TestProfileAggregates:
         assert len(body2["trades"]["items"]) == 2
         # Returned in DESC order; second page's first item must be older than the first
         # page's last item.
-        assert (
-            body2["trades"]["items"][0]["timestamp"]
-            < body["trades"]["items"][-1]["timestamp"]
-        )
+        assert body2["trades"]["items"][0]["timestamp"] < body["trades"]["items"][-1]["timestamp"]
 
     def test_bad_cursor_returns_400(self, app) -> None:
         client = app.test_client()
@@ -246,6 +241,7 @@ def _stub_w3(eth_wei: int, balances_by_addr: dict[str, int]) -> MagicMock:
     w3 = MagicMock()
     w3.eth.get_balance.return_value = eth_wei
     w3.to_checksum_address.side_effect = lambda a: a
+
     # The contract handle returns ``aggregate3(...).call()`` = list[(ok, bytes)].
     # ``wallet_balances`` issues calls in order [PITCH (if set), countries...].
     # We can't know the order here without inspecting calldata, so build the
@@ -288,9 +284,7 @@ class TestBalances:
         bal = body["balances"]
         assert bal["ethWei"] == str(10**18)
         assert bal["pitchWei"] == str(100 * 10**18)
-        assert bal["countries"] == [
-            {"address": _COUNTRY, "symbol": "BRA", "wei": str(50 * 10**18)}
-        ]
+        assert bal["countries"] == [{"address": _COUNTRY, "symbol": "BRA", "wei": str(50 * 10**18)}]
 
     def test_balances_falls_back_to_stub_on_rpc_error(self, app) -> None:
         """If the RPC call raises, route returns the zero-stub shape (never 500)."""
@@ -380,5 +374,3 @@ class TestValueSeriesHistorical:
         assert len(series) >= 1
         first = series[0]
         assert first["value"] == pytest.approx(16.0, abs=0.01)
-
-

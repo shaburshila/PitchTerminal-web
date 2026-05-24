@@ -137,9 +137,7 @@ def _insert_events(events: list[dict[str, Any]], timestamps: dict[int, int]) -> 
     rows = []
     for ev in events:
         ts_unix = timestamps.get(int(ev["block_number"]), 0)
-        ts_dt = (
-            datetime.fromtimestamp(ts_unix, tz=UTC) if ts_unix > 0 else datetime.now(tz=UTC)
-        )
+        ts_dt = datetime.fromtimestamp(ts_unix, tz=UTC) if ts_unix > 0 else datetime.now(tz=UTC)
         rows.append(
             (
                 int(ev["block_number"]),
@@ -256,11 +254,7 @@ def run_if_needed() -> None:
 
     try:
         status = state.get_json_key("backfill_status")
-        if (
-            status is not None
-            and status.get("complete") is True
-            and not status.get("stub")
-        ):
+        if status is not None and status.get("complete") is True and not status.get("stub"):
             log.debug("backfill.skip", reason="already_complete")
             return
 

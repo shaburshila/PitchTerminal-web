@@ -160,9 +160,7 @@ class TestTrades:
 
     def test_bad_cursor(self, app, seeded_tokens) -> None:
         addr = seeded_tokens["player"]
-        resp = app.test_client().get(
-            f"/api/v1/tokens/{addr}/trades?cursor=!!!not-base64!!!"
-        )
+        resp = app.test_client().get(f"/api/v1/tokens/{addr}/trades?cursor=!!!not-base64!!!")
         assert resp.status_code == 400
 
     def test_bad_limit(self, app, seeded_tokens) -> None:

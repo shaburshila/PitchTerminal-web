@@ -40,9 +40,7 @@ def _alembic(*args: str) -> None:
 
 def _table_count() -> int:
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
-        )
+        cur.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
         row = cur.fetchone()
         assert row is not None
         return int(row[0])

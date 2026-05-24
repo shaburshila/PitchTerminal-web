@@ -64,9 +64,7 @@ def _insert_events(
     rows = []
     for ev in events:
         ts_unix = timestamps.get(int(ev["block_number"]), 0)
-        ts_dt = (
-            datetime.fromtimestamp(ts_unix, tz=UTC) if ts_unix > 0 else datetime.now(tz=UTC)
-        )
+        ts_dt = datetime.fromtimestamp(ts_unix, tz=UTC) if ts_unix > 0 else datetime.now(tz=UTC)
         rows.append(
             (
                 int(ev["block_number"]),

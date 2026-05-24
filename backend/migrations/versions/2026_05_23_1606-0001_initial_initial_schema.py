@@ -75,9 +75,7 @@ def upgrade() -> None:
         """
     )
     op.execute("CREATE INDEX tokens_kind_idx ON tokens(kind);")
-    op.execute(
-        "CREATE INDEX tokens_country_idx ON tokens(country_address) WHERE kind = 'player';"
-    )
+    op.execute("CREATE INDEX tokens_country_idx ON tokens(country_address) WHERE kind = 'player';")
 
     # events ----------------------------------------------------------------
     op.execute(
@@ -100,9 +98,7 @@ def upgrade() -> None:
         );
         """
     )
-    op.execute(
-        "CREATE INDEX events_token_block_idx ON events(token_address, block_number DESC);"
-    )
+    op.execute("CREATE INDEX events_token_block_idx ON events(token_address, block_number DESC);")
     op.execute("CREATE INDEX events_trader_idx ON events(trader_address);")
     op.execute("CREATE INDEX events_block_idx ON events(block_number DESC);")
 

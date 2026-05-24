@@ -121,9 +121,7 @@ def record_tick_failure(loop_name: str, *, error_code: str | None = None) -> Non
     if count >= CONSECUTIVE_FAILURE_THRESHOLD and not _failure_alerted.get(loop_name):
         _failure_alerted[loop_name] = True
         suffix = f" code={error_code}" if error_code else ""
-        send(
-            f"[{_ts()}] worker.{loop_name}: {count} consecutive tick failures{suffix}"
-        )
+        send(f"[{_ts()}] worker.{loop_name}: {count} consecutive tick failures{suffix}")
 
 
 def record_tick_success(loop_name: str) -> None:

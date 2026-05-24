@@ -146,9 +146,7 @@ def list_tokens() -> Any:
 
     from shared.config import config as cfg
 
-    token_rows = fetch_all(
-        "SELECT address, name, symbol, kind, country_address, role FROM tokens"
-    )
+    token_rows = fetch_all("SELECT address, name, symbol, kind, country_address, role FROM tokens")
     country_names = _country_name_map()
 
     players: list[dict[str, Any]] = []

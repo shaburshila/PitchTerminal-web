@@ -75,6 +75,5 @@ class TestNoCustodialRouteRegistration:
         }
         leaked = [r for r in rules if r in forbidden_exact]
         assert not leaked, (
-            f"url_map contains custodial routes: {leaked}. "
-            "Remove the handler (see B1.1)."
+            f"url_map contains custodial routes: {leaked}. " "Remove the handler (see B1.1)."
         )

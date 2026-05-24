@@ -58,9 +58,7 @@ def test_seed_inserts_countries_and_players() -> None:
         assert row[0] == 48
 
         # Every player must point to one of the 48 countries; 48 distinct.
-        cur.execute(
-            "SELECT COUNT(DISTINCT country_address) FROM tokens WHERE kind='player'"
-        )
+        cur.execute("SELECT COUNT(DISTINCT country_address) FROM tokens WHERE kind='player'")
         row = cur.fetchone()
         assert row is not None
         assert row[0] == 48
@@ -136,12 +134,16 @@ def test_dry_run_does_not_write() -> None:
 def test_seed_rejects_unknown_country_symbol() -> None:
     bad = {
         "countries": [
-            {"id": 0, "symbol": "USA", "name": "USA",
-             "address": "0x" + "1" * 40},
+            {"id": 0, "symbol": "USA", "name": "USA", "address": "0x" + "1" * 40},
         ],
         "players": [
-            {"symbol": "X", "name": "X", "address": "0x" + "2" * 40,
-             "country": "ZZZ", "role": "best"},
+            {
+                "symbol": "X",
+                "name": "X",
+                "address": "0x" + "2" * 40,
+                "country": "ZZZ",
+                "role": "best",
+            },
         ],
     }
     with pytest.raises(ValueError, match="unknown country symbol"):
@@ -151,12 +153,16 @@ def test_seed_rejects_unknown_country_symbol() -> None:
 def test_seed_rejects_invalid_role() -> None:
     bad = {
         "countries": [
-            {"id": 0, "symbol": "USA", "name": "USA",
-             "address": "0x" + "1" * 40},
+            {"id": 0, "symbol": "USA", "name": "USA", "address": "0x" + "1" * 40},
         ],
         "players": [
-            {"symbol": "X", "name": "X", "address": "0x" + "2" * 40,
-             "country": "USA", "role": "legend"},
+            {
+                "symbol": "X",
+                "name": "X",
+                "address": "0x" + "2" * 40,
+                "country": "USA",
+                "role": "legend",
+            },
         ],
     }
     with pytest.raises(ValueError, match="invalid role"):
@@ -166,14 +172,23 @@ def test_seed_rejects_invalid_role() -> None:
 def test_seed_rejects_duplicate_player_address() -> None:
     bad = {
         "countries": [
-            {"id": 0, "symbol": "USA", "name": "USA",
-             "address": "0x" + "1" * 40},
+            {"id": 0, "symbol": "USA", "name": "USA", "address": "0x" + "1" * 40},
         ],
         "players": [
-            {"symbol": "X", "name": "X", "address": "0x" + "2" * 40,
-             "country": "USA", "role": "best"},
-            {"symbol": "Y", "name": "Y", "address": "0x" + "2" * 40,
-             "country": "USA", "role": "captain"},
+            {
+                "symbol": "X",
+                "name": "X",
+                "address": "0x" + "2" * 40,
+                "country": "USA",
+                "role": "best",
+            },
+            {
+                "symbol": "Y",
+                "name": "Y",
+                "address": "0x" + "2" * 40,
+                "country": "USA",
+                "role": "captain",
+            },
         ],
     }
     with pytest.raises(ValueError, match="duplicate address"):

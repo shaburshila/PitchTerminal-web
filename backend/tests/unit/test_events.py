@@ -167,7 +167,9 @@ class TestScanLogs:
     def test_yields_one_per_log(self) -> None:
         logs = [
             _make_log(side="buy", base_value=10, token_value=1, fee=1, block_number=1, log_index=0),
-            _make_log(side="sell", base_value=20, token_value=2, fee=2, block_number=2, log_index=0),
+            _make_log(
+                side="sell", base_value=20, token_value=2, fee=2, block_number=2, log_index=0
+            ),
         ]
         eth = _FakeEth([logs])
         w3 = _FakeW3(eth)

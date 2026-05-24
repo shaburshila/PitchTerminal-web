@@ -88,9 +88,7 @@ def run_if_needed() -> None:
         existing_cursor = state.get_json_key("access_last_scanned_block")
         if existing_cursor is None:
             cursor_block = (
-                config.access_deploy_block
-                if config.access_deploy_block > 0
-                else block_number
+                config.access_deploy_block if config.access_deploy_block > 0 else block_number
             )
             state.set_int_key("access_last_scanned_block", cursor_block)
             log.info("access_bootstrap.cursor_init", block=cursor_block)

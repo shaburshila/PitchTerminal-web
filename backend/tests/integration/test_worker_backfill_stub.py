@@ -43,6 +43,7 @@ def _patch_cfg(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> None:
 
     monkeypatch.setattr(backfill, "config", dataclasses.replace(backfill.config, **overrides))
 
+
 # ───── Fixtures ────────────────────────────────────────────────────────────
 
 
@@ -58,9 +59,7 @@ def _reset_state() -> Iterator[None]:
 
     fake_token = "0x" + "33" * 20
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM app_state WHERE key IN ('backfill_status', 'last_scanned_block')"
-        )
+        cur.execute("DELETE FROM app_state WHERE key IN ('backfill_status', 'last_scanned_block')")
         cur.execute("DELETE FROM events")
         # Seed a placeholder country so the FK on `events.token_address` resolves.
         cur.execute(
@@ -162,9 +161,7 @@ def test_backfill_skip_if_complete_real(monkeypatch: pytest.MonkeyPatch) -> None
     assert called == [], "w3 should not be accessed when already complete"
 
 
-def test_backfill_runs_if_stub_was_set(
-    monkeypatch: pytest.MonkeyPatch, _force_hooks: None
-) -> None:
+def test_backfill_runs_if_stub_was_set(monkeypatch: pytest.MonkeyPatch, _force_hooks: None) -> None:
     """B0.6 stub state must trigger a real backfill overriding the stub."""
 
     # Simulate B0.6 leftover: stub complete + pinned live cursor 100 blocks ahead.
@@ -257,9 +254,7 @@ def test_backfill_handles_empty_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert touched == []
 
 
-def test_backfill_chunks_correctly(
-    monkeypatch: pytest.MonkeyPatch, _force_hooks: None
-) -> None:
+def test_backfill_chunks_correctly(monkeypatch: pytest.MonkeyPatch, _force_hooks: None) -> None:
     """A multi-chunk run inserts every event and updates cumulative counter."""
 
     # Force a small chunk so we exercise multiple iterations.
@@ -306,9 +301,7 @@ def test_backfill_chunks_correctly(
     assert state.get_int_key("last_scanned_block", 0) == head + 1
 
 
-def test_backfill_rpc_error_with_retry(
-    monkeypatch: pytest.MonkeyPatch, _force_hooks: None
-) -> None:
+def test_backfill_rpc_error_with_retry(monkeypatch: pytest.MonkeyPatch, _force_hooks: None) -> None:
     """Transient RPC failures: backoff retries, succeeds on attempt 3."""
 
     head = HOOK_DEPLOY_BLOCK + 50
@@ -418,13 +411,13 @@ def test_backfill_chunk_too_large_fallback(
     # [HOOK_DEPLOY_BLOCK, head] exactly.
     scanned_ranges.sort()
     assert scanned_ranges, "no successful scans recorded"
-    assert scanned_ranges[0][0] == HOOK_DEPLOY_BLOCK, (
-        f"coverage must start at HOOK_DEPLOY_BLOCK, got {scanned_ranges[0][0]}"
-    )
-    assert scanned_ranges[-1][1] == head, (
-        f"coverage must end at head ({head}), got {scanned_ranges[-1][1]}"
-    )
+    assert (
+        scanned_ranges[0][0] == HOOK_DEPLOY_BLOCK
+    ), f"coverage must start at HOOK_DEPLOY_BLOCK, got {scanned_ranges[0][0]}"
+    assert (
+        scanned_ranges[-1][1] == head
+    ), f"coverage must end at head ({head}), got {scanned_ranges[-1][1]}"
     for (_, prev_end), (next_start, _) in pairwise(scanned_ranges):
-        assert next_start == prev_end + 1, (
-            f"gap in coverage: [{prev_end + 1}..{next_start - 1}] unscanned"
-        )
+        assert (
+            next_start == prev_end + 1
+        ), f"gap in coverage: [{prev_end + 1}..{next_start - 1}] unscanned"

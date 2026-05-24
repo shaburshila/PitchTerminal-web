@@ -137,11 +137,7 @@ def get_config() -> Any:
     which one applies based on the query param.
     """
 
-    payload = (
-        _build_payload()
-        if request.args.get("fresh") == "1"
-        else _get_cached_or_fresh()
-    )
+    payload = _build_payload() if request.args.get("fresh") == "1" else _get_cached_or_fresh()
     return jsonify(payload)
 
 
