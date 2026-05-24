@@ -63,12 +63,14 @@
 /* Utility — apply monospace face with tabular numerals and slashed zero. */
 .mono {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum" 1, "zero" 1;
+  font-feature-settings:
+    'tnum' 1,
+    'zero' 1;
 }
 
 /* Utility — tabular numerals on the current font (use on numeric cells
    that should align vertically, e.g. price columns). */
 .num {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-feature-settings: 'tnum' 1;
 }
