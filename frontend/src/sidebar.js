@@ -32,6 +32,7 @@ import {
 } from './watchlist.js';
 import { showToast } from './ui/toast.js';
 import { flagSrc, hasFlag } from './flags.js';
+import { renderSparkline } from './utils/sparkline.js';
 
 const TABS = Object.freeze(['players', 'countries']);
 const ROLES = Object.freeze(['all', 'best', 'captain', 'rookie']);
@@ -135,12 +136,25 @@ function selectTokens(state, source) {
  * @param {{
  *   onTokenSelect?: (token: object) => void,
  *   apiClient?: { getTokens: () => Promise<object> },
+ *   getSparkline?: (tokenAddress: string) => number[]|null|undefined,
+ *   getPosition?: (tokenAddress: string) => ({balance?: number, hasPosition?: boolean}|null|undefined),
  * }} [options]
+ *
+ * Phase 1.5 batch 3 (sparkline + pos-marker): both providers are optional and
+ * pulled lazily during each render(). The sidebar does NOT fetch chart or
+ * position data on its own — keeping the component decoupled from network
+ * concerns. Wiring lives in main.js (deferred) where chart candles + the
+ * wallet position cache already exist.
  * @returns {{
  *   refresh: () => Promise<void>,
  *   update: (tokens: object) => void,
+ *   rerender: () => void,
  *   destroy: () => void,
  * }}
+ *
+ * `rerender()` re-runs the row build using the current cached tokens — used
+ * by main.js to reflect sparkline / position provider updates without an
+ * API round-trip. No-op if no tokens have loaded yet.
  */
 export function mountSidebar(container, options = {}) {
   if (!(container instanceof HTMLElement)) {
@@ -149,6 +163,13 @@ export function mountSidebar(container, options = {}) {
 
   const apiClient = options.apiClient ?? defaultApi;
   const onTokenSelect = typeof options.onTokenSelect === 'function' ? options.onTokenSelect : null;
+  // Phase 1.5 batch 3: optional sparkline / position providers. Both default
+  // to no-ops so existing callers (and tests that don't pass them) keep their
+  // current behaviour — the row simply omits the sparkline cell content and
+  // the position dot.
+  const getSparkline =
+    typeof options.getSparkline === 'function' ? options.getSparkline : () => null;
+  const getPosition = typeof options.getPosition === 'function' ? options.getPosition : () => null;
 
   // Idempotent — clear any prior mount.
   container.replaceChildren();
@@ -353,6 +374,26 @@ export function mountSidebar(container, options = {}) {
         });
         symbol.appendChild(flag);
       }
+      // Phase 1.5 batch 3: position marker — small dot before the symbol when
+      // the user holds a non-zero balance of this token. The provider may
+      // return either `{hasPosition: true}` (preferred — explicit) or a
+      // `{balance: number}` we check ourselves. Anything else → no dot.
+      const posInfo = token.address ? getPosition(token.address) : null;
+      const hasPos =
+        posInfo &&
+        (posInfo.hasPosition === true ||
+          (typeof posInfo.balance === 'number' && posInfo.balance > 0));
+      if (hasPos) {
+        const dot = el('span', {
+          className: 'pt-sidebar__pos',
+          dataset: { testId: 'sidebar-pos-marker' },
+          attrs: {
+            'aria-label': 'You hold this token',
+            title: 'You hold this token',
+          },
+        });
+        symbol.appendChild(dot);
+      }
       symbol.appendChild(document.createTextNode(token.symbol || ''));
       const metaParts = [];
       if (state.tab === 'players') {
@@ -374,9 +415,25 @@ export function mountSidebar(container, options = {}) {
         text: formatChange(token.changePct?.[state.period]),
       });
 
+      // Phase 1.5 batch 3: sparkline cell. Always rendered as an empty <div>
+      // so the row grid keeps a stable 4-column layout — the cell receives
+      // an SVG only when the provider returns a non-empty series. This
+      // matches how Real-Time-Updating components in this codebase handle
+      // missing data (mirrors flag fallback in batch 1).
+      const sparkCell = el('div', {
+        className: 'pt-sidebar__spark-cell',
+        dataset: { testId: 'sidebar-spark-cell' },
+      });
+      const series = token.address ? getSparkline(token.address) : null;
+      if (Array.isArray(series) && series.length > 0) {
+        const sparkSvg = renderSparkline(series, { testId: 'sidebar-spark' });
+        if (sparkSvg) sparkCell.appendChild(sparkSvg);
+      }
+
       li.appendChild(star);
       li.appendChild(symbol);
       li.appendChild(meta);
+      li.appendChild(sparkCell);
       li.appendChild(price);
       li.appendChild(change);
 
@@ -594,5 +651,5 @@ export function mountSidebar(container, options = {}) {
     // upcoming toast/banner subsystem (F0.13).
   });
 
-  return { refresh, update, destroy };
+  return { refresh, update, rerender: render, destroy };
 }

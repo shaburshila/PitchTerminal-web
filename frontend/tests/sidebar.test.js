@@ -557,4 +557,120 @@ describe('mountSidebar', () => {
     const after = container.querySelector('[data-test-id="sidebar-star"]');
     expect(after.textContent).toBe('☆');
   });
+
+  // ── Phase 1.5 batch 3: sparkline + position marker ─────────────────────
+  describe('batch 3 — sparkline + position marker', () => {
+    it('omits sparkline + pos-marker when no providers are passed (backward compat)', async () => {
+      const api = makeApi(defaultPayload());
+      const handle = mountSidebar(container, { apiClient: api });
+      await handle.refresh();
+
+      // Empty spark cell rendered for layout stability — but contains no SVG.
+      const cells = container.querySelectorAll('[data-test-id="sidebar-spark-cell"]');
+      expect(cells.length).toBe(3);
+      for (const c of cells) {
+        expect(c.querySelector('svg')).toBeNull();
+      }
+      // No position markers either.
+      expect(container.querySelector('[data-test-id="sidebar-pos-marker"]')).toBeNull();
+    });
+
+    it('renders sparkline SVG only for tokens that return a non-empty series', async () => {
+      const api = makeApi(defaultPayload());
+      const handle = mountSidebar(container, {
+        apiClient: api,
+        // Mbappé has the highest pricePitch → first row. Only it gets a series.
+        getSparkline: (addr) => (addr === '0xaaa2' ? [1, 2, 3, 4, 5] : null),
+      });
+      await handle.refresh();
+
+      const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+      expect(rows.length).toBe(3);
+      // First row (Mbappé) → sparkline present, positive trend.
+      const firstSpark = rows[0].querySelector('svg.pt-spark');
+      expect(firstSpark).not.toBeNull();
+      expect(firstSpark.classList.contains('pt-spark--positive')).toBe(true);
+      // Other rows → empty cells, no svg.
+      expect(rows[1].querySelector('svg.pt-spark')).toBeNull();
+      expect(rows[2].querySelector('svg.pt-spark')).toBeNull();
+    });
+
+    it('providers receive the token address as their sole argument', async () => {
+      const api = makeApi(defaultPayload());
+      const sparkCalls = [];
+      const posCalls = [];
+      const handle = mountSidebar(container, {
+        apiClient: api,
+        getSparkline: (addr) => {
+          sparkCalls.push(addr);
+          return null;
+        },
+        getPosition: (addr) => {
+          posCalls.push(addr);
+          return null;
+        },
+      });
+      await handle.refresh();
+
+      // 3 player rows → each provider called for every render of those rows.
+      // (Initial empty render fires no calls; refresh() triggers a populated
+      // render. Re-renders or rebounded async cycles may add more calls — we
+      // only care that providers were invoked with the right unique addrs.)
+      expect([...new Set(sparkCalls)].sort()).toEqual(['0xaaa1', '0xaaa2', '0xaaa3']);
+      expect([...new Set(posCalls)].sort()).toEqual(['0xaaa1', '0xaaa2', '0xaaa3']);
+    });
+
+    it('rerender() picks up provider changes without re-fetching tokens', async () => {
+      const api = makeApi(defaultPayload());
+      // Mutable closure — main.js mimics this exact pattern by writing into
+      // its priceSeries Map between SSE ticks.
+      const series = new Map();
+      const handle = mountSidebar(container, {
+        apiClient: api,
+        getSparkline: (addr) => series.get(addr) ?? null,
+      });
+      await handle.refresh();
+      api.getTokens.mockClear();
+
+      // Before: no series → no svg on the top row.
+      let firstRow = container.querySelector('[data-test-id="sidebar-row"]');
+      expect(firstRow.querySelector('svg.pt-spark')).toBeNull();
+
+      // After provider data arrives → rerender() reflects it without /tokens.
+      series.set('0xaaa2', [1, 2, 3, 4]);
+      handle.rerender();
+      firstRow = container.querySelector('[data-test-id="sidebar-row"]');
+      expect(firstRow.querySelector('svg.pt-spark')).not.toBeNull();
+      expect(api.getTokens).not.toHaveBeenCalled();
+    });
+
+    it('renders position marker only for tokens with non-zero balance', async () => {
+      const api = makeApi(defaultPayload());
+      const handle = mountSidebar(container, {
+        apiClient: api,
+        getPosition: (addr) => {
+          if (addr === '0xaaa2') return { balance: 42.5 };
+          if (addr === '0xaaa1') return { balance: 0 };
+          if (addr === '0xaaa3') return { hasPosition: true };
+          return null;
+        },
+      });
+      await handle.refresh();
+
+      const markers = container.querySelectorAll('[data-test-id="sidebar-pos-marker"]');
+      // Two rows are owned: Mbappé (balance>0) + Smith (hasPosition=true).
+      // Pulisic has balance=0 → no dot.
+      expect(markers.length).toBe(2);
+
+      const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+      // First row Mbappé — dot present.
+      expect(rows[0].querySelector('[data-test-id="sidebar-pos-marker"]')).not.toBeNull();
+      // Pulisic (0xaaa1, pricePitch=12.34, second in DESC order) — no dot.
+      expect(rows[1].dataset.tokenAddress).toBe('0xaaa1');
+      expect(rows[1].querySelector('[data-test-id="sidebar-pos-marker"]')).toBeNull();
+      // Smith (0xaaa3, lowest price, third) — dot present.
+      expect(rows[2].dataset.tokenAddress).toBe('0xaaa3');
+      expect(rows[2].querySelector('[data-test-id="sidebar-pos-marker"]')).not.toBeNull();
+    });
+  });
 });

@@ -6,6 +6,10 @@
 // truth for already-rendered surfaces.
 import './styles/tokens.css';
 import './styles.css';
+// Phase 1.5 batch 3: sidebar sparkline + position marker. Loaded after
+// styles.css so the extended row grid (4 columns instead of 3) overrides
+// the base layout cleanly without touching the global stylesheet.
+import './styles/sidebar-batch3.css';
 import { mountLayout } from './layout.js';
 import { mountSidebar } from './sidebar.js';
 import { mountChart } from './chart.js';
@@ -16,7 +20,7 @@ import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
 import { onAccountChange } from './wallet.js';
-import { getConfig, getTokens, ApiError, getAccess, logout } from './api.js';
+import { getConfig, getTokens, getProfile, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
 import { set as setAccessState } from './access-store.js';
@@ -205,9 +209,117 @@ function bootstrap() {
     },
   });
 
-  mountSidebar(layout.sidebar, {
+  // Phase 1.5 batch 3 wiring: feed sidebar with sparkline + position providers.
+  //
+  // Sparkline source — a per-token price ring buffer built from the SSE
+  // `pt_prices` channel. We reuse the same `onPrices` payload that already
+  // ticks the chart (see openOrReopenStream below), so no extra network
+  // calls. Cap each series at SPARK_MAX samples; older samples drop off the
+  // front. Sidebar re-renders at most once per SPARK_RERENDER_MS to avoid
+  // thrashing `list.replaceChildren()` on every tick (the worker batches
+  // prices, but several ticks per minute is normal).
+  //
+  // Position source — `/profile.balances` resolves country tokens only
+  // (backend does not return per-player balances). Loaded lazily on first
+  // wallet-connect (so anonymous + free users don't pay the request) and
+  // refreshed when the account changes. Missing data → no dot (graceful).
+  // For per-player markers a future extension would need either a multi-
+  // balance endpoint or a Multicall3 client-side path — out of scope for
+  // batch 3.
+  const SPARK_MAX = 16;
+  const SPARK_RERENDER_MS = 5000;
+  /** @type {Map<string, number[]>} address (lc) → recent prices, oldest first. */
+  const priceSeries = new Map();
+  /** @type {Map<string, number>} address (lc) → balance (whole tokens). */
+  const positionByAddr = new Map();
+
+  function pushPrice(addrLc, price) {
+    if (typeof price !== 'number' || !Number.isFinite(price)) return;
+    let series = priceSeries.get(addrLc);
+    if (!series) {
+      series = [];
+      priceSeries.set(addrLc, series);
+    }
+    // Drop adjacent duplicates so a flat-priced token doesn't fill the buffer
+    // with identical samples and the trend stays meaningful when prices
+    // finally move.
+    if (series.length > 0 && series[series.length - 1] === price) return;
+    series.push(price);
+    if (series.length > SPARK_MAX) series.shift();
+  }
+
+  const sidebar = mountSidebar(layout.sidebar, {
     onTokenSelect: selectToken,
+    getSparkline: (addr) => {
+      if (typeof addr !== 'string' || !addr) return null;
+      const series = priceSeries.get(addr.toLowerCase());
+      // Need at least 2 points for a trend; 1 point would render as a flat
+      // line at the viewBox midpoint which is visually misleading.
+      return series && series.length >= 2 ? series : null;
+    },
+    getPosition: (addr) => {
+      if (typeof addr !== 'string' || !addr) return null;
+      const bal = positionByAddr.get(addr.toLowerCase());
+      return typeof bal === 'number' && bal > 0 ? { balance: bal } : null;
+    },
   });
+
+  // Throttled rerender — coalesces SSE-driven price ticks. We use a trailing-
+  // edge timer so the first tick after a quiet period is reflected promptly
+  // (next animation frame), then subsequent ticks are batched.
+  let sparkTimer = null;
+  function scheduleSidebarRerender() {
+    if (sparkTimer) return;
+    sparkTimer = setTimeout(() => {
+      sparkTimer = null;
+      try {
+        sidebar.rerender();
+      } catch {
+        /* sidebar may have been destroyed during teardown — safe to swallow */
+      }
+    }, SPARK_RERENDER_MS);
+  }
+
+  // Convert backend wei-string into a whole-token number. Used for /profile
+  // balances which arrive as decimal strings ("12345000000000000000" etc).
+  function weiToWhole(weiStr) {
+    if (typeof weiStr !== 'string' || !weiStr) return 0;
+    try {
+      const s = weiStr;
+      if (s.length > 18) return Number(s.slice(0, s.length - 18));
+      return Number(s) / 1e18;
+    } catch {
+      return 0;
+    }
+  }
+
+  function refreshPositions() {
+    // /profile requires SIWE auth — anonymous users 401. Swallow + clear so
+    // disconnecting wipes the position dots that belonged to the previous
+    // wallet.
+    getProfile()
+      .then((resp) => {
+        positionByAddr.clear();
+        const countries = Array.isArray(resp?.balances?.countries) ? resp.balances.countries : [];
+        for (const c of countries) {
+          if (c && typeof c.address === 'string' && c.address) {
+            positionByAddr.set(c.address.toLowerCase(), weiToWhole(c.wei));
+          }
+        }
+        // No per-player balances in the response — sidebar will show dots
+        // for country tokens only. Players: tracked-by /trades activity
+        // would need its own endpoint; deferred per batch-3 scope.
+        sidebar.rerender();
+      })
+      .catch(() => {
+        positionByAddr.clear();
+        try {
+          sidebar.rerender();
+        } catch {
+          /* fine */
+        }
+      });
+  }
 
   // Populate the country-token registry once; same /tokens endpoint the
   // sidebar already hits, so the response is hot in the HTTP cache.
@@ -324,6 +436,18 @@ function bootstrap() {
   // user retry via wallet menu when backend recovers. See
   // `createAccountChangeHandler` above for the full state-machine docs.
   onAccountChange(createAccountChangeHandler({ accessBanner }));
+  // Phase 1.5 batch 3: refresh position dots whenever the wallet flips.
+  // Disconnect → /profile 401 → positionByAddr cleared, dots vanish.
+  // Connect → /profile resolves with the new wallet's country balances.
+  // Runs as a second listener so it stays independent of the SIWE/access
+  // state machine in createAccountChangeHandler (which has its own race
+  // semantics we don't want to entangle with).
+  onAccountChange(() => {
+    refreshPositions();
+  });
+  // Kick once on boot so a returning user (cookie still valid) sees their
+  // dots on first paint instead of after the next wallet event.
+  refreshPositions();
   // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
   // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).
   void ensureSignedIn;
@@ -333,11 +457,21 @@ function bootstrap() {
     if (typeof globalThis.EventSource !== 'function') return;
     streamHandle = openStream({
       onPrices: (payload) => {
+        let touched = false;
         for (const t of payload?.tokens ?? []) {
           if (t?.address && t.pricePitch != null) {
-            chart.applyPrice(t.address, Number(t.pricePitch));
+            const price = Number(t.pricePitch);
+            chart.applyPrice(t.address, price);
+            // Phase 1.5 batch 3: also feed the sidebar sparkline buffer.
+            // Skip zero prices that come in during worker backfill — they'd
+            // pin the whole series at zero and the sparkline would look dead.
+            if (Number.isFinite(price) && price > 0) {
+              pushPrice(t.address.toLowerCase(), price);
+              touched = true;
+            }
           }
         }
+        if (touched) scheduleSidebarRerender();
       },
       onEvents: (payload) => {
         const trades = payload?.newTrades ?? [];

@@ -1,0 +1,76 @@
+/*
+ * Phase 1.5 batch 3 — sidebar internals (sparkline + position marker).
+ *
+ * Scoped strictly to new sidebar elements introduced in this batch:
+ *   - .pt-sidebar__row gets a new grid area `spark` (between meta and price)
+ *     and an inline `.pt-sidebar__pos` dot rendered before the symbol text.
+ *   - .pt-spark is a reusable SVG sparkline (utils/sparkline.js); its trend
+ *     modifiers map to the design tokens --up / --down / --text-3.
+ *
+ * No globals — all selectors are component-scoped (.pt-sidebar__ / .pt-spark).
+ * Imported from main.js after styles.css so it can override the row grid.
+ */
+
+/* Extend the existing row grid to host the sparkline column. The base grid
+ * (in styles.css) is `20px 1fr auto` → we widen to slot a 48px spark cell
+ * between meta-end and price. `display: grid` is already set on .pt-sidebar__row;
+ * here we only redefine the columns/areas so the new cell has a home.
+ *
+ * Areas stay 2-row so price + change still sit on the right. The spark cell
+ * spans both rows (centre-aligned vertically) for a compact "row card" feel
+ * matching the dark-green mockups in ~/Downloads/a-main*.html. */
+.pt-sidebar__row {
+  grid-template-columns: 20px 1fr 48px auto;
+  grid-template-areas:
+    'star symbol spark price'
+    'star meta   spark change';
+}
+
+.pt-sidebar__spark-cell {
+  grid-area: spark;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Visual breathing room from neighbouring text columns. */
+  padding: 0 4px;
+  /* Reserve the slot even when no sparkline is present, so the price column
+   * doesn't jump between rows with / without data. */
+  min-height: 14px;
+}
+
+.pt-spark {
+  display: block;
+  /* Default mid-grey when trend is flat / unknown. */
+  color: var(--text-3, var(--text-muted));
+}
+
+.pt-spark--positive {
+  color: var(--up, var(--success));
+}
+
+.pt-spark--negative {
+  color: var(--down, var(--danger));
+}
+
+.pt-spark--flat {
+  color: var(--text-3, var(--text-muted));
+}
+
+/* Position marker — a small filled dot rendered before the symbol text to
+ * indicate "you own this token". Uses accent (--accent → green) since the
+ * design system treats accent and up as the same hue. Inline-block sized
+ * to baseline so it aligns with the symbol's cap-height. */
+.pt-sidebar__pos {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, var(--success));
+  flex: 0 0 auto;
+  /* Lift slightly so the dot reads as a notch on the symbol, not a bullet. */
+  margin-right: 2px;
+  /* Soft glow draws the eye without being garish. Token `--up-dim` is the
+   * canonical low-alpha green from tokens.css — keeps the color in one place
+   * so any future theme tweak propagates automatically. */
+  box-shadow: 0 0 0 2px var(--up-dim);
+}
