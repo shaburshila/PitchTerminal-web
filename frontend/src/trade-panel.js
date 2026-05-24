@@ -1,7 +1,7 @@
 /**
- * Trade panel (Market) — F1.1.
+ * Trade panel (Market) — F1.1 + F1.2.
  *
- * Right-column market-trade widget. This phase implements ONLY:
+ * Right-column market-trade widget. Implements:
  *   - Toggle Market / Limit (Limit disabled — phase 2)
  *   - Buy / Sell tabs
  *   - amount input + 25/50/75/Max quick-fill buttons (from balance)
@@ -9,8 +9,10 @@
  *   - live quote via viem `readContract` against pitchwc Hook (quoteBuy/Sell)
  *   - fee breakdown (5% pitchwc + slippage)
  *   - disabled state when not on Base / wallet disconnected / no token
- *
- * Approve + swap (F1.2) is intentionally OUT of scope — this is read-only.
+ *   - F1.2: allowance read against the matching Router, "Approve" CTA when
+ *     allowance < amountIn, max-approve write tx, swap (`buy`/`sell`) via the
+ *     Router, pending → success/error toast, balance + quote refresh on
+ *     success.
  *
  * Venue resolution:
  *   - token has `countryAddress` (truthy)  → player venue, hook = playerHook,
@@ -18,8 +20,21 @@
  *   - otherwise                            → country venue, hook = countryHook,
  *     quoteToken = PITCH,           baseToken = token.address
  *
+ * Router resolution (F1.2):
+ *   - player venue → `contracts.playerRouter`
+ *   - country venue → `contracts.countryRouter`
+ *   Router signature (see docs/eip712.md §6, lines 328-336):
+ *     `function buy(address token, uint256 amountIn, uint256 minOut)`
+ *     `function sell(address token, uint256 amountIn, uint256 minOut)`
+ *   `token` here is the *traded* (player/country) token, identical to the
+ *   Hook's `quoteBuy/Sell` first arg.
+ *
  * Mount contract follows the rest of the codebase (build-once DOM, hidden
  * toggle for tabs, `state.loading` guard, returned handle for destroy/re-wire).
+ *
+ * Payment seam (F1.2): tests inject `options.payment` — a small object with
+ * `readAllowance`, `approve`, `swap` — mirroring the access.js pattern. Prod
+ * lazily builds a wagmi/viem-backed client on first use of the CTA.
  */
 
 import { createPublicClient, http } from 'viem';
@@ -27,6 +42,7 @@ import { base } from 'viem/chains';
 
 import * as defaultApi from './api.js';
 import { getAccount, onAccountChange, BASE_CHAIN_ID } from './wallet.js';
+import { showToast } from './ui/toast.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -71,7 +87,56 @@ const ERC20_ABI = [
     inputs: [{ name: 'owner', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  {
+    type: 'function',
+    name: 'allowance',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
 ];
+
+// Router (pitchwc) ABI — signatures from docs/eip712.md §6.
+const ROUTER_ABI = [
+  {
+    type: 'function',
+    name: 'buy',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'amountIn', type: 'uint256' },
+      { name: 'minOut', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'sell',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'amountIn', type: 'uint256' },
+      { name: 'minOut', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+];
+
+// Max-uint256 — approve-once UX (no re-approve on every trade).
+export const MAX_UINT256 = (1n << 256n) - 1n;
 
 // ─── Pure helpers (exported for unit tests) ─────────────────────────────────
 
@@ -192,7 +257,10 @@ export function resolveVenue(token, pitchAddr) {
 
 /**
  * Reason string for a disabled trade button, or null if enabled.
- * Order matters — first hit wins.
+ * Order matters — first hit wins. F1.2 added approvePending / swapPending
+ * branches; they take precedence over insufficient-balance so the user always
+ * sees the in-flight tx state rather than getting bumped back to an earlier
+ * reason if their balance briefly drops mid-tx (e.g. post-approve gas spend).
  *
  * @param {{
  *   walletConnected: boolean,
@@ -202,17 +270,29 @@ export function resolveVenue(token, pitchAddr) {
  *   amountWei: bigint|null,
  *   balanceWei: bigint|null,
  *   limitMode: boolean,
+ *   approvePending?: boolean,
+ *   swapPending?: boolean,
+ *   allowanceLoading?: boolean,
  * }} ctx
  * @returns {string|null}
  */
 export function disabledReason(ctx) {
   if (ctx.limitMode) return 'Лимит-ордера — фаза 2';
+  if (ctx.approvePending) return 'Подтвердите approve в кошельке…';
+  if (ctx.swapPending) return 'Ждём подтверждение свопа…';
   if (!ctx.walletConnected) return 'Подключите кошелёк';
   if (ctx.chainId !== BASE_CHAIN_ID) return 'Переключитесь на Base';
   if (!ctx.token) return 'Выберите токен';
   if (!ctx.contractsReady) return 'Загрузка конфига…';
   if (!ctx.amountWei || ctx.amountWei <= 0n) return 'Введите сумму';
   if (ctx.balanceWei != null && ctx.amountWei > ctx.balanceWei) return 'Недостаточно средств';
+  // F1.2 fix: while allowance is being read we can't decide approve-vs-swap.
+  // Block the CTA to prevent a null-allowance race where the user clicks
+  // "Buy" before refreshAllowance resolves and the swap reverts on ERC20
+  // transferFrom. Sits below balance check so the more informative
+  // "Недостаточно средств" still wins; sits below pending flags so an
+  // in-flight tx label keeps priority.
+  if (ctx.allowanceLoading) return 'Проверка allowance…';
   return null;
 }
 
@@ -233,6 +313,111 @@ function getReadClient() {
  */
 export function _resetClientForTests() {
   _client = null;
+  _defaultPaymentClient = null;
+}
+
+// ─── Default payment client (lazy wagmi binding) ────────────────────────────
+
+/** @typedef {object} TradePaymentClient
+ *  @property {(p:{token:string,owner:string,spender:string}) => Promise<bigint>} readAllowance
+ *  @property {(p:{token:string,spender:string,amount:bigint,owner:string}) => Promise<string>} approve
+ *  @property {(p:{router:string,side:'buy'|'sell',token:string,amountIn:bigint,minOut:bigint,owner:string}) => Promise<string>} swap
+ */
+
+let _defaultPaymentClient = null;
+
+/**
+ * Build the default payment client backed by wagmi/viem. Lazy import to keep
+ * cold-load light for users who never click Buy/Sell. The unit tests inject
+ * `options.payment` instead so this code path never runs under vitest.
+ *
+ * @returns {Promise<TradePaymentClient>}
+ */
+async function buildDefaultPaymentClient() {
+  const [{ getWagmiConfig }, wagmi] = await Promise.all([
+    import('./wallet.js'),
+    import('@wagmi/core'),
+  ]);
+  const config = getWagmiConfig();
+  return {
+    async readAllowance({ token, owner, spender }) {
+      const out = await wagmi.readContract(config, {
+        abi: ERC20_ABI,
+        address: token,
+        functionName: 'allowance',
+        args: [owner, spender],
+      });
+      return BigInt(out ?? 0);
+    },
+    async approve({ token, spender, amount, owner }) {
+      const hash = await wagmi.writeContract(config, {
+        abi: ERC20_ABI,
+        address: token,
+        functionName: 'approve',
+        args: [spender, amount],
+        account: owner,
+      });
+      await wagmi.waitForTransactionReceipt(config, { hash });
+      return hash;
+    },
+    async swap({ router, side, token, amountIn, minOut, owner }) {
+      const hash = await wagmi.writeContract(config, {
+        abi: ROUTER_ABI,
+        address: router,
+        functionName: side, // 'buy' | 'sell'
+        args: [token, amountIn, minOut],
+        account: owner,
+      });
+      await wagmi.waitForTransactionReceipt(config, { hash });
+      return hash;
+    },
+  };
+}
+
+async function getDefaultPaymentClient() {
+  if (_defaultPaymentClient) return _defaultPaymentClient;
+  _defaultPaymentClient = await buildDefaultPaymentClient();
+  return _defaultPaymentClient;
+}
+
+/**
+ * MetaMask uses `code: 4001` for user rejection; viem wraps wallet errors as
+ * `UserRejectedRequestError` with `code: 4001` too. Mirrors access.js — kept
+ * inline rather than imported to avoid cross-module coupling.
+ */
+function isUserRejection(err) {
+  if (!err) return false;
+  if (typeof err.code === 'number' && err.code === 4001) return true;
+  const cause = err.cause;
+  if (cause && typeof cause.code === 'number' && cause.code === 4001) return true;
+  if (typeof err.name === 'string' && /UserRejected/i.test(err.name)) return true;
+  const msg = (err.shortMessage || err.message || '').toLowerCase();
+  if (msg.includes('user rejected') || msg.includes('user denied')) return true;
+  return false;
+}
+
+/**
+ * Truncate an address `0xabcd…7f9c` for UI labels. Returns `'tokens'` as a
+ * safe fallback for falsy/short input so a success toast never reads ": ".
+ * Mirrors the helper in access.js — kept inline to avoid cross-module
+ * coupling for one-line use.
+ *
+ * @param {string|null|undefined} addr
+ * @returns {string}
+ */
+function shortenAddress(addr) {
+  if (typeof addr !== 'string' || addr.length < 10) return 'tokens';
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function errorMessage(err, fallback) {
+  if (!err) return fallback;
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') {
+    if ('shortMessage' in err && err.shortMessage) return String(err.shortMessage);
+    if ('message' in err && err.message) return String(err.message);
+  }
+  return fallback;
 }
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
@@ -261,6 +446,9 @@ function el(tag, { className, dataset, attrs, text } = {}) {
  *                                            override for tests
  * @property {(opts: { hook: string, fn: 'quoteBuy'|'quoteSell', token: string, amountIn: bigint }) => Promise<bigint>} [readQuote]
  *                                            override for tests
+ * @property {(opts: { token: string, owner: string, spender: string }) => Promise<bigint>} [readAllowance]
+ *                                            F1.2: override for tests (default uses options.payment)
+ * @property {TradePaymentClient} [payment]   F1.2: full on-chain seam (read+write)
  * @property {number} [debounceMs]
  */
 
@@ -287,6 +475,10 @@ export function mountTradePanel(container, options = {}) {
   // Test-overrides for chain reads. In prod we hit viem.
   const readBalanceOverride = options.readBalance ?? null;
   const readQuoteOverride = options.readQuote ?? null;
+  const readAllowanceOverride = options.readAllowance ?? null;
+  // F1.2 — payment client (writes). Tests inject a mock; prod gets lazy
+  // viem/wagmi client on first use.
+  const paymentOverride = options.payment ?? null;
 
   container.replaceChildren();
 
@@ -304,9 +496,15 @@ export function mountTradePanel(container, options = {}) {
     quoteError: null,
     quoteLoading: false,
     balanceLoading: false,
+    // F1.2 — allowance / approve / swap.
+    allowanceWei: null, // current allowance(input → router); null = unknown
+    allowanceLoading: false,
+    approvePending: false, // tx in flight (popup or receipt wait)
+    swapPending: false,
     // Generation counters discard stale async results.
     quoteGen: 0,
     balanceGen: 0,
+    allowanceGen: 0,
     // Debounce timer.
     quoteTimer: null,
   };
@@ -469,11 +667,16 @@ export function mountTradePanel(container, options = {}) {
     const v = resolveVenue(state.token, state.contracts?.pitch);
     if (!v) return null;
     const hook = v.venue === 'player' ? state.contracts?.playerHook : state.contracts?.countryHook;
+    const router = v.venue === 'player' ? state.contracts?.playerRouter : state.contracts?.countryRouter;
     if (typeof hook !== 'string' || !hook) return null;
+    // Router can be missing in early config-load — still allow quote/balance,
+    // approve+swap branches gate on it themselves.
+    const routerLower = typeof router === 'string' && router ? router.toLowerCase() : null;
     if (state.side === 'buy') {
       return {
         venue: v.venue,
         hook: hook.toLowerCase(),
+        router: routerLower,
         fn: 'quoteBuy',
         inputToken: v.quoteToken,
         outputToken: v.baseToken,
@@ -482,6 +685,7 @@ export function mountTradePanel(container, options = {}) {
     return {
       venue: v.venue,
       hook: hook.toLowerCase(),
+      router: routerLower,
       fn: 'quoteSell',
       inputToken: v.baseToken,
       outputToken: v.quoteToken,
@@ -552,8 +756,37 @@ export function mountTradePanel(container, options = {}) {
       amountWei,
       balanceWei: state.balanceWei,
       limitMode: state.mode === 'limit',
+      approvePending: state.approvePending,
+      swapPending: state.swapPending,
+      allowanceLoading: state.allowanceLoading,
     });
-    cta.disabled = reason != null;
+
+    // F1.2 — CTA label & mode (swap vs approve).
+    // When user must approve before swap, swap the label to "Approve" so the
+    // expected popup matches the click.
+    const needsApprove =
+      !reason &&
+      amountWei != null &&
+      state.allowanceWei != null &&
+      state.allowanceWei < amountWei;
+
+    if (state.approvePending) {
+      cta.textContent = 'Approve…';
+    } else if (state.swapPending) {
+      cta.textContent = state.side === 'buy' ? 'Buy…' : 'Sell…';
+    } else if (needsApprove) {
+      cta.textContent = 'Approve';
+    } else {
+      cta.textContent = state.side === 'buy' ? 'Buy' : 'Sell';
+    }
+    cta.dataset.action = needsApprove && !state.approvePending && !state.swapPending
+      ? 'approve'
+      : 'swap';
+
+    // Swap requires a fresh quote (otherwise no minOut). Approve doesn't.
+    const swapNeedsQuote = !needsApprove && (state.quote == null || state.quote.amountInWei !== amountWei);
+
+    cta.disabled = reason != null || swapNeedsQuote;
     status.textContent = reason ?? '';
   }
 
@@ -685,6 +918,62 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
+  // ── F1.2: allowance read ───────────────────────────────────────────────
+  async function readAllowanceFor({ token, owner, spender }) {
+    if (readAllowanceOverride) {
+      return readAllowanceOverride({ token, owner, spender });
+    }
+    if (paymentOverride && typeof paymentOverride.readAllowance === 'function') {
+      return paymentOverride.readAllowance({ token, owner, spender });
+    }
+    const client = options.readClient ?? getReadClient();
+    const result = await client.readContract({
+      address: token,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [owner, spender],
+    });
+    return BigInt(result);
+  }
+
+  async function refreshAllowance() {
+    const sideInfo = resolveSide();
+    if (
+      !sideInfo ||
+      !sideInfo.router ||
+      !state.account.isConnected ||
+      !state.account.address
+    ) {
+      state.allowanceWei = null;
+      renderCta();
+      return;
+    }
+    state.allowanceGen += 1;
+    const myGen = state.allowanceGen;
+    state.allowanceLoading = true;
+    try {
+      const a = await readAllowanceFor({
+        token: sideInfo.inputToken,
+        owner: state.account.address,
+        spender: sideInfo.router,
+      });
+      if (myGen !== state.allowanceGen) return; // stale
+      state.allowanceWei = a;
+    } catch (err) {
+      if (myGen !== state.allowanceGen) return;
+      // Don't surface — allowance failure shouldn't break the quote UI.
+      // CTA will fall back to disabled-by-balance/quote checks; the user
+      // can retry by typing.
+      state.allowanceWei = null;
+      console.warn('trade-panel: allowance read failed', err);
+    } finally {
+      if (myGen === state.allowanceGen) {
+        state.allowanceLoading = false;
+        renderCta();
+      }
+    }
+  }
+
   function scheduleQuote() {
     if (state.quoteTimer != null) {
       clearTimeout(state.quoteTimer);
@@ -705,9 +994,11 @@ export function mountTradePanel(container, options = {}) {
     const side = target.dataset.side;
     if (!side || !TABS.includes(side) || state.side === side) return;
     state.side = side;
-    // Side change → input/output swap → both balance and quote must refresh.
+    // Side change → input/output swap → balance/allowance/quote must refresh.
+    state.allowanceWei = null;
     renderSideAria();
     refreshBalance();
+    refreshAllowance();
     scheduleQuote();
   }
 
@@ -759,20 +1050,144 @@ export function mountTradePanel(container, options = {}) {
     scheduleQuote();
   }
 
+  // ── F1.2: payment client resolution + approve/swap actions ─────────────
+  async function getPayment() {
+    if (paymentOverride) return paymentOverride;
+    return getDefaultPaymentClient();
+  }
+
+  async function onApproveClick() {
+    if (state.approvePending || state.swapPending) return;
+    const sideInfo = resolveSide();
+    if (!sideInfo || !sideInfo.router) return;
+    if (!state.account.isConnected || !state.account.address) return;
+
+    state.approvePending = true;
+    renderCta();
+    let client;
+    try {
+      client = await getPayment();
+    } catch (err) {
+      state.approvePending = false;
+      renderCta();
+      showToast(errorMessage(err, 'Не удалось подключить кошелёк'), { kind: 'error' });
+      return;
+    }
+    try {
+      await client.approve({
+        token: sideInfo.inputToken,
+        spender: sideInfo.router,
+        amount: MAX_UINT256,
+        owner: state.account.address,
+      });
+      showToast('Approve выполнен', { kind: 'info' });
+      // Re-read allowance from chain — don't optimistically set MAX_UINT256
+      // (in case the wallet sub-allowance got truncated by some odd token).
+      await refreshAllowance();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        showToast(errorMessage(err, 'Approve не удался'), { kind: 'error' });
+      }
+    } finally {
+      state.approvePending = false;
+      renderCta();
+    }
+  }
+
+  async function onSwapClick() {
+    if (state.approvePending || state.swapPending) return;
+    const sideInfo = resolveSide();
+    const amountWei = parseAmountToWei(state.amountStr);
+    if (!sideInfo || !sideInfo.router || !amountWei || amountWei <= 0n) return;
+    if (!state.account.isConnected || !state.account.address) return;
+    if (!state.quote || state.quote.amountInWei !== amountWei) return;
+
+    const tradedToken = (state.token?.address ?? '').toLowerCase();
+    if (!tradedToken) return;
+
+    state.swapPending = true;
+    renderCta();
+    let client;
+    try {
+      client = await getPayment();
+    } catch (err) {
+      state.swapPending = false;
+      renderCta();
+      showToast(errorMessage(err, 'Не удалось подключить кошелёк'), { kind: 'error' });
+      return;
+    }
+    const minOut = state.quote.minOutWei;
+    // Output-token label for the success toast. Sell on a player venue means
+    // the user receives the country token, whose symbol we don't carry on
+    // state.token (it lives on the sidebar row); fall back to a shortened
+    // address rather than the literal "country". F1.4 refinement: thread
+    // countrySymbol through setToken.
+    const outSymbol =
+      state.side === 'buy'
+        ? state.token?.symbol || 'tokens'
+        : sideInfo.venue === 'country'
+          ? 'PITCH'
+          : shortenAddress(state.token?.countryAddress);
+    try {
+      await client.swap({
+        router: sideInfo.router,
+        side: state.side,
+        token: tradedToken,
+        amountIn: amountWei,
+        minOut,
+        owner: state.account.address,
+      });
+      const outText = formatWei(state.quote.amountOutWei, 6);
+      showToast(`Своп выполнен: ${outText} ${outSymbol}`, { kind: 'info' });
+      // Clear amount, refresh chain state. Order matters — clear first so
+      // CTA reverts to "введите сумму" while balance refetches.
+      state.amountStr = '';
+      amountInput.value = '';
+      state.quote = null;
+      state.quoteError = null;
+      renderQuote();
+      // Fire-and-forget — refreshes can race each other safely (gen counters
+      // guard them).
+      refreshBalance();
+      refreshAllowance();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        showToast(errorMessage(err, 'Своп не удался'), { kind: 'error' });
+      }
+    } finally {
+      state.swapPending = false;
+      renderCta();
+    }
+  }
+
+  function onCtaClick() {
+    // Defensive — disabled CTA can still fire in some happy-dom paths.
+    if (cta.disabled) return;
+    const action = cta.dataset.action;
+    if (action === 'approve') {
+      onApproveClick();
+    } else {
+      onSwapClick();
+    }
+  }
+
   modeRow.addEventListener('click', onModeClick);
   sideRow.addEventListener('click', onSideClick);
   amountInput.addEventListener('input', onAmountInput);
   slipInput.addEventListener('input', onSlippageInput);
   pctRow.addEventListener('click', onPctClick);
+  cta.addEventListener('click', onCtaClick);
 
   // ── Wallet subscription ────────────────────────────────────────────────
   const unsubscribeAccount = onAccountChange((acc) => {
     const prev = state.account;
     state.account = acc;
-    // Address or chain changed → invalidate balance + quote.
+    // Address or chain changed → invalidate balance + allowance + quote.
     if (prev.address !== acc.address || prev.chainId !== acc.chainId || prev.isConnected !== acc.isConnected) {
       state.balanceWei = null;
+      state.allowanceWei = null;
       refreshBalance();
+      refreshAllowance();
       // Quote isn't user-specific but disabled-state depends on chainId; re-render.
     }
     renderAll();
@@ -794,6 +1209,7 @@ export function mountTradePanel(container, options = {}) {
     };
     configLoaded = true;
     refreshBalance();
+    refreshAllowance();
     if (state.amountStr) scheduleQuote();
     renderAll();
   }
@@ -819,7 +1235,9 @@ export function mountTradePanel(container, options = {}) {
       state.quote = null;
       state.quoteError = null;
       state.balanceWei = null;
+      state.allowanceWei = null;
       refreshBalance();
+      refreshAllowance();
       if (state.amountStr) scheduleQuote();
     }
     renderAll();
@@ -836,6 +1254,9 @@ export function mountTradePanel(container, options = {}) {
       quote: state.quote,
       quoteError: state.quoteError,
       quoteLoading: state.quoteLoading,
+      allowanceWei: state.allowanceWei,
+      approvePending: state.approvePending,
+      swapPending: state.swapPending,
       token: state.token,
       account: state.account,
       contracts: state.contracts,
@@ -852,6 +1273,7 @@ export function mountTradePanel(container, options = {}) {
     amountInput.removeEventListener('input', onAmountInput);
     slipInput.removeEventListener('input', onSlippageInput);
     pctRow.removeEventListener('click', onPctClick);
+    cta.removeEventListener('click', onCtaClick);
     unsubscribeAccount();
     container.replaceChildren();
   }
