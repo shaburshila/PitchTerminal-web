@@ -15,6 +15,15 @@ line_length = 100
 tab_width = 4
 bracket_spacing = true
 
+# Named RPC endpoint for fork tests. `LimitOrderExecutor.fork.t.sol` resolves
+# `BASE_RPC_URL` via `vm.envString` directly (so the same name documented in
+# docs/plans/contracts.md §C2.4 is the single source of truth), but the
+# `base` alias here lets `forge script ... --rpc-url base` and explicit
+# `forge test --fork-url base` invocations re-use the same env var without
+# repeating the URL across CI/local commands.
+[rpc_endpoints]
+base = "${BASE_RPC_URL}"
+
 # Explicit verifier config for Base mainnet — `forge verify-contract` /
 # `forge script ... --verify` auto-detects the right Etherscan endpoint
 # from this block, so the workflow stays single-shot on mainnet deploy.
