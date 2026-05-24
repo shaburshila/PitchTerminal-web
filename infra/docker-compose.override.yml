@@ -19,3 +19,11 @@ services:
       # (curl localhost:8000/api/v1/health). На проде НЕ публикуется.
       # Bind только на 127.0.0.1 — см. комментарий к postgres выше.
       - "127.0.0.1:${PT_API_HOST_PORT:-8000}:8000"
+
+  caddy:
+    # В проде SPA вшит в caddy-образ через multi-stage build (см.
+    # infra/caddy/Dockerfile). Локально маунтим ../frontend/dist напрямую,
+    # чтобы `pnpm build --watch` рядом давал hot-reload без rebuild'а образа.
+    # На проде compose запускается БЕЗ этого override (см. deploy.yml).
+    volumes:
+      - ../frontend/dist:/srv/frontend:ro

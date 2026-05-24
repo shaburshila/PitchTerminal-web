@@ -82,15 +82,18 @@ services:
 
   # ── Reverse proxy + SPA static ──────────────────────────────────────────
   # Кастомный Caddy с rate_limit (см. infra/caddy/Dockerfile + infra/Caddyfile).
-  # Том на ../frontend/dist выдаёт статику фронта. На проде заменяется на
-  # домен + auto HTTPS (Let's Encrypt).
+  # Статика фронта вшивается в образ через frontend-builder stage —
+  # docker compose build пересобирает SPA в воспроизводимой среде (Node 24
+  # + pnpm@9.15.4). Локальная разработка перекрывает /srv/frontend volume'ом
+  # в docker-compose.override.yml для hot-reload без полного rebuild'а.
+  # Context = repo root, чтобы frontend/ был доступен Dockerfile'у.
   # ВНИМАНИЕ: env_file НЕ пробрасывается — Caddy не должен иметь доступа к
   # JWT_SECRET / KEEPER_PRIVATE_KEY / TELEGRAM_WEBHOOK_SECRET. Если нужны
   # переменные для маршрутизации — добавлять явно через `environment:`.
   caddy:
     build:
-      context: ./caddy
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/caddy/Dockerfile
     image: pt-caddy:latest
     container_name: pt-caddy
     depends_on:
@@ -101,7 +104,6 @@ services:
       # 443 публикуется только в проде — в override.local НЕ добавляем.
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../frontend/dist:/srv/frontend:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped

@@ -1,0 +1,43 @@
+# Используется как build-context для infra/caddy/Dockerfile (context: ..).
+# Backend имеет свой backend/.dockerignore — его context отдельный и сюда
+# не заглядывает.
+#
+# Цель: оставить в контексте только то, что нужно frontend-builder stage'у.
+
+.git/
+.github/
+.claude/
+.vscode/
+.idea/
+
+# Бекенд, контракты, доки, скрипты — для frontend build не нужны.
+backend/
+contracts/
+docs/
+scripts/
+infra/
+
+# Сам worktree-каталог уже скрыт через .claude/, но дублируем явно.
+**/worktree-*
+
+# Артефакты Node — должны пересобираться внутри builder'а.
+**/node_modules/
+**/.pnpm-store/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# Питон-кеш / venv — на всякий случай.
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/venv/
+
+# Глобальные.
+*.log
+*.pid
+.DS_Store
+.env
+.env.*
+!.env.example
