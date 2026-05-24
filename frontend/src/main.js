@@ -32,10 +32,7 @@ import { showToast } from './ui/toast.js';
 //      under wallet-B's UI.
 // The previous code skipped both steps and let access-store retain the
 // wallet-A `'premium'` state until refresh() resolved — billing bypass.
-export function createAccountChangeHandler({
-  accessBanner,
-  deps = {},
-} = {}) {
+export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
   const _setAccessState = deps.setAccessState ?? setAccessState;
   const _logout = deps.logout ?? logout;
   const _getAccess = deps.getAccess ?? getAccess;

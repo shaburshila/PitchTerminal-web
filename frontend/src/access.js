@@ -910,12 +910,7 @@ export function mountAccessBanner(container, opts = {}) {
    * next refresh succeeds the store will catch up.
    */
   function publishState() {
-    if (
-      state === 'premium' ||
-      state === 'free' ||
-      state === 'anon' ||
-      state === 'unknown'
-    ) {
+    if (state === 'premium' || state === 'free' || state === 'anon' || state === 'unknown') {
       setAccessState(state);
     } else if (state === 'error') {
       setAccessState('anon');
