@@ -360,6 +360,35 @@ describe('mountSidebar', () => {
     expect(firstRow.getAttribute('aria-selected')).toBe('true');
   });
 
+  it('country tab rows render a flag <img> for known symbols (phase 1.5)', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    const countriesTab = container.querySelector('[data-test-id="sidebar-tab-countries"]');
+    countriesTab.click();
+
+    const flags = container.querySelectorAll('[data-test-id="sidebar-flag"]');
+    expect(flags.length).toBe(2);
+    // FRA sorts first (higher pricePitch), then USA.
+    expect(flags[0].getAttribute('src')).toBe('/flags/fr.svg');
+    expect(flags[1].getAttribute('src')).toBe('/flags/us.svg');
+    // Alt is intentionally empty + aria-hidden — the adjacent text node
+    // already carries the symbol for screen readers.
+    expect(flags[0].getAttribute('alt')).toBe('');
+    expect(flags[0].getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('player tab rows render a flag <img> for mapped country field', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    // Fixture players have country "USA" (mapped), "France" (full-word, not in
+    // the ticker map), "England" (also full-word). Only Pulisic gets a flag.
+    const flags = container.querySelectorAll('[data-test-id="sidebar-flag"]');
+    expect(flags.length).toBe(1);
+    expect(flags[0].getAttribute('src')).toBe('/flags/us.svg');
+  });
+
   it('change cell has positive/negative class', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });

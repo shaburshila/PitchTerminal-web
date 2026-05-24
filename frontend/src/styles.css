@@ -451,6 +451,22 @@ body.mode-dashboard .pt-profile {
   grid-area: symbol;
   font-weight: 600;
   color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Phase 1.5 batch 1 — sidebar country flag (16x12 SVG; ratio matches the
+   flag-icons asset pack). `box-shadow` adds a 1px ring so light flags
+   (e.g. JPN) stay readable on the dark sidebar surface. */
+.pt-sidebar__flag {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  object-fit: cover;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 .pt-sidebar__row .meta {

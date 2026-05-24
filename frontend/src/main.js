@@ -1,3 +1,10 @@
+// Phase 1.5 batch 1: tokens.css loads before styles.css so the redesign
+// CSS variables (--bg-0/1/2/3, --line, --up, --down, --font-ui, --font-mono…)
+// are defined as the existing component styles cascade in. Subsequent
+// redesign batches will reference these variables directly; for now the
+// old `--bg`, `--text`, `--accent` set in styles.css remains the source of
+// truth for already-rendered surfaces.
+import './styles/tokens.css';
 import './styles.css';
 import { mountLayout } from './layout.js';
 import { mountSidebar } from './sidebar.js';

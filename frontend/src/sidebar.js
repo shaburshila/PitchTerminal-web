@@ -31,6 +31,7 @@ import {
   WATCHLIST_LIMIT,
 } from './watchlist.js';
 import { showToast } from './ui/toast.js';
+import { flagSrc, hasFlag } from './flags.js';
 
 const TABS = Object.freeze(['players', 'countries']);
 const ROLES = Object.freeze(['all', 'best', 'captain', 'rookie']);
@@ -330,7 +331,29 @@ export function mountSidebar(container, options = {}) {
         onStarClick(token);
       });
 
-      const symbol = el('div', { className: 'symbol', text: token.symbol || '' });
+      // Phase 1.5 batch 1: prefix country tokens with a flag SVG, and prefix
+      // player rows whose `country` field has a mapped flag. Fall back to
+      // text-only when the symbol is unmapped (covers any future country
+      // ticker not yet vendored in /public/flags/).
+      const symbol = el('div', { className: 'symbol' });
+      const flagSymbol = state.tab === 'countries' ? token.symbol : token.country;
+      if (flagSymbol && hasFlag(flagSymbol)) {
+        const flag = el('img', {
+          className: 'pt-sidebar__flag',
+          dataset: { testId: 'sidebar-flag' },
+          attrs: {
+            src: flagSrc(flagSymbol),
+            alt: '',
+            'aria-hidden': 'true',
+            width: '16',
+            height: '12',
+            loading: 'lazy',
+            decoding: 'async',
+          },
+        });
+        symbol.appendChild(flag);
+      }
+      symbol.appendChild(document.createTextNode(token.symbol || ''));
       const metaParts = [];
       if (state.tab === 'players') {
         // Show country symbol + role for player rows. countryAddress is not
