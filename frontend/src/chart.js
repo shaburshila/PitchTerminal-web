@@ -699,12 +699,12 @@ export function mountChart(container, options = {}) {
     }
     chartInstance = mod.createChart(canvasHost, {
       layout: {
-        background: { color: '#0e1117' },
-        textColor: '#e6edf3',
+        background: { color: '#0a0f0d' },
+        textColor: '#e8efe9',
       },
       grid: {
-        vertLines: { color: '#1c2230' },
-        horzLines: { color: '#1c2230' },
+        vertLines: { color: '#141d1a' },
+        horzLines: { color: '#141d1a' },
       },
       timeScale: { timeVisible: true, secondsVisible: false },
       autoSize: true,

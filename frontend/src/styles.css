@@ -1,12 +1,19 @@
 /* PitchTerminal-web — base styles (dark theme, desktop-first). */
 
 :root {
-  --bg: #0e1117;
-  --bg-elev-1: #161b22;
-  --bg-elev-2: #1c2230;
-  --border: #2a3140;
-  --text: #e6edf3;
-  --text-muted: #8b949e;
+  /* Phase 1.5 batch 9.1: legacy bg/border/text-muted aligned with tokens.css
+     palette. Previous values were blue-tinted (#0e1117 / #161b22 / #1c2230 /
+     #2a3140 / #8b949e), which made the sidebar, bottom panel and chart frame
+     look "cooler" than the Batch 5 trade-panel and Batch 7 modals (which use
+     the green-tinted tokens.css `--bg-0/1/2`, `--line`, `--text-2`). The
+     visible inconsistency was a continuation of the same architectural debt
+     as the accent swap — names stayed, values harmonized. */
+  --bg: #0a0f0d;
+  --bg-elev-1: #0f1614;
+  --bg-elev-2: #141d1a;
+  --border: #1f2a26;
+  --text: #e8efe9;
+  --text-muted: #9caea6;
   /* Phase 1.5 batch 9: accent swapped from legacy blue (#3a7bff) to brand
      green (#3ddb8e — matches tokens.css `--accent`/`--up`/mockups). Text on
      accent backgrounds is now dark (#0a0f0d, see `.pt-btn--primary` etc),
