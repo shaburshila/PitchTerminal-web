@@ -634,7 +634,14 @@ function bootstrap() {
         for (const t of payload?.tokens ?? []) {
           if (t?.address && t.pricePitch != null) {
             const price = Number(t.pricePitch);
-            chart.applyPrice(t.address, price);
+            // Pass both denominations to the chart so it can pick the one
+            // matching the active unit toggle. priceCountry is only present
+            // for player tokens (api-spec §8.3); falls back to NaN-safe
+            // handling inside chart.applyPrice for countries / missing
+            // values. Fixes: player-token chart in country units jumped to
+            // PITCH on live ticks.
+            const priceCountry = t.priceCountry != null ? Number(t.priceCountry) : undefined;
+            chart.applyPrice(t.address, { pricePitch: price, priceCountry });
             // Phase 1.5 batch 3: also feed the sidebar sparkline buffer.
             // Skip zero prices that come in during worker backfill — they'd
             // pin the whole series at zero and the sparkline would look dead.

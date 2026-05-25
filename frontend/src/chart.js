@@ -991,11 +991,40 @@ export function mountChart(container, options = {}) {
   /**
    * Update the latest candle's close from an SSE price tick. Does NOT
    * recreate the series — pushes a single `update` per lightweight-charts.
+   *
+   * `price` accepts two shapes:
+   *   - **number** (legacy): treated as the PITCH-denominated price. Safe
+   *     for country tokens (single unit) and player tokens viewed in PITCH;
+   *     wrong for player tokens viewed in country units.
+   *   - **{ pricePitch, priceCountry }**: caller passes both denominations
+   *     from the SSE `prices` payload (api-spec §8.3). chart picks the one
+   *     matching the active unit toggle + token kind. Required to keep the
+   *     graph denomination stable through live ticks when the user is
+   *     viewing a player in country units. See lesson "Chart denomination"
+   *     in MEMORY.md.
    */
   function applyPrice(address, price) {
     if (!state.token || !address) return;
     if (address.toLowerCase() !== String(state.token.address || '').toLowerCase()) return;
-    if (typeof price !== 'number' || Number.isNaN(price)) return;
+    // Resolve which scalar price to apply based on the current unit. The
+    // chart series carries values in `state.unit` denomination — pushing a
+    // mismatched-unit tick is the bug user reported ("price flies off" when
+    // a live trade arrives while unit=country, because we were pushing
+    // pricePitch into a country-denominated series).
+    let scalar;
+    if (typeof price === 'number') {
+      scalar = price;
+    } else if (price && typeof price === 'object') {
+      const wantCountry = state.token?.kind === 'player' && state.unit === 'country';
+      const candidate = wantCountry ? price.priceCountry : price.pricePitch;
+      scalar = typeof candidate === 'number' ? candidate : NaN;
+    } else {
+      return;
+    }
+    if (typeof scalar !== 'number' || Number.isNaN(scalar)) return;
+    // Alias `price` to the resolved scalar so the rest of the function
+    // below keeps its existing shape unchanged.
+    price = scalar;
     if (state.candles.length === 0) return;
     const last = state.candles[state.candles.length - 1];
     const updated = {

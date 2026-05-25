@@ -72,6 +72,48 @@ button {
   color: inherit;
 }
 
+/* Scrollbars ----------------------------------------------------------- */
+/* Phase 1.5 follow-up: dark-green minimalist scrollbars. Default browser
+   chrome (wide grey gutter + grey thumb) clashed with the bg-0 panel
+   surfaces and broke the green-tinted dark visual established in batches
+   9/9.1/10. Applied globally via `*` so nested scroll containers (sidebar
+   list, bottom-tabs panels, modal bodies, profile pane) all pick up the
+   styling without one-off rules. Both webkit (Chrome/Safari/Edge) and
+   Firefox `scrollbar-*` properties are set; other UAs fall back to native
+   chrome. Colours map to the same tokens used by surfaces so the bar
+   reads as part of the panel, not a foreign element. */
+* {
+  /* Firefox — `thin` ≈ 8-10px, color is `<thumb> <track>`. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: var(--radius-sm);
+  /* Slight transparent border keeps the thumb visually inset against the
+     panel surface — without it the thumb looks glued to the gutter. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Shell ---------------------------------------------------------------- */
 
 .pt-shell {

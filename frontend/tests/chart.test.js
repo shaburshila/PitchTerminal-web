@@ -434,6 +434,96 @@ describe('mountChart', () => {
     expect(series.update).not.toHaveBeenCalled();
   });
 
+  it('applyPrice accepts {pricePitch, priceCountry} and picks pitch when unit=pitch', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    series.update.mockClear();
+    // Default unit is `pitch`, default token kind is `player`. Backend SSE
+    // ships both denominations — chart MUST pick pricePitch here.
+    chart.applyPrice('0xAAA1', { pricePitch: 13.5, priceCountry: 1.7 });
+    expect(series.update).toHaveBeenCalledTimes(1);
+    expect(series.update.mock.calls[0][0].value).toBe(13.5);
+  });
+
+  it('applyPrice picks priceCountry when unit=country for a player token (bug fix)', async () => {
+    // Regression: when the user switched the chart to country denomination
+    // and a real trade ticked in via SSE, applyPrice was pushing
+    // pricePitch into a country-denominated series — graph "flew off"
+    // (PITCH values ≪ country values, or vice versa). See MEMORY.md
+    // "Chart denomination lesson" and the user bug report 2026-05-25.
+    const { lib, created } = makeChartLib();
+    // Chart payload in country units (matches what /chart?unit=country
+    // returns for the player token — see backend/app/routes/tokens.py).
+    const apiClient = makeApi(
+      makeChartPayload({
+        candles: [
+          { time: 1709000000, open: 1.0, high: 1.1, low: 0.95, close: 1.05, volume: 10 },
+          { time: 1709000300, open: 1.05, high: 1.2, low: 1.04, close: 1.18, volume: 8 },
+        ],
+      }),
+    );
+    const chart = mountChart(container, { apiClient, chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    // Switch to country unit — fires loadChart again with unit=country.
+    container.querySelector('[data-test-id="chart-unit-country"]').click();
+    await flush();
+
+    // After unit-toggle, rebuildSeries removes the old series and adds a new
+    // one. Grab the active series (last one in seriesList).
+    const series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    series.update.mockClear();
+    // SSE prices payload: pricePitch=11.8 (huge for a country-denominated
+    // chart whose values are ~1.x), priceCountry=1.5 (in-range).
+    chart.applyPrice('0xAAA1', { pricePitch: 11.8, priceCountry: 1.5 });
+    expect(series.update).toHaveBeenCalledTimes(1);
+    expect(series.update.mock.calls[0][0].value).toBe(1.5);
+  });
+
+  it('applyPrice with object falls back to pricePitch for country tokens', async () => {
+    // Country tokens trade against PITCH directly — only one denomination
+    // exists. Chart should always pick pricePitch regardless of state.unit
+    // (the unit toggle is hidden for countries).
+    const { lib, created } = makeChartLib();
+    const apiClient = makeApi(
+      makeChartPayload({
+        candles: [
+          { time: 1709000000, open: 0.01, high: 0.012, low: 0.009, close: 0.011, volume: 100 },
+        ],
+      }),
+    );
+    const chart = mountChart(container, { apiClient, chartLibFactory: () => lib });
+    chart.setToken(makeCountry());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    series.update.mockClear();
+    chart.applyPrice('0xCCC1', { pricePitch: 0.0125, priceCountry: 999 });
+    expect(series.update).toHaveBeenCalledTimes(1);
+    expect(series.update.mock.calls[0][0].value).toBe(0.0125);
+  });
+
+  it('applyPrice ignores object with missing priceCountry when unit=country', async () => {
+    // Defensive: if the SSE payload happens to omit priceCountry (older
+    // backend, partial worker write, ...) the chart should not push NaN
+    // into the series — drop the tick silently and wait for the next.
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    container.querySelector('[data-test-id="chart-unit-country"]').click();
+    await flush();
+
+    const series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    series.update.mockClear();
+    chart.applyPrice('0xAAA1', { pricePitch: 11.8 }); // no priceCountry
+    expect(series.update).not.toHaveBeenCalled();
+  });
+
   it('applyTrade appends a marker for the active token', async () => {
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
