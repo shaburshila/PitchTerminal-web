@@ -204,6 +204,30 @@ button {
   display: block;
 }
 
+/* Gold-accent header chip — used on the Referral button to make it the
+   visual focal point of the cluster (the "earn money" CTA stands out
+   from the neutral Profile chip). The is-locked overlay still wins on
+   opacity/lock-badge, so locked-state behaviour is preserved.
+   See `components/header-actions.js` — applied as `pt-header__action--gold`. */
+.pt-header__action--gold {
+  border-color: rgba(224, 169, 58, 0.55);
+  color: var(--warn, #e0a93a);
+  background: rgba(224, 169, 58, 0.08);
+}
+.pt-header__action--gold:hover {
+  background: rgba(224, 169, 58, 0.18);
+  border-color: var(--warn, #e0a93a);
+  color: var(--warn, #e0a93a);
+}
+.pt-header__action--gold:focus-visible {
+  outline-color: var(--warn, #e0a93a);
+}
+/* Locked state already dims via opacity — the gold paint underneath is
+   still visible, which intentionally previews the unlocked appearance. */
+.pt-header__action--gold.is-locked:hover {
+  border-color: var(--warn, #e0a93a);
+}
+
 /* Phase 1.5: lock-badge overlay for premium-gated bottom-tab buttons
    (My Wallet + Orders). Mirrors the header pattern above — hidden by default,
    shown when the parent button is `.is-locked`. Click handler still fires

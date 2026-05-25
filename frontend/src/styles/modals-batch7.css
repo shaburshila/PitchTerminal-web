@@ -625,6 +625,191 @@
   gap: 12px;
 }
 
+/* ── Header referral marketing modal (.pt-modal--referral-header) ────────
+ * Opened from the gold-paint Referral button in the header (see
+ * header-actions.js). Mirrors the pay-flow's gold hero treatment to
+ * read as the same "premium / earn" surface family, then adds a
+ * two-column benefits block, the user's link with copy + share row,
+ * and a footnote describing the 25/25 split.
+ */
+
+.pt-modal--referral-header {
+  max-width: 480px;
+  width: 100%;
+  padding-top: 28px;
+}
+
+.pt-ref-modal__hero {
+  margin-bottom: 18px;
+}
+
+.pt-ref-modal__benefits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.pt-ref-modal__benefit {
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pt-ref-modal__benefit--you {
+  background: var(--warn-dim, rgba(224, 169, 58, 0.12));
+  border-color: rgba(224, 169, 58, 0.35);
+}
+
+.pt-ref-modal__benefit-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.pt-ref-modal__benefit--you .pt-ref-modal__benefit-label {
+  color: var(--warn, #e0a93a);
+}
+
+.pt-ref-modal__benefit-headline {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.pt-ref-modal__benefit--you .pt-ref-modal__benefit-headline {
+  color: var(--warn, #e0a93a);
+}
+
+.pt-ref-modal__benefit-sub {
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.pt-ref-modal__link-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.pt-ref-modal__link-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.pt-ref-modal__url {
+  flex: 1;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 6px);
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.pt-modal .pt-ref-modal__copy {
+  flex: 0 0 auto;
+  min-width: 80px;
+}
+
+.pt-ref-modal__status {
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  color: var(--text-3);
+  padding: 4px 0;
+}
+
+.pt-ref-modal__share {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.pt-ref-modal__share-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.pt-ref-modal__share-btns {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+
+.pt-modal .pt-ref-modal__share-btn {
+  flex: 1;
+  height: 34px;
+  text-decoration: none;
+  font-size: 12px;
+  /* Anchor-as-button — keep visual parity with .pt-btn secondary style. */
+  font-family: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-2);
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: var(--radius-md, 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pt-modal .pt-ref-modal__share-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--bg-2);
+}
+.pt-modal .pt-ref-modal__share-btn[aria-disabled='true'] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.pt-ref-modal__footnote {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+
+/* Narrow viewport — collapse benefits to single column. */
+@media (max-width: 520px) {
+  .pt-ref-modal__benefits {
+    grid-template-columns: 1fr;
+  }
+  .pt-ref-modal__share {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
 /* ── Header wallet chip + dropdown ───────────────────────────────────── */
 
 .pt-wallet-chip {
