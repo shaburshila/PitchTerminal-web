@@ -1,0 +1,184 @@
+/* Onboarding modal — single-page welcome shown on first visit (+ on Help-button
+ * click). Gold-themed to mirror the pay-flow modal / soft-lock cover so the
+ * "free to view, Pro to trade" framing is consistent across the app.
+ *
+ * Layout: card max-width ~640px, two-column Free/Pro grid that collapses to a
+ * single column on narrow viewports. Reuses .pt-pay__hero from modals-batch7.
+ */
+
+.pt-modal--onboarding {
+  max-width: 640px;
+  width: 100%;
+  min-width: 0;
+  position: relative;
+  /* Same warm gold rim as the pay modal so the upgrade story carries across. */
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(224, 169, 58, 0.08);
+}
+
+/* Hero override — slightly bigger icon margin to balance the wider card. */
+.pt-onb__hero {
+  margin-bottom: 18px;
+}
+
+.pt-onb__sub {
+  /* Inherit color from .pt-pay__hero-text p; bump line-height for readability
+     since the sub-line wraps over two rows on most viewports. */
+  line-height: 1.55;
+  max-width: 540px;
+}
+
+/* Free vs Pro grid ------------------------------------------------------- */
+
+.pt-onb__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 560px) {
+  .pt-onb__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pt-onb__col {
+  background: var(--bg-elev-1, var(--bg-1, #0f1614));
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md, 8px);
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pt-onb__col--pro {
+  /* Subtle gold tint so the Pro card sits visually adjacent to the gold hero
+     without screaming over the Free card. */
+  border-color: rgba(224, 169, 58, 0.4);
+  background:
+    linear-gradient(180deg, rgba(224, 169, 58, 0.04), transparent 50%),
+    var(--bg-elev-1, var(--bg-1, #0f1614));
+}
+
+.pt-onb__col-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  color: var(--text-3, var(--text-muted));
+}
+
+.pt-onb__col-label--pro {
+  color: var(--warn, #e0a93a);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pt-onb__col-label-star {
+  color: var(--warn, #e0a93a);
+}
+
+.pt-onb__col-headline {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+
+.pt-onb__feats {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pt-onb__feat {
+  font-size: 12px;
+  color: var(--text-2, var(--text-muted));
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.pt-onb__feat-tick {
+  color: var(--warn, #e0a93a);
+  font-weight: 700;
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  width: 12px;
+  text-align: center;
+}
+
+/* Disclaimer + CTA ------------------------------------------------------- */
+
+.pt-onb__disclaimer {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3, var(--text-muted));
+  margin: 0 0 14px;
+}
+
+.pt-onb__actions {
+  justify-content: center;
+}
+
+/* Single gold CTA — same gradient + shadow as .pt-soft-lock__cta so visitors
+ * read "this is the same upgrade story" when they encounter the Pro upsell
+ * later. Hover/focus mirror the soft-lock CTA as well. */
+.pt-onb__cta {
+  min-width: 240px;
+  height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  background: linear-gradient(135deg, #e0a93a, #c98e1b);
+  color: #1a1410;
+  font-family: var(--font-ui, inherit);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.18) inset,
+    0 4px 14px rgba(224, 169, 58, 0.25);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: filter 120ms ease;
+}
+
+.pt-onb__cta:hover {
+  filter: brightness(1.06);
+}
+
+.pt-onb__cta:focus-visible {
+  outline: 2px solid rgba(224, 169, 58, 0.6);
+  outline-offset: 2px;
+}
+
+/* Header help button ----------------------------------------------------- */
+
+/* Square chip with a single `?` glyph. Sits between Referral and Profile in
+ * the header cluster; visual weight intentionally quieter than the Referral
+ * gold chip so it reads as a secondary affordance. */
+.pt-header__action.pt-header__action--help {
+  /* Square-ish footprint — same height as siblings via .pt-header__action.
+     Override padding so the lone ? glyph sits centered. */
+  padding-left: 12px;
+  padding-right: 12px;
+  min-width: 32px;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+}

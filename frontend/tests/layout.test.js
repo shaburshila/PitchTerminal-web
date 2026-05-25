@@ -77,7 +77,12 @@ describe('mountLayout', () => {
     const right = walletArea.parentElement;
     expect(right.classList.contains('pt-header__right')).toBe(true);
     const order = Array.from(right.children).map((c) => c.dataset.testId);
-    expect(order).toEqual(['header-referral-btn', 'header-profile-btn', 'wallet-area']);
+    expect(order).toEqual([
+      'header-referral-btn',
+      'header-help-btn',
+      'header-profile-btn',
+      'wallet-area',
+    ]);
   });
 
   it('renders the PitchTerminal logo as a clickable button', () => {

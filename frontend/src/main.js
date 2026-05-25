@@ -26,6 +26,8 @@ import './styles/modals-batch7.css';
 // F1.1 rules. The pro-cover (`.pt-trade__cover`) ships its own complete
 // stylesheet — no shared styles cross over to other panels.
 import './styles/trade-panel-batch5.css';
+// Onboarding welcome modal + header help button (`?`).
+import './styles/onboarding.css';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
@@ -46,6 +48,7 @@ import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
 import { showToast } from './ui/toast.js';
 import { mountHeaderActions } from './components/header-actions.js';
+import { showOnboardingModal, maybeShowOnboarding } from './onboarding.js';
 
 /**
  * Convert a backend wei decimal-string into a whole-token Number.
@@ -602,6 +605,24 @@ function bootstrap() {
       referralBtn,
       onProfile: activateProfile,
     });
+  }
+
+  // Onboarding: header "?" re-opens the welcome modal; first-visit auto-open
+  // happens once per browser via localStorage flag (pt:onboarded:v1).
+  const helpBtn = layout.header.querySelector('[data-test-id="header-help-btn"]');
+  if (helpBtn instanceof HTMLElement) {
+    helpBtn.addEventListener('click', () => {
+      try {
+        showOnboardingModal();
+      } catch (err) {
+        console.error('help click: showOnboardingModal failed', err);
+      }
+    });
+  }
+  try {
+    maybeShowOnboarding();
+  } catch (err) {
+    console.error('maybeShowOnboarding failed', err);
   }
 
   // Logo click → exit Profile back to dashboard. Without this the only way

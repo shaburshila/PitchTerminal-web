@@ -98,6 +98,15 @@ function buildHeader() {
     }),
   );
 
+  // Help (?) button — re-opens the onboarding modal. Sits between Referral
+  // and Profile so the eye reaches it first when looking for orientation.
+  const helpBtn = el('button', {
+    className: 'pt-btn pt-header__action pt-header__action--help',
+    dataset: { testId: 'header-help-btn' },
+    attrs: { type: 'button', 'aria-label': 'What is PitchTerminal? (help)' },
+    text: '?',
+  });
+
   // Wallet-area placeholder — `mountWalletChip` (F0.9/F0.10) replaces its
   // children with the connect-button → chip flow on every `onAccountChange`.
   const walletArea = el('div', {
@@ -115,9 +124,11 @@ function buildHeader() {
   // would leak listeners on re-mount).
   walletArea.appendChild(connectBtn);
 
-  // Order: Referral → Profile → wallet-area (UX update — Referral lives on
-  // the outer left of the cluster so the eye lands on it before Profile).
+  // Order: Referral → Help (?) → Profile → wallet-area. Referral keeps the
+  // outer-left slot; Help sits adjacent so first-time users find it on the
+  // way to/from the brand-pitch cluster.
   right.appendChild(referralBtn);
+  right.appendChild(helpBtn);
   right.appendChild(profileBtn);
   right.appendChild(walletArea);
 
