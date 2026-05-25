@@ -47,6 +47,7 @@ from web3 import Web3
 from shared.config import config
 from shared.db import get_conn
 from shared.eth import load_abi
+from shared.fee import execution_to_mid_wei
 from shared.log import get_logger
 from shared.notify import notify
 from worker import _w3
@@ -329,8 +330,6 @@ def _select_armed_orders() -> list[dict[str, Any]]:
     Comparing the user's MID-space intent against ASK/BID would fire the
     order ~5% too early/late.
     """
-
-    from shared.fee import execution_to_mid_wei
 
     sql = (
         "SELECT lo.id, lo.owner_address, lo.token_address, lo.quote_address, "

@@ -39,6 +39,7 @@ from app.errors import abort_with_problem
 from app.limits import limiter
 from shared.config import config
 from shared.db import fetch_all, fetch_one, get_conn
+from shared.fee import execution_to_mid_wei
 from shared.notify import notify
 from shared.orders import (
     OrderIn,
@@ -301,8 +302,6 @@ def _ensure_target_price_not_yet_met(
     if order.displayTargetPrice is not None:
         target_mid = int(order.displayTargetPrice)
     else:
-        from shared.fee import execution_to_mid_wei
-
         target_mid = execution_to_mid_wei(int(order.targetPrice), side_label)
 
     tol = (target_mid * _TARGET_PRICE_TOLERANCE_BPS) // 10_000
@@ -646,8 +645,6 @@ def list_armed_orders() -> Any:
     # from Hook.currentPrice; the per-order target we compare is the MID-
     # space value the user typed (display_target_price), falling back to
     # deriving MID from the signed execution-space target_price when NULL.
-    from shared.fee import execution_to_mid_wei
-
     out = []
     for r in rows:
         if not bool(r["armed"]):
