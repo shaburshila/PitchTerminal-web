@@ -53,17 +53,23 @@ import { get as getAccessState, subscribe as subscribeAccessState } from './acce
 import {
   DEFAULT_TTL_PRESETS as TTL_PRESETS,
   buildOrderTypedData,
+  buildSignableOrder,
   randomNonce,
   serializeOrder,
   validateOrderShape,
 } from './eip712.js';
+import { applyFeeToNaiveAmount, FEE_BPS as PITCHWC_FEE_BPS_FROM_LIB } from './lib/fee.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const QUOTE_DEBOUNCE_MS = 400;
 const DEFAULT_SLIPPAGE_PCT = 1.0;
 const MAX_SLIPPAGE_PCT = 10.0; // matches LimitOrderExecutor MAX_SLIPPAGE_BPS = 1000
-const PITCHWC_FEE_BPS = 500; // pitchwc 5% — informational, the Hook quote already nets it out
+// pitchwc 5% — informational. The Hook quote already nets it out for market
+// trades; for limit orders we use it to display a breakdown alongside the user
+// input. Funnelled through lib/fee.js so we only have ONE place that knows the
+// magic 500.
+const PITCHWC_FEE_BPS = PITCHWC_FEE_BPS_FROM_LIB;
 
 // F2.x — limit-order defaults. The TTL preset list lives in `eip712.js` so the
 // unit tests can verify the canonical shape; we only re-export the default
@@ -791,6 +797,27 @@ export function mountTradePanel(container, options = {}) {
     pctRow.appendChild(btn);
   }
 
+  // Wave 2A — fee breakdown block. Appears under the amount field whenever
+  // amount > 0 + token meta is loaded, in both market and limit modes.
+  // Renders one line for the headline ("Spending X NOR → you'll receive ≈ Y
+  // HAALAN") and one secondary line for the math ("naive 0.1, fee 0.005").
+  // Lightweight by design — three textContent writes, no separate component.
+  const feeBlock = el('div', {
+    className: 'pt-trade__fee-breakdown',
+    dataset: { testId: 'fee-breakdown' },
+  });
+  feeBlock.hidden = true;
+  const feeHeadlineLine = el('div', {
+    className: 'pt-trade__fee-headline',
+    dataset: { testId: 'fee-breakdown-headline' },
+  });
+  const feeMathLine = el('div', {
+    className: 'pt-trade__fee-math',
+    dataset: { testId: 'fee-breakdown-math' },
+  });
+  feeBlock.appendChild(feeHeadlineLine);
+  feeBlock.appendChild(feeMathLine);
+
   // Slippage.
   const slipWrap = el('label', { className: 'pt-trade__slippage' });
   slipWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Slippage, %' }));
@@ -962,6 +989,7 @@ export function mountTradePanel(container, options = {}) {
   body.appendChild(balanceLine);
   body.appendChild(amountWrap);
   body.appendChild(pctRow);
+  body.appendChild(feeBlock);
   body.appendChild(slipWrap);
   body.appendChild(quoteBlock);
   body.appendChild(hintBlock);
@@ -1271,7 +1299,25 @@ export function mountTradePanel(container, options = {}) {
       const price = formatWei(triggerWei, 6);
       const quoteSym = isPlayerBuy() ? symbolForCountry(state.token?.countryAddress) : 'PITCH';
       const side = state.side === 'buy' ? 'limit-buy' : 'take-profit';
-      limitHint.textContent = `${side}: trigger when price ${op} ${price} ${quoteSym}`;
+      // Wave 2A — pre-check "target already met": warn the user when the
+      // current MID would already trigger the order (limit-buy: MID ≤ target;
+      // take-profit: MID ≥ target). The keeper would fire it on the next
+      // poll tick which is technically fine, but the user almost certainly
+      // didn't mean to "limit-buy at a price the market is already below".
+      // We compare against the MID (chart price), NOT the signed ASK/BID.
+      const mid = getDisplayMid();
+      let warning = '';
+      if (mid != null) {
+        const triggerNum = Number(formatWei(triggerWei, 18));
+        if (Number.isFinite(triggerNum) && triggerNum > 0) {
+          if (state.side === 'buy' && mid <= triggerNum) {
+            warning = ' (current MID already at or below target — order would fire immediately)';
+          } else if (state.side === 'sell' && mid >= triggerNum) {
+            warning = ' (current MID already at or above target — order would fire immediately)';
+          }
+        }
+      }
+      limitHint.textContent = `${side}: trigger when price ${op} ${price} ${quoteSym}${warning}`;
     } else {
       limitHint.textContent = state.token
         ? 'Enter a trigger price in the quote currency.'
@@ -1425,8 +1471,111 @@ export function mountTradePanel(container, options = {}) {
     renderQuote();
     renderHint();
     renderLimit();
+    renderFeeBreakdown();
     renderCta();
     renderCover();
+  }
+
+  // ── Wave 2A — fee-breakdown render ──────────────────────────────────────
+  /**
+   * Compute the MID price the user sees on the chart (in quote-per-base
+   * units). For country venue the chart denomination is PITCH (pricePitch);
+   * for player venue it's the country token (priceCountry). Both come from
+   * the sidebar token row as JS Numbers.
+   *
+   * @returns {number|null} MID, or null when the token meta hasn't loaded.
+   */
+  function getDisplayMid() {
+    if (!state.token) return null;
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return null;
+    if (v.venue === 'country') {
+      const p = state.token.pricePitch;
+      return typeof p === 'number' && Number.isFinite(p) && p > 0 ? p : null;
+    }
+    const pc = state.token.priceCountry;
+    return typeof pc === 'number' && Number.isFinite(pc) && pc > 0 ? pc : null;
+  }
+
+  /**
+   * Pretty-print a positive Number into a short decimal string with up to
+   * `digits` significant fractional places, no trailing zeros.
+   */
+  function formatNumber(n, digits = 6) {
+    if (!Number.isFinite(n) || n <= 0) return '0';
+    if (n >= 1) return Number(n.toFixed(digits)).toString();
+    // Use 6 fractional digits then trim.
+    return Number(n.toFixed(digits)).toString();
+  }
+
+  /**
+   * Symbol of the quote token (what the user spends on buy / receives on sell).
+   * Country venue → "PITCH". Player venue → the country ticker (resolved
+   * via existing symbolForCountry helper).
+   */
+  function quoteTokenSymbol() {
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return null;
+    if (v.venue === 'country') return 'PITCH';
+    return symbolForCountry(state.token?.countryAddress);
+  }
+
+  function baseTokenSymbol() {
+    return state.token?.symbol || (state.token?.address ? shortenAddress(state.token.address) : '');
+  }
+
+  function renderFeeBreakdown() {
+    const amountWei = parseAmountToWei(state.amountStr);
+    const mid = getDisplayMid();
+    const baseSym = baseTokenSymbol();
+    const quoteSym = quoteTokenSymbol();
+    if (!amountWei || amountWei <= 0n || !mid || !baseSym || !quoteSym) {
+      feeBlock.hidden = true;
+      feeHeadlineLine.textContent = '';
+      feeMathLine.textContent = '';
+      return;
+    }
+    // Convert amount to a JS Number for the breakdown (purely informational —
+    // the on-chain math still uses the Hook quote / signed BigInt). We keep
+    // the BigInt path for `applyFeeToNaiveAmount` which preserves precision
+    // for the receiving-side wei estimate.
+    const amountNum = Number(formatWei(amountWei, 18));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      feeBlock.hidden = true;
+      return;
+    }
+    // "Naive" = the amount the user would receive at MID with no fee.
+    // Buy:  naive base = amountIn (quote) / MID
+    // Sell: naive quote = amountIn (base)  × MID
+    let naiveNum;
+    let inSym;
+    let outSym;
+    if (state.side === 'buy') {
+      naiveNum = amountNum / mid;
+      inSym = quoteSym;
+      outSym = baseSym;
+    } else {
+      naiveNum = amountNum * mid;
+      inSym = baseSym;
+      outSym = quoteSym;
+    }
+    // Scale to wei for the BigInt fee math. JS Number → wei via parseAmount
+    // (truncates beyond 18 fractional digits; good enough for UI breakdown).
+    const naiveWei = parseAmountToWei(naiveNum.toFixed(18));
+    if (!naiveWei || naiveWei <= 0n) {
+      feeBlock.hidden = true;
+      return;
+    }
+    const { net, fee } = applyFeeToNaiveAmount(naiveWei);
+    const naiveStr = formatWei(naiveWei, 6);
+    const netStr = formatWei(net, 6);
+    const feeStr = formatWei(fee, 6);
+    const amountStr = formatNumber(amountNum, 6);
+    const feePct = (PITCHWC_FEE_BPS / 100).toFixed(1);
+    const verb = state.side === 'buy' ? 'Spending' : 'Selling';
+    feeHeadlineLine.textContent = `${verb} ${amountStr} ${inSym} → ≈ ${netStr} ${outSym}`;
+    feeMathLine.textContent = `naive ${naiveStr} ${outSym}, ${feePct}% fee ${feeStr} ${outSym}`;
+    feeBlock.hidden = false;
   }
 
   // ── Chain reads ────────────────────────────────────────────────────────
@@ -1630,6 +1779,9 @@ export function mountTradePanel(container, options = {}) {
     renderSideAria();
     refreshBalance();
     refreshAllowance();
+    // Wave 2A — breakdown sense (Spending vs Selling, naive direction) flips
+    // with the side; render synchronously without waiting for the quote.
+    renderFeeBreakdown();
     scheduleQuote();
   }
 
@@ -1661,6 +1813,9 @@ export function mountTradePanel(container, options = {}) {
     // the country-required block during the debounce window so we never show
     // "Required: 5 BRA" while the user is typing "10".
     renderHint();
+    // Wave 2A — fee-breakdown depends on amount + token MID; re-render on every
+    // keystroke (cheap, no chain reads).
+    renderFeeBreakdown();
     scheduleQuote();
   }
 
@@ -1817,9 +1972,13 @@ export function mountTradePanel(container, options = {}) {
   async function onPlaceLimitClick() {
     if (state.limitSubmitting) return;
     const amountWei = parseAmountToWei(state.amountStr);
-    const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
+    // Wave 2A — `displayWei` is what the user typed (MID-space, chart-space).
+    // We sign the EXECUTION-space (ASK/BID) target so the on-chain rate check
+    // passes when MID hits the user's number; we also POST `displayWei` as
+    // `displayTargetPrice` so the keeper triggers on MID.
+    const displayWei = parseAmountToWei(state.limitTriggerPriceStr);
     if (!amountWei || amountWei <= 0n) return;
-    if (!triggerWei || triggerWei <= 0n) return;
+    if (!displayWei || displayWei <= 0n) return;
     if (!state.account.isConnected || !state.account.address) return;
     if (!state.contracts?.limitOrderExecutor) return;
     const v = resolveVenue(state.token, state.contracts?.pitch);
@@ -1827,23 +1986,42 @@ export function mountTradePanel(container, options = {}) {
 
     // Per docs/eip712.md §3.3 — venue 0=player, 1=country; side 0=limit-buy,
     // 1=take-profit. Frontend maps Buy → limit-buy, Sell → take-profit.
-    const order = {
+    // `targetPrice` here is still DISPLAY-space; `buildSignableOrder` below
+    // converts it to the execution-space value before signing.
+    const displayOrder = {
       owner: state.account.address.toLowerCase(),
       token: v.baseToken,
       quoteToken: v.quoteToken,
       venue: v.venue === 'player' ? 0 : 1,
       side: state.side === 'buy' ? 0 : 1,
-      targetPrice: triggerWei,
+      targetPrice: displayWei,
       amountIn: amountWei,
       slippageBps: Math.round((state.slippagePct || 0) * 100),
       expiry: state.limitTtlSec > 0 ? Math.floor(Date.now() / 1000) + state.limitTtlSec : 0,
       nonce: randomNonce(),
     };
 
-    // UI-side sanity check — keeps us from popping the wallet signer for an
-    // obviously-malformed payload. Server still re-validates.
+    // Wave 2A — bridge to execution-space. `signOrder.targetPrice` is now the
+    // ASK (limit-buy) or BID (take-profit) the contract verifies; the original
+    // displayWei is echoed back so we can POST both.
+    let signOrder;
+    let displayTargetPriceWei;
     try {
-      validateOrderShape(order);
+      const out = buildSignableOrder(displayOrder);
+      signOrder = out.signOrder;
+      displayTargetPriceWei = out.displayTargetPriceWei;
+    } catch (err) {
+      state.limitError = errorMessage(err, 'Invalid order');
+      renderLimit();
+      return;
+    }
+
+    // UI-side sanity check — keeps us from popping the wallet signer for an
+    // obviously-malformed payload. Server still re-validates. We validate the
+    // SIGNED order (which is what the wallet pops) so any drift from the
+    // bridge surface here, not after the wallet round-trip.
+    try {
+      validateOrderShape(signOrder);
     } catch (err) {
       state.limitError = errorMessage(err, 'Invalid order');
       renderLimit();
@@ -1855,7 +2033,11 @@ export function mountTradePanel(container, options = {}) {
     renderLimit();
     renderCta();
 
-    const typedData = buildOrderTypedData(order, state.contracts.limitOrderExecutor, state.chainId);
+    const typedData = buildOrderTypedData(
+      signOrder,
+      state.contracts.limitOrderExecutor,
+      state.chainId,
+    );
     const signer = signTypedDataOverride ?? defaultSignTypedData;
 
     try {
@@ -1863,7 +2045,12 @@ export function mountTradePanel(container, options = {}) {
       if (typeof signature !== 'string' || !signature.startsWith('0x')) {
         throw new Error('Wallet returned an invalid signature');
       }
-      const payload = serializeOrder(order);
+      const payload = serializeOrder(signOrder);
+      // Wave 2A — backend (d94c2af) accepts `displayTargetPrice` as a wei
+      // string alongside the existing `targetPrice`. Keeper uses the display
+      // value to compare against MID; contract uses the signed value for the
+      // rate check. Old backends silently ignore the extra field.
+      payload.displayTargetPrice = displayTargetPriceWei.toString();
       await apiClient.createOrder(payload, signature);
       showToast(state.side === 'buy' ? 'Limit-buy order placed' : 'Take-profit order placed', {
         kind: 'info',
