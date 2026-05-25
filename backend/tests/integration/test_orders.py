@@ -355,6 +355,73 @@ class TestCreateOrder:
         assert r2.status_code == 409
         assert r2.get_json()["code"] == "orders.duplicate_nonce"
 
+    def test_display_target_price_stored_and_returned(self, app) -> None:
+        """POST accepts displayTargetPrice; GET / response carries it back."""
+
+        client = _auth_client(app)
+        # MID target = 4 (below market 5 → limit-buy not-yet-met OK).
+        # Execution-space target = MID / 0.95 ≈ 4.21 (signed; what contract verifies).
+        mid_target_wei = 4 * 10**18
+        exec_target_wei = (mid_target_wei * 10_000) // 9_500
+        order = _make_order(target_price=exec_target_wei)
+        order["displayTargetPrice"] = str(mid_target_wei)
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert body["targetPrice"] == str(exec_target_wei)
+        assert body["displayTargetPrice"] == str(mid_target_wei)
+
+        # Verify the DB has the stored value too.
+        with (
+            psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "SELECT target_price, display_target_price FROM limit_orders "
+                "WHERE owner_address = %s",
+                (_TEST_ADDR,),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert int(row["target_price"]) == exec_target_wei
+            assert int(row["display_target_price"]) == mid_target_wei
+
+    def test_display_target_price_optional_pre_0004(self, app) -> None:
+        """Order without displayTargetPrice still works; column stored NULL."""
+
+        client = _auth_client(app)
+        order = _make_order()  # no displayTargetPrice key
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["displayTargetPrice"] is None
+
+    def test_target_already_met_uses_mid_space(self, app) -> None:
+        """The 'already met' pre-check compares in MID-space.
+
+        Player market is at price_country=5 (MID). User wants to buy at
+        MID=10 — already met (market 5 <= target 10). The signed execution-
+        space target is ~10.526, but the check should still flag this.
+        """
+
+        client = _auth_client(app)
+        mid_target_wei = 10 * 10**18
+        exec_target_wei = (mid_target_wei * 10_000) // 9_500
+        order = _make_order(target_price=exec_target_wei)
+        order["displayTargetPrice"] = str(mid_target_wei)
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 422
+        assert resp.get_json()["code"] == "orders.bad_target_price"
+
 
 class TestListOrders:
     def test_returns_only_own_orders(self, app) -> None:

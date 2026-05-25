@@ -98,6 +98,7 @@ def _enable_keeper() -> Iterator[None]:
 def _insert_order(
     *,
     target_price: int = 1000,
+    display_target_price: int | None = None,
     side: str = "limit-buy",
     status: str = "open",
     retry_after_sec: int | None = None,
@@ -105,14 +106,20 @@ def _insert_order(
     executed_tx_hash: str | None = None,
     nonce_idx: int = 0,
 ) -> int:
-    """Insert one limit_order; return its id."""
+    """Insert one limit_order; return its id.
+
+    ``display_target_price`` defaults to ``None`` (NULL in DB) so the
+    historical tests keep exercising the keeper's fallback path —
+    derive MID target from the signed execution-space ``target_price`` via
+    ``shared.fee.execution_to_mid_wei``.
+    """
 
     sql = (
         "INSERT INTO limit_orders ("
         " owner_address, token_address, quote_address, venue, side, "
-        " target_price, amount_in, slippage_bps, nonce, signature, status, "
-        " attempts, executed_tx_hash, retry_after) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+        " target_price, display_target_price, amount_in, slippage_bps, "
+        " nonce, signature, status, attempts, executed_tx_hash, retry_after) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
         " CASE WHEN %s::int IS NULL THEN NULL "
         "      ELSE now() + make_interval(secs => %s::int) END) "
         "RETURNING id"
@@ -128,6 +135,7 @@ def _insert_order(
                     "country",
                     side,
                     target_price,
+                    display_target_price,
                     1_000_000_000_000_000_000,  # 1e18 amountIn
                     100,
                     _nonce(nonce_idx),
@@ -275,6 +283,67 @@ class TestKeeperTick:
         assert touched == 0
         assert _row(oid)["status"] == "open"
         # Simulation must not have been attempted.
+        contract.functions.execute.assert_not_called()
+
+    def test_display_target_price_used_when_present(self) -> None:
+        """Keeper compares MID against display_target_price (not target_price).
+
+        market_state.price_pitch is 500 (= MID). If we use a *signed* target
+        of 100 but stash a display_target_price of 1000, the MID-space
+        comparison (limit-buy: market 500 <= target_mid 1000) triggers.
+        """
+
+        oid = _insert_order(
+            target_price=100,  # would NOT trigger if compared in execution-space
+            display_target_price=1000,  # but in MID-space the limit-buy DOES trigger
+            nonce_idx=20,
+        )
+        w3, contract = _make_mock_w3()
+
+        fake_account = MagicMock()
+        fake_account.address = "0x" + "f1" * 20
+        fake_signed = MagicMock()
+        fake_signed.raw_transaction = b"\xde\xad\xbe\xef"
+        fake_account.sign_transaction.return_value = fake_signed
+
+        with (
+            patch.object(keeper._w3, "get_w3", return_value=w3),
+            patch.object(keeper, "_keeper_account", return_value=fake_account),
+            patch.object(keeper, "notify", return_value=None),
+        ):
+            touched = keeper.tick()
+
+        assert touched == 1
+        assert _row(oid)["status"] == "executing"
+
+    def test_null_display_target_falls_back_to_derived_mid(self) -> None:
+        """When display_target_price is NULL, derive MID from execution-space target.
+
+        Signed target_price = 500 (assumed execution-space ASK). For
+        limit-buy, derived MID = 500 * 0.95 = 475. Market is 500 → MID
+        comparison 500 <= 475 is FALSE → no trigger.
+
+        This guards the pre-migration-0004 fallback path so legacy rows
+        don't get fired prematurely.
+        """
+
+        oid = _insert_order(
+            target_price=500,
+            display_target_price=None,  # legacy row
+            nonce_idx=21,
+        )
+        w3, contract = _make_mock_w3()
+        fake_account = MagicMock()
+        fake_account.address = "0x" + "f1" * 20
+
+        with (
+            patch.object(keeper._w3, "get_w3", return_value=w3),
+            patch.object(keeper, "_keeper_account", return_value=fake_account),
+        ):
+            touched = keeper.tick()
+
+        assert touched == 0
+        assert _row(oid)["status"] == "open"
         contract.functions.execute.assert_not_called()
 
     def test_simulation_retryable_revert_sets_cooldown(self) -> None:

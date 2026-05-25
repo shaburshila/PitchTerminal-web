@@ -6,6 +6,9 @@ formatting + payload parsing.
 
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import patch
+
 from app.routes import stream as stream_mod
 
 
@@ -54,3 +57,55 @@ class TestParseEventIds:
 
     def test_bad_json(self) -> None:
         assert stream_mod._parse_event_ids("xxx") == []
+
+
+class TestFetchPricesAskBid:
+    """``_fetch_prices`` surfaces ASK/BID columns from ``market_state``.
+
+    The keeper never reads ASK/BID — these columns exist solely for the
+    frontend fee-breakdown UI. Both DB-null and DB-populated cases must
+    serialise correctly.
+    """
+
+    def _row(
+        self,
+        *,
+        addr: str = "0xabc",
+        price_pitch: int = 10 * 10**18,
+        price_country: int = 0,
+        ask: int | None = None,
+        bid: int | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "token_address": addr,
+            "price_pitch": price_pitch,
+            "price_country": price_country,
+            "ask_quote_per_base": ask,
+            "bid_quote_per_base": bid,
+            "updated_at": None,
+        }
+
+    def test_populated_quotes_are_wei_strings(self) -> None:
+        row = self._row(
+            ask=(10 * 10**18 * 10_000) // 9_500,  # MID / 0.95
+            bid=(10 * 10**18 * 9_500) // 10_000,  # MID * 0.95
+        )
+        with patch.object(stream_mod, "fetch_all", return_value=[row]):
+            out = stream_mod._fetch_prices(["0xabc"])
+        token = out["tokens"][0]
+        assert token["pricePitch"] == 10.0  # MID is fee-free
+        assert token["askPrice"] == str((10 * 10**18 * 10_000) // 9_500)
+        assert token["bidPrice"] == str((10 * 10**18 * 9_500) // 10_000)
+
+    def test_null_quotes_serialise_to_none(self) -> None:
+        row = self._row(ask=None, bid=None)
+        with patch.object(stream_mod, "fetch_all", return_value=[row]):
+            out = stream_mod._fetch_prices(["0xabc"])
+        token = out["tokens"][0]
+        assert token["askPrice"] is None
+        assert token["bidPrice"] is None
+
+    def test_empty_addresses_is_stale_signal(self) -> None:
+        out = stream_mod._fetch_prices([])
+        assert out["stale"] is True
+        assert out["tokens"] == []
