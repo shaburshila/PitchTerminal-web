@@ -116,25 +116,19 @@ export function mountHeaderActions(opts) {
   const subscribeAccess = opts.subscribeAccess ?? defaultSubscribeAccess;
   const openPayModal = opts.openPayModal ?? defaultOpenPayModal;
 
-  // Profile is premium-only — we mark the button `is-locked` (CSS surfaces the
-  // lock badge + dims the label) and intercept clicks to open the pay modal
-  // instead of routing into the gated profile surface.
-  //
-  // Referral is intentionally available to *every* user (anon / free / premium):
-  // any wallet that brings in referees deserves the share link. For
-  // disconnected wallets the dropdown shows a "connect wallet" hint instead of
-  // a link (see openReferralDropdown). We defensively strip any stale
-  // `is-locked` class from referralBtn in case earlier code paths set it.
-  let profileLocked = getAccessState() !== 'premium';
+  // Phase 1.5 batch 10: Profile + Referral are premium-only. When the user is
+  // not premium we mark both buttons `is-locked` (CSS surfaces the lock badge
+  // + dims the label) and intercept clicks to open the pay modal instead of
+  // routing into the gated surface.
+  let locked = getAccessState() !== 'premium';
   function applyLockedState() {
     const state = getAccessState();
     const isLocked = state !== 'premium';
-    profileLocked = isLocked;
+    locked = isLocked;
     profileBtn.classList.toggle(LOCKED_CLASS, isLocked);
+    referralBtn.classList.toggle(LOCKED_CLASS, isLocked);
     profileBtn.setAttribute('aria-disabled', String(isLocked));
-    // Defensive: ensure referral is never marked locked regardless of state.
-    referralBtn.classList.remove(LOCKED_CLASS);
-    referralBtn.removeAttribute('aria-disabled');
+    referralBtn.setAttribute('aria-disabled', String(isLocked));
   }
   applyLockedState();
   const unsubscribeAccess = subscribeAccess(() => applyLockedState());
@@ -272,7 +266,7 @@ export function mountHeaderActions(opts) {
   }
 
   function onProfileClick() {
-    if (profileLocked) {
+    if (locked) {
       tryOpenPay();
       return;
     }
@@ -288,8 +282,10 @@ export function mountHeaderActions(opts) {
   }
 
   function onReferralClick() {
-    // Referral is open to all users (anon / free / premium) — see
-    // applyLockedState above. Disconnected users see a hint in the dropdown.
+    if (locked) {
+      tryOpenPay();
+      return;
+    }
     if (!refDropdown.hidden) {
       closeReferralDropdown();
       return;
