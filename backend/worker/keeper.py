@@ -313,11 +313,29 @@ def _log_disabled(reason: str) -> None:
 
 
 def _select_armed_orders() -> list[dict[str, Any]]:
-    """Same shape as ``/orders/armed`` — server-side, no HTTP round-trip."""
+    """Same shape as ``/orders/armed`` — server-side, no HTTP round-trip.
+
+    The trigger comparison uses MID-space prices throughout: the cached
+    ``market_state.price_country`` / ``price_pitch`` columns come from
+    ``Hook.currentPrice`` (fee-free MID), and the per-order target we
+    compare against is ``display_target_price`` (the value the user typed
+    in chart-space). When ``display_target_price`` is NULL (pre-migration-
+    0004 row, e.g. prod order #1) we fall back to deriving the MID from
+    the signed execution-space ``target_price`` via the fixed pitchwc fee
+    constant — see :mod:`shared.fee`.
+
+    ASK/BID columns on ``market_state`` (added by migration 0002) are
+    NEVER read here — they exist solely for the frontend fee-breakdown UI.
+    Comparing the user's MID-space intent against ASK/BID would fire the
+    order ~5% too early/late.
+    """
+
+    from shared.fee import execution_to_mid_wei
 
     sql = (
         "SELECT lo.id, lo.owner_address, lo.token_address, lo.quote_address, "
-        " lo.venue, lo.side, lo.target_price, lo.amount_in, lo.slippage_bps, "
+        " lo.venue, lo.side, lo.target_price, lo.display_target_price, "
+        " lo.amount_in, lo.slippage_bps, "
         " EXTRACT(EPOCH FROM lo.expires_at)::bigint AS expires_at_ts, "
         " lo.nonce, lo.signature, lo.attempts, "
         " ms.price_country, ms.price_pitch, "
@@ -341,13 +359,20 @@ def _select_armed_orders() -> list[dict[str, Any]]:
         if not bool(r["armed"]):
             continue
         venue = r["venue"]
-        market = int(r["price_country"]) if venue == "player" else int(r["price_pitch"])
-        target = int(r["target_price"])
+        market_mid = int(r["price_country"]) if venue == "player" else int(r["price_pitch"])
         side = r["side"]
-        decision = should_trigger(side, target, market)
+        # Prefer the MID-space target the user typed (display_target_price);
+        # fall back to deriving MID from the signed execution-space target
+        # for pre-0004 rows.
+        if r.get("display_target_price") is not None:
+            target_mid = int(r["display_target_price"])
+        else:
+            target_mid = execution_to_mid_wei(int(r["target_price"]), side)
+        decision = should_trigger(side, target_mid, market_mid)
         if not decision.triggers:
             continue
-        r["market_price"] = market
+        r["market_price"] = market_mid
+        r["target_mid"] = target_mid
         out.append(r)
         if len(out) >= MAX_ORDERS_PER_TICK:
             break
@@ -761,8 +786,9 @@ def tick() -> int:
             owner=row["owner_address"].strip(),
             side=row["side"],
             venue=row["venue"],
-            target=str(int(row["target_price"])),
-            market=str(int(row["market_price"])),
+            target_signed=str(int(row["target_price"])),
+            target_mid=str(int(row["target_mid"])),
+            market_mid=str(int(row["market_price"])),
         )
 
         # ── 2a. Pre-flight simulation ──

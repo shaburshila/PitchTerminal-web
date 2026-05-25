@@ -175,6 +175,14 @@ CREATE TABLE limit_orders (
     venue             order_venue    NOT NULL,
     side              order_side     NOT NULL,
     target_price      NUMERIC(78, 0) NOT NULL CHECK (target_price > 0),
+    -- display_target_price — MID-space target the user typed (chart-space).
+    -- Compared by keeper against market_state.price_* (which is Hook.currentPrice).
+    -- target_price (above) stays in execution-space (fee-included ASK/BID) — that's
+    -- what's in the EIP-712 signature and what the on-chain executor verifies.
+    -- Nullable for backwards-compat with pre-migration-0004 rows; keeper falls
+    -- back to deriving the MID target via the fixed 5% fee constant when NULL.
+    display_target_price NUMERIC(78, 0) NULL
+                                     CHECK (display_target_price IS NULL OR display_target_price > 0),
     amount_in         NUMERIC(78, 0) NOT NULL CHECK (amount_in > 0),
     slippage_bps      INTEGER        NOT NULL CHECK (slippage_bps BETWEEN 0 AND 10000),
     expires_at        TIMESTAMPTZ    NULL,   -- NULL = без срока (соответствует expiry=0 в EIP-712)

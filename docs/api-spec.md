@@ -779,7 +779,8 @@ PITCH, country-токены. Player-токены **не показываются
       "tokenKind": "player",
       "venue": "player",
       "side": "limit-buy",
-      "targetPrice": "1234500000000000000",
+      "targetPrice": "1298947368421052631",
+      "displayTargetPrice": "1234000000000000000",
       "amountIn": "1000000000000000000",
       "slippageBps": 100,
       "expiresAt": 1709500000,
@@ -799,7 +800,12 @@ PITCH, country-токены. Player-токены **не показываются
 
 - `venue` ∈ `"player"|"country"` (выбирает Router/Hook).
 - `side` ∈ `"limit-buy"|"take-profit"`.
-- `targetPrice`, `amountIn` — wei-строки (uint256).
+- `targetPrice`, `amountIn` — wei-строки (uint256). `targetPrice` — execution-
+  space значение (ASK/BID, fee-included), которое верифицирует контракт.
+- `displayTargetPrice` — wei-строка или `null`. MID-space значение, которое
+  пользователь ввёл (см. §7.2). `null` для ордеров, созданных до миграции 0004
+  (фронт может вывести значение из `targetPrice` через `(1 - 5%)` если нужно
+  отобразить пользователю).
 - `expiresAt: null` означает «без срока».
 - `status` — текущее значение; переходы см. §7 functional-spec.md и
   таблицу ниже.
@@ -851,7 +857,8 @@ receipt — ордер навсегда в executing».
     "quoteToken": "0x...",
     "venue": 0,
     "side": 0,
-    "targetPrice": "1234500000000000000",
+    "targetPrice": "1298947368421052631",
+    "displayTargetPrice": "1234000000000000000",
     "amountIn": "1000000000000000000",
     "slippageBps": 100,
     "expiry": 1709500000,
@@ -861,13 +868,23 @@ receipt — ордер навсегда в executing».
 }
 ```
 
-- Поля точно соответствуют EIP-712 `Order` (см. [eip712.md](eip712.md)).
+- Поля EIP-712-сигнатуры точно соответствуют `Order` (см. [eip712.md](eip712.md));
+  `displayTargetPrice` НЕ входит в подпись (см. ниже).
 - `venue`: 0=player, 1=country.
 - `side`: 0=limit-buy, 1=take-profit.
 - `quoteToken`: для player-venue — адрес country-токена этого игрока (фронт берёт из
   `/api/v1/tokens`); для country-venue — адрес PITCH.
 - `expiry`: 0 = без срока; иначе unix-секунды.
 - `nonce`: 32-байтовый hex-string (256-битный, рекомендуется случайный).
+- `targetPrice` — **execution-space** значение, которое верифицирует контракт:
+  ASK для limit-buy (= MID/0.95), BID для take-profit (= MID×0.95). Это значение
+  входит в EIP-712-подпись.
+- `displayTargetPrice` (опционально) — **MID-space** значение, которое пользователь
+  ввёл (цена с графика, без 5% комиссии bonding curve). Keeper сравнивает именно
+  его с `market_state.price_*` (= `Hook.currentPrice`), чтобы решить «триггер
+  сработал». НЕ входит в подпись. Для обратной совместимости (старые клиенты)
+  поле необязательно — если NULL, backend выводит MID из `targetPrice` через
+  фиксированную константу комиссии pitchwc (5%); см. `shared/fee.py`.
 - Сервер не доверяет полю `owner` запроса — берёт его из JWT и сравнивает; при
   несовпадении 401. Также сервер проверяет `quoteToken` против seed
   (`tokens.country_address` для players, `PITCH_TOKEN` для countries) — несовпадение
