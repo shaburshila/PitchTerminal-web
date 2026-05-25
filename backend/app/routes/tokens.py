@@ -18,6 +18,7 @@ DB query. Unknown tokens → 404 ``tokens.unknown`` in problem+json.
 
 from __future__ import annotations
 
+import bisect
 import re
 import time
 from typing import Any
@@ -215,8 +216,70 @@ def _load_events_for_chart(token: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _build_chart_points(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build the ``points`` array per spec §4.2 — per-trade with type+volume+trader."""
+def _build_country_pitch_timeline(
+    country_events: list[dict[str, Any]],
+) -> list[tuple[int, float]]:
+    """Build a sorted ``[(timestamp, pitch_per_country), ...]`` list from country events.
+
+    For country tokens ``base_value`` is denominated in PITCH, so
+    ``market_price(...)`` is exactly the PITCH-per-country price at that trade.
+    The list is sorted ASC by ``(timestamp, block_number, log_index)`` so a
+    binary search can resolve «latest known price at time T».
+    """
+
+    pairs: list[tuple[int, int, int, float]] = []
+    for ev in country_events:
+        if ev["token_value"] <= 0:
+            continue
+        price = market_price(ev["side"], ev["base_value"], ev["fee"], ev["token_value"])
+        if price <= 0:
+            continue
+        pairs.append(
+            (
+                int(ev["timestamp"]),
+                int(ev["block_number"]),
+                int(ev["log_index"]),
+                price,
+            )
+        )
+    pairs.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [(ts, price) for ts, _b, _li, price in pairs]
+
+
+def _pitch_per_country_at(
+    timeline: list[tuple[int, float]], ts: int | float
+) -> float | None:
+    """Return the country→PITCH price at ``ts`` (last sample with ``sample_ts <= ts``).
+
+    Returns ``None`` if ``timeline`` is empty or every sample is strictly newer
+    than ``ts`` (no price data yet — caller skips the candle/point).
+    """
+
+    if not timeline:
+        return None
+    target = int(ts)
+    timestamps = [t for t, _p in timeline]
+    # bisect_right gives the insertion point after equal entries — subtracting 1
+    # yields the index of the latest sample with sample_ts <= target.
+    idx = bisect.bisect_right(timestamps, target) - 1
+    if idx < 0:
+        return None
+    return timeline[idx][1]
+
+
+def _build_chart_points(
+    events: list[dict[str, Any]],
+    *,
+    convert_to_pitch: bool = False,
+    country_timeline: list[tuple[int, float]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build the ``points`` array per spec §4.2 — per-trade with type+volume+trader.
+
+    If ``convert_to_pitch`` is True the per-event price (in country units) is
+    multiplied by the contemporaneous country→PITCH price from
+    ``country_timeline``. Points without an available country price at that
+    timestamp are skipped.
+    """
 
     out: list[dict[str, Any]] = []
     # Sort by (block_number ASC, log_index ASC) — same ordering as build_points
@@ -228,6 +291,13 @@ def _build_chart_points(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         price = market_price(ev["side"], ev["base_value"], ev["fee"], ev["token_value"])
         if price <= 0:
             continue
+        if convert_to_pitch:
+            timeline = country_timeline or []
+            ratio = _pitch_per_country_at(timeline, ev["timestamp"])
+            if ratio is None or ratio <= 0:
+                # No country price known yet at this timestamp — skip the point.
+                continue
+            price = price * ratio
         # Sub-second tick offset disambiguates trades sharing a block timestamp
         # (lightweight-charts crashes on duplicate `time` — see shared/chart.py).
         tick_offset = int(ev["log_index"]) * 0.001
@@ -243,12 +313,61 @@ def _build_chart_points(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _append_spot_point(
-    points: list[dict[str, Any]], market: dict[str, Any]
+def _scale_events_to_pitch(
+    events: list[dict[str, Any]],
+    country_timeline: list[tuple[int, float]],
 ) -> list[dict[str, Any]]:
-    """Append a synthetic `spot` point at ``now`` carrying the latest price."""
+    """Return new event dicts with ``base_value``/``fee`` scaled by the country→PITCH
+    ratio at **each event's own** timestamp.
 
-    spot_price = float(market.get("price_pitch", 0)) / 1e18
+    Pre-converting per-event (instead of post-converting bucketed candles) is the
+    only correct way to honour intra-bucket country price moves: a 5m candle's
+    ``time`` is its bucket-start, which can be earlier than a trade that
+    happened inside the bucket — a post-conversion pass would pick the stale
+    pre-bucket ratio for events that actually came after a country trade in the
+    same 5m window. See ``TestChartUnit::test_unit_pitch_for_player_converts_via_country_price``.
+
+    Events with no ratio available at ``ev["timestamp"]`` (i.e. the player
+    traded before any country trade existed) are dropped — downstream
+    ``build_candles`` then natively yields PITCH-denominated OHLC. Scaling
+    multiplies the wei integer ``base_value`` and ``fee`` by the float ratio:
+    ``market_price`` is ``(base ± fee) / token_value`` so this scales the
+    resulting price exactly. ``token_value`` is left untouched so candle
+    volumes (in token units) are unchanged.
+    """
+
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        ratio = _pitch_per_country_at(country_timeline, ev["timestamp"])
+        if ratio is None or ratio <= 0:
+            continue
+        scaled = dict(ev)
+        # Use int(round(...)) to keep the field type consistent with how the
+        # rest of the module treats `base_value` / `fee` (int wei). The float
+        # precision loss is negligible vs. 18-decimal wei values.
+        scaled["base_value"] = int(round(int(ev["base_value"]) * ratio))
+        scaled["fee"] = int(round(int(ev["fee"]) * ratio))
+        out.append(scaled)
+    return out
+
+
+def _append_spot_point(
+    points: list[dict[str, Any]],
+    market: dict[str, Any],
+    *,
+    unit: str = "pitch",
+) -> list[dict[str, Any]]:
+    """Append a synthetic `spot` point at ``now`` carrying the latest price.
+
+    For player tokens the «country» unit needs ``price_country`` (denominated
+    in the parent country token); for everything else (countries, or
+    ``unit="pitch"``) we use ``price_pitch``.
+    """
+
+    if unit == "country":
+        spot_price = float(market.get("price_country", 0)) / 1e18
+    else:
+        spot_price = float(market.get("price_pitch", 0)) / 1e18
     if spot_price <= 0:
         return points
     # Place spot strictly after the last trade time so the chart series stays
@@ -268,7 +387,18 @@ def _append_spot_point(
 
 @bp.get("/api/v1/tokens/<token>/chart")
 def get_chart(token: str) -> Any:
-    """Candles + line points for ``token`` at the requested timeframe (spec §4.2)."""
+    """Candles + line points for ``token`` at the requested timeframe (spec §4.2).
+
+    Query ``unit`` selects the price denomination:
+
+    * ``pitch`` (default) — all OHLC values + spot point in PITCH. Player
+      candles are converted from native country units using the historical
+      ``country → PITCH`` price at each candle's timestamp.
+    * ``country`` — for player tokens, OHLC stays in the parent-country units
+      (this is the contract-native denomination — no conversion). For country
+      tokens the value is identical to ``pitch`` (countries trade against
+      PITCH directly).
+    """
 
     row = _normalize_token_or_404(token)
     addr = row["address"]
@@ -282,12 +412,52 @@ def get_chart(token: str) -> Any:
             detail=f"tf must be one of: {','.join(sorted(TF_SECONDS.keys()))}",
         )
 
+    unit = request.args.get("unit", "pitch")
+    if unit not in ("pitch", "country"):
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad unit",
+            status=400,
+            detail="unit must be 'pitch' or 'country'",
+        )
+
     events = _load_events_for_chart(addr)
-    candles = build_candles(events, TF_SECONDS[tf])  # type: ignore[arg-type]
-    points = _build_chart_points(events)
+
+    # `unit=pitch` for player tokens requires multiplying every event's price
+    # by the contemporaneous country→PITCH price BEFORE bucketing — see
+    # `_scale_events_to_pitch` docstring. Country tokens are already
+    # PITCH-denominated so no conversion is ever required.
+    needs_conversion = row["kind"] == "player" and unit == "pitch"
+    country_timeline: list[tuple[int, float]] = []
+    chart_events = events
+    if needs_conversion:
+        country_addr = row.get("country_address") or ""
+        if not country_addr:
+            abort_with_problem(
+                code="validation.bad_request",
+                title="No country market",
+                status=400,
+                detail="player token has no country_address; cannot convert to PITCH",
+            )
+        country_events = _load_events_for_chart(country_addr)
+        country_timeline = _build_country_pitch_timeline(country_events)
+        chart_events = _scale_events_to_pitch(events, country_timeline)
+
+    candles = build_candles(chart_events, TF_SECONDS[tf])  # type: ignore[arg-type]
+    # `_build_chart_points` still needs the original (unscaled) events + the
+    # country timeline because it converts per-event itself (and reports the
+    # untouched `volume` derived from `token_value`).
+    points = _build_chart_points(
+        events,
+        convert_to_pitch=needs_conversion,
+        country_timeline=country_timeline,
+    )
 
     market = _market_row_or_default(addr)
-    points = _append_spot_point(points, market)
+    # Spot point follows the requested unit. For country tokens both units
+    # collapse to the same column (price_pitch), so pass "pitch" regardless.
+    spot_unit = "country" if (row["kind"] == "player" and unit == "country") else "pitch"
+    points = _append_spot_point(points, market, unit=spot_unit)
 
     country_names = _country_name_map()
     country_name = ""
@@ -300,6 +470,7 @@ def get_chart(token: str) -> Any:
             "name": row["name"],
             "symbol": row["symbol"],
             "country": country_name,
+            "unit": unit,
             "candles": candles,
             "points": points,
         }

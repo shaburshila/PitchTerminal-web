@@ -386,6 +386,12 @@ Rate-limit: 10 / минута / IP.
 
 **Query:**
 - `tf` — `1m|5m|15m|1h|4h|1d` (default `5m`).
+- `unit` — `pitch|country` (default `pitch`). Денонимация OHLC + `spot`-точки. Для
+  country-токенов оба варианта эквивалентны (страны торгуются непосредственно в
+  PITCH). Для player-токенов `unit=country` возвращает нативные значения кривой (в
+  родительском country-токене); `unit=pitch` домножает каждую свечу/точку на
+  историческую цену `country → PITCH` на момент свечи. Если у player'а нет
+  `country_address` (не должно случаться для seed-данных) → 400.
 
 **Ответ 200:**
 ```json
@@ -394,6 +400,7 @@ Rate-limit: 10 / минута / IP.
   "name": "Player Name",
   "symbol": "PLR",
   "country": "Brazil",
+  "unit": "pitch",
   "candles": [
     { "time": 1709000000, "open": 12.345678, "high": 12.5, "low": 12.3, "close": 12.4, "volume": 100.5 }
   ],
@@ -409,8 +416,14 @@ Rate-limit: 10 / минута / IP.
 - Цены — fee-excluded (рыночные). Эффективная цена — только в `trades`.
 - `candles` идут возрастанием времени, без дыр (отсутствующие интервалы заполняются
   предыдущим close).
+- `unit` в ответе эхом возвращает выбранную денонимацию (помогает фронту убедиться,
+  что сервер обработал query, прежде чем перерисовывать график).
+- Свечи / точки player-токена при `unit=pitch`, время которых предшествует первой
+  сделке его country-токена, отсутствуют в ответе (ratio неизвестен) — graceful skip,
+  ошибки не будет.
 
-**Ошибки:** 404 `tokens.unknown`.
+**Ошибки:** 404 `tokens.unknown`, 400 `validation.bad_request` (некорректные `tf` /
+`unit` / отсутствующий `country_address` у player при `unit=pitch`).
 
 ### 4.3 `GET /api/v1/tokens/{token}/trades`
 

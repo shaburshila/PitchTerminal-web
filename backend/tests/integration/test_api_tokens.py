@@ -235,6 +235,243 @@ class TestChart:
         assert resp.status_code == 400
 
 
+class TestChartUnit:
+    """spec §4.2 — `unit=pitch|country` denomination toggle.
+
+    Player tokens trade against their parent country (events carry country-
+    denominated `base_value`). `unit=pitch` (default) multiplies OHLC by the
+    historical country→PITCH price; `unit=country` keeps the native
+    denomination. Country tokens are PITCH-native — both units collapse.
+    """
+
+    # Two distinct addresses used across the tests — kept short for readability.
+    _COUNTRY = "0x" + "11" * 20
+    _PLAYER = "0x" + "22" * 20
+    # Three reference timestamps spaced 200s apart so we can bucket into 5m
+    # candles (300s) without collisions and still sit «around» events.
+    _T1 = 1_700_000_000
+    _T2 = _T1 + 200
+    _T3 = _T2 + 200
+
+    @pytest.fixture()
+    def seeded_player_with_country_trades(self):
+        """Seed: 1 country + 1 player, country trades T1 + T2, player trades T2 + T3.
+
+        Country price-in-PITCH = 2.0 from T1, 4.0 from T2 onwards.
+        Player price-in-country = 0.5 at T2, 1.0 at T3.
+        Expected PITCH prices: 0.5 * 4.0 = 2.0 at T2; 1.0 * 4.0 = 4.0 at T3.
+        """
+
+        from shared.config import WEI
+
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Brazil', 'BRA', 'country', NULL, NULL),"
+                "(%s, 'Pele', 'PEL', 'player', %s, 'captain')",
+                (self._COUNTRY, self._PLAYER, self._COUNTRY),
+            )
+
+            def ins(
+                block: int,
+                token: str,
+                side: str,
+                base_value: int,
+                token_value: int,
+                ts: int,
+            ) -> None:
+                tx = "0x" + f"{block:064x}"
+                cur.execute(
+                    "INSERT INTO events "
+                    "(block_number, tx_hash, log_index, token_address, side, "
+                    " trader_address, base_value, token_value, fee, ts) "
+                    "VALUES (%s, %s, 0, %s, %s, %s, %s, %s, 0, to_timestamp(%s))",
+                    (block, tx, token, side, "0x" + "aa" * 20, base_value, token_value, ts),
+                )
+
+            # Country: T1 → 2 PITCH per token (10 / 5); T2 → 4 PITCH (20 / 5).
+            ins(100, self._COUNTRY, "buy", 10 * WEI, 5 * WEI, self._T1)
+            ins(101, self._COUNTRY, "buy", 20 * WEI, 5 * WEI, self._T2)
+            # Player: T2 → 0.5 country per token (1 / 2); T3 → 1.0 country (3 / 3).
+            ins(200, self._PLAYER, "buy", 1 * WEI, 2 * WEI, self._T2)
+            ins(201, self._PLAYER, "buy", 3 * WEI, 3 * WEI, self._T3)
+            conn.commit()
+        return {"country": self._COUNTRY, "player": self._PLAYER}
+
+    @pytest.fixture()
+    def seeded_player_with_no_country_address(self):
+        """Player row with country_address=NULL — conversion to PITCH impossible.
+
+        The schema CHECK constraint forbids `kind='player' AND country_address IS NULL`
+        in production (see docs/db-schema.sql §tokens), so we drop the constraint
+        for the lifetime of this fixture to verify the endpoint's defensive 400
+        path. The `_clean_tokens_table` autouse fixture truncates between tests;
+        we re-add the constraint at teardown so neighbour tests stay isolated.
+        """
+
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("ALTER TABLE tokens DROP CONSTRAINT tokens_player_must_have_country")
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Orphan', 'ORP', 'player', NULL, 'rookie')",
+                (self._PLAYER,),
+            )
+            conn.commit()
+        try:
+            yield self._PLAYER
+        finally:
+            # Wipe the offending row BEFORE re-adding the CHECK — otherwise
+            # the ADD CONSTRAINT validates existing rows and fails. The
+            # autouse `_clean_tokens_table` only runs on next-test setup,
+            # which would be too late.
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute("TRUNCATE TABLE tokens CASCADE")
+                cur.execute(
+                    "ALTER TABLE tokens ADD CONSTRAINT tokens_player_must_have_country "
+                    "CHECK ((kind = 'country' AND country_address IS NULL AND role IS NULL) "
+                    "OR (kind = 'player' AND country_address IS NOT NULL AND role IS NOT NULL))"
+                )
+                conn.commit()
+
+    @pytest.fixture()
+    def seeded_player_traded_before_country(self):
+        """Player event predates ALL country events — conversion has no ratio."""
+
+        from shared.config import WEI
+
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Brazil', 'BRA', 'country', NULL, NULL),"
+                "(%s, 'Pele', 'PEL', 'player', %s, 'captain')",
+                (self._COUNTRY, self._PLAYER, self._COUNTRY),
+            )
+
+            def ins(
+                block: int,
+                token: str,
+                side: str,
+                base_value: int,
+                token_value: int,
+                ts: int,
+            ) -> None:
+                tx = "0x" + f"{block:064x}"
+                cur.execute(
+                    "INSERT INTO events "
+                    "(block_number, tx_hash, log_index, token_address, side, "
+                    " trader_address, base_value, token_value, fee, ts) "
+                    "VALUES (%s, %s, 0, %s, %s, %s, %s, %s, 0, to_timestamp(%s))",
+                    (block, tx, token, side, "0x" + "aa" * 20, base_value, token_value, ts),
+                )
+
+            # Player trades at T1, country only trades from T2 onwards.
+            ins(200, self._PLAYER, "buy", 1 * WEI, 2 * WEI, self._T1)
+            ins(100, self._COUNTRY, "buy", 20 * WEI, 5 * WEI, self._T2)
+            conn.commit()
+        return {"country": self._COUNTRY, "player": self._PLAYER}
+
+    def test_bad_unit_400(self, app, seeded_tokens) -> None:
+        addr = seeded_tokens["country"]
+        resp = app.test_client().get(f"/api/v1/tokens/{addr}/chart?unit=bogus")
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["code"] == "validation.bad_request"
+
+    def test_default_unit_is_pitch(self, app, seeded_tokens) -> None:
+        addr = seeded_tokens["country"]
+        resp = app.test_client().get(f"/api/v1/tokens/{addr}/chart")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["unit"] == "pitch"
+
+    def test_unit_pitch_equals_default_for_country(self, app, seeded_tokens) -> None:
+        # Country tokens are PITCH-native → unit=pitch must equal the no-unit response.
+        addr = seeded_tokens["country"]
+        resp_default = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m")
+        resp_pitch = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=pitch")
+        assert resp_default.status_code == 200
+        assert resp_pitch.status_code == 200
+        assert resp_default.get_json()["candles"] == resp_pitch.get_json()["candles"]
+        assert resp_default.get_json()["points"] == resp_pitch.get_json()["points"]
+
+    def test_unit_country_for_country_token_is_passthrough(
+        self, app, seeded_tokens
+    ) -> None:
+        # For country tokens unit=country has no work to do → equivalent to pitch.
+        addr = seeded_tokens["country"]
+        resp_pitch = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=pitch")
+        resp_country = app.test_client().get(
+            f"/api/v1/tokens/{addr}/chart?tf=5m&unit=country"
+        )
+        assert resp_pitch.status_code == 200
+        assert resp_country.status_code == 200
+        assert resp_pitch.get_json()["candles"] == resp_country.get_json()["candles"]
+        assert resp_pitch.get_json()["points"] == resp_country.get_json()["points"]
+
+    def test_unit_country_for_player_keeps_native_units(
+        self, app, seeded_player_with_country_trades
+    ) -> None:
+        addr = seeded_player_with_country_trades["player"]
+        resp = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=country")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Two trade points (T2 = 0.5, T3 = 1.0 native country units).
+        trade_points = [p for p in body["points"] if p["type"] != "spot"]
+        assert len(trade_points) == 2
+        assert trade_points[0]["price"] == pytest.approx(0.5)
+        assert trade_points[1]["price"] == pytest.approx(1.0)
+
+    def test_unit_pitch_for_player_converts_via_country_price(
+        self, app, seeded_player_with_country_trades
+    ) -> None:
+        addr = seeded_player_with_country_trades["player"]
+        resp = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=pitch")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Country price at T2 = 4.0 PITCH (after the T2 country trade);
+        # at T3 also = 4.0 (no later country trade).
+        # Player: 0.5 country at T2 → 2.0 PITCH; 1.0 country at T3 → 4.0 PITCH.
+        trade_points = [p for p in body["points"] if p["type"] != "spot"]
+        assert len(trade_points) == 2
+        assert trade_points[0]["price"] == pytest.approx(2.0)
+        assert trade_points[1]["price"] == pytest.approx(4.0)
+        # Candles must also be converted. With 5m TF and these timestamps,
+        # T2 and T3 fall into the same bucket so we get one candle with
+        # open=2.0, close=4.0, high=4.0, low=2.0.
+        assert len(body["candles"]) >= 1
+        first = body["candles"][0]
+        assert first["open"] == pytest.approx(2.0)
+        # All four OHLC values are positive PITCH-denominated numbers.
+        for key in ("open", "high", "low", "close"):
+            assert first[key] > 0
+
+    def test_unit_pitch_400_when_player_has_no_country_address(
+        self, app, seeded_player_with_no_country_address
+    ) -> None:
+        resp = app.test_client().get(
+            f"/api/v1/tokens/{seeded_player_with_no_country_address}/chart?unit=pitch"
+        )
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["code"] == "validation.bad_request"
+
+    def test_player_trade_before_country_history_is_skipped(
+        self, app, seeded_player_traded_before_country
+    ) -> None:
+        addr = seeded_player_traded_before_country["player"]
+        # unit=country: native — the player trade is visible.
+        resp_country = app.test_client().get(f"/api/v1/tokens/{addr}/chart?unit=country")
+        body_country = resp_country.get_json()
+        trade_pts_native = [p for p in body_country["points"] if p["type"] != "spot"]
+        assert len(trade_pts_native) == 1
+
+        # unit=pitch: no country price available at T1 → trade is dropped.
+        resp_pitch = app.test_client().get(f"/api/v1/tokens/{addr}/chart?unit=pitch")
+        body_pitch = resp_pitch.get_json()
+        trade_pts_pitch = [p for p in body_pitch["points"] if p["type"] != "spot"]
+        assert trade_pts_pitch == []
+
+
 class TestTrades:
     """spec §4.3 — `/trades` wraps in `{trades: {...}, wallets, totalTrades, myWallet}`."""
 
