@@ -55,6 +55,14 @@ import { IRouter } from "./interfaces/IRouter.sol";
 ///              forcibly reset to 0 — defensive against router bugs that leave
 ///              residual allowance, and asserted as a per-execute invariant in
 ///              the test suite.
+///         Token assumption: all tokens traded through this executor (PITCH,
+///         country tokens, player tokens) are assumed to be standard ERC20:
+///         no fee-on-transfer, no rebasing, no reentrant ERC777-style callbacks.
+///         Fee-on-transfer tokens would cause self-DoS (router receives less
+///         than approved) but cannot lead to fund loss.
+///         Sub-dust amountIn: when `amountIn * 1e18 < targetPrice`, `_minOut`
+///         rounds to zero, leaving slippage protection at the router level only.
+///         UI/backend MUST reject sub-dust orders before signing.
 ///         No `receive()` / `fallback()`: contract is not payable, never holds a
 ///         balance across transactions, and has no rescue function (sending tokens
 ///         directly to its address loses them — see docs/contracts.md §2).
@@ -355,7 +363,11 @@ contract LimitOrderExecutor is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 livePrice = hook.currentPrice(order.token);
         if (order.side == 0) {
             // limit-buy: trigger when market price has fallen to / below target.
-            if (livePrice > order.targetPrice) revert PriceConditionNotMet();
+            // `livePrice == 0` is rejected explicitly: a buggy / mis-registered
+            // hook returning 0 would otherwise satisfy `0 > target == false` and
+            // let the order execute against an unpriced token. (take-profit is
+            // symmetrically safe because `0 < target` is true → reverts.)
+            if (livePrice == 0 || livePrice > order.targetPrice) revert PriceConditionNotMet();
         } else {
             // take-profit: trigger when market price has risen to / above target.
             if (livePrice < order.targetPrice) revert PriceConditionNotMet();

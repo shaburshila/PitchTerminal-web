@@ -948,6 +948,59 @@ contract LimitOrderExecutorTest is Test {
         executor.execute(o, sig);
     }
 
+    /// @notice F-1 (manual audit): when the hook returns `currentPrice == 0`
+    ///         (mis-registered / buggy token), a limit-buy must revert. Without
+    ///         the explicit zero-check the asymmetric condition `0 > target`
+    ///         would be `false` and let the order execute against an unpriced
+    ///         token. Take-profit is symmetrically safe because `0 < target`
+    ///         already reverts (covered by `_RevertsWhenPriceBelowTarget`).
+    /// @dev    The default `playerHook` in `setUp` falls back to its non-zero
+    ///         `initialPrice` for any unset token (see MockHook `_priceFor`),
+    ///         so we deploy a fresh zero-priced hook + a fresh executor wired
+    ///         to it. This isolates the zero-price path cleanly.
+    function test_F1_RevertsOnZeroLivePrice_LimitBuy() public {
+        // Fresh hook with zero initialPrice → currentPrice(any) == 0.
+        MockHook zeroHook = new MockHook(0);
+        assertEq(zeroHook.currentPrice(address(playerToken)), 0, "precondition: hook returns 0");
+
+        // Fresh executor wired to the zero-priced hook on the player venue.
+        LimitOrderExecutor ex2 = new LimitOrderExecutor(
+            IERC20(address(pitch)),
+            IHook(address(zeroHook)),
+            IHook(address(countryHook)),
+            IRouter(address(playerRouter)),
+            IRouter(address(countryRouter)),
+            owner
+        );
+
+        // Standard limit-buy: targetPrice is non-zero, so the pre-fix asymmetric
+        // bug (`0 > target == false`) would have let this through.
+        LimitOrderExecutor.Order memory o = LimitOrderExecutor.Order({
+            owner: alice,
+            token: address(playerToken),
+            quoteToken: address(countryToken),
+            venue: 0,
+            side: 0,
+            targetPrice: PLAYER_PRICE,
+            amountIn: 1e18,
+            slippageBps: 100,
+            expiry: 0,
+            nonce: 64
+        });
+        bytes32 d = ex2.digest(o);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePk, d);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        // Allow the executor to pull — proves the revert happens at the price
+        // check, not later on the transferFrom path.
+        vm.prank(alice);
+        countryToken.approve(address(ex2), o.amountIn);
+
+        vm.expectRevert(LimitOrderExecutor.PriceConditionNotMet.selector);
+        vm.prank(keeper);
+        ex2.execute(o, sig);
+    }
+
     // =====================================================================
     // Nonce / replay / cancel (req H, P, Q)
     // =====================================================================
