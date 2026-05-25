@@ -1511,7 +1511,8 @@ export function mountTradePanel(container, options = {}) {
     } else {
       cta.textContent = state.side === 'buy' ? 'Place limit-buy' : 'Place take-profit';
     }
-    cta.dataset.action = needsApprove && !state.limitApprovePending ? 'limit-approve' : 'limit';
+    // Single action — `onPlaceLimitClick` auto-chains approve when needed.
+    cta.dataset.action = 'limit';
     cta.disabled = reason != null;
     status.textContent = reason ?? '';
   }
@@ -2159,55 +2160,14 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
-  // Wave 3 — limit-mode approve. Calls `approve(executor, max-uint256)` on
-  // the spending token (quote for limit-buy, base for take-profit). Mirrors
-  // `onApproveClick` for the market path but targets the executor contract
-  // rather than the venue router. On success the allowance is re-read so the
-  // CTA flips to "Place limit-buy" / "Place take-profit" automatically.
-  async function onLimitApproveClick() {
-    if (state.limitApprovePending || state.limitSubmitting) return;
-    const approval = resolveLimitApproval();
-    if (!approval) return;
-    if (!state.account.isConnected || !state.account.address) return;
-
-    state.limitApprovePending = true;
-    renderCta();
-    let client;
-    try {
-      client = await getPayment();
-    } catch (err) {
-      state.limitApprovePending = false;
-      renderCta();
-      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
-      return;
-    }
-    try {
-      await client.approve({
-        token: approval.spendingToken,
-        spender: approval.spender,
-        amount: MAX_UINT256,
-        owner: state.account.address,
-      });
-      showToast('Approve confirmed', { kind: 'info' });
-      // Re-read allowance from chain — don't optimistically set MAX_UINT256
-      // (in case the wallet sub-allowance got truncated by some odd token).
-      await refreshLimitAllowance();
-    } catch (err) {
-      if (!isUserRejection(err)) {
-        showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
-      }
-    } finally {
-      state.limitApprovePending = false;
-      renderCta();
-    }
-  }
-
   // F2.x — limit-order submit: build typedData → wallet signs → POST /orders.
   // The function is the limit-mode counterpart of `onSwapClick`; both share
   // the same disabled-state guards but live in separate code paths because
   // their dependencies (quote vs signature) are disjoint.
+  // Auto-chains approve when allowance insufficient (single CTA click → approve
+  // popup → wait receipt → re-read allowance → sign + POST).
   async function onPlaceLimitClick() {
-    if (state.limitSubmitting) return;
+    if (state.limitSubmitting || state.limitApprovePending) return;
     const amountWei = parseAmountToWei(state.amountStr);
     // Wave 2A — `displayWei` is what the user typed (MID-space, chart-space).
     // We sign the EXECUTION-space (ASK/BID) target so the on-chain rate check
@@ -2265,7 +2225,62 @@ export function mountTradePanel(container, options = {}) {
       return;
     }
 
+    // Auto-chain approve when executor allowance < amountIn. Single CTA click
+    // → wallet popup for ERC20 approve → wait receipt → re-read allowance →
+    // continue to sign. If approve is rejected or reverts, we bail without
+    // popping the EIP-712 signer.
+    //
+    // Defensive: if the allowance read is still in flight we don't know the
+    // real value yet. The CTA is already disabled via `disabledReasonLimit`
+    // → 'Checking allowance…', but bail explicitly so a happy-dom or stale
+    // click can't slip past with a null allowance and pop a spurious approve.
+    if (state.limitAllowanceLoading) return;
+    if (state.limitAllowanceWei == null || state.limitAllowanceWei < amountWei) {
+      const approval = resolveLimitApproval();
+      if (!approval) return;
+      state.limitApprovePending = true;
+      renderCta();
+      let approveClient;
+      try {
+        approveClient = await getPayment();
+      } catch (err) {
+        state.limitApprovePending = false;
+        renderCta();
+        showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
+        return;
+      }
+      try {
+        await approveClient.approve({
+          token: approval.spendingToken,
+          spender: approval.spender,
+          amount: MAX_UINT256,
+          owner: state.account.address,
+        });
+        showToast('Approve confirmed', { kind: 'info' });
+        // Re-read allowance from chain — don't optimistically set MAX_UINT256
+        // (in case the wallet sub-allowance got truncated by some odd token).
+        await refreshLimitAllowance();
+      } catch (err) {
+        state.limitApprovePending = false;
+        renderCta();
+        if (!isUserRejection(err)) {
+          showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
+        }
+        return;
+      }
+      // Hand-off approve→sign: set submitting BEFORE clearing approvePending
+      // so the CTA label transitions "Approve…" → "Signing…" without flashing
+      // back to "Place limit-buy" between the receipt and the sign popup.
+      state.limitSubmitting = true;
+      state.limitApprovePending = false;
+    }
+
     state.limitError = null;
+    // Intentional double-set with the hand-off above: keeps a single source of
+    // truth for the no-approve-needed path (allowance already sufficient).
+    // Don't "clean up" by removing the hand-off — that re-introduces a label
+    // flash from "Approve…" → "Place limit-buy" → "Signing…" between receipt
+    // and sign popup.
     state.limitSubmitting = true;
     renderLimit();
     renderCta();
@@ -2317,10 +2332,6 @@ export function mountTradePanel(container, options = {}) {
     // Defensive — disabled CTA can still fire in some happy-dom paths.
     if (cta.disabled) return;
     const action = cta.dataset.action;
-    if (action === 'limit-approve') {
-      onLimitApproveClick();
-      return;
-    }
     if (action === 'limit') {
       onPlaceLimitClick();
       return;

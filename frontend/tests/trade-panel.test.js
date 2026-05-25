@@ -3223,7 +3223,10 @@ describe('mountTradePanel — Wave 3 limit-mode CTA mode (approve vs sign)', () 
     await flush();
     const cta = container.querySelector('[data-test-id="trade-cta"]');
     expect(cta.textContent).toBe('Approve');
-    expect(cta.dataset.action).toBe('limit-approve');
+    // Single unified action — `onPlaceLimitClick` auto-chains approve when
+    // allowance is insufficient, so dataset.action is always `'limit'` in
+    // limit-mode. Only the visible label differs.
+    expect(cta.dataset.action).toBe('limit');
     expect(cta.disabled).toBe(false);
     handle.destroy();
   });
@@ -3323,10 +3326,11 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
     handle.destroy();
   });
 
-  it('approve success: re-reads allowance and CTA flips to "Place limit-buy"', async () => {
+  it('approve success: re-reads allowance and auto-chains to sign + POST', async () => {
     // First N calls return 0n (so CTA stays "Approve" before user clicks).
     // After the approve resolves, we flip the mock to return MAX_UINT256 so
-    // the post-approve re-read sees the new value and CTA updates.
+    // the post-approve re-read sees the new value and the auto-chain proceeds
+    // straight to sign + createOrder.
     let approvedYet = false;
     const readAllowance = vi.fn().mockImplementation(async () => {
       return approvedYet ? MAX_UINT256 : 0n;
@@ -3335,12 +3339,15 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
       approvedYet = true;
       return '0xhash';
     });
+    const signTypedData = vi.fn().mockResolvedValue('0x' + '11'.repeat(65));
+    const createOrder = vi.fn().mockResolvedValue({ ok: true });
     const payment = makePayment({ readAllowance, approve });
     const handle = mountTradePanel(container, {
-      apiClient: makeApi(),
+      apiClient: { ...makeApi(), createOrder },
       token: VALID_PLAYER_TOKEN,
       readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
       payment,
+      signTypedData,
       getAccessState: () => 'premium',
       subscribeAccess: () => () => {},
     });
@@ -3356,13 +3363,14 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
     trigger.dispatchEvent(new Event('input'));
     await flush();
     container.querySelector('[data-test-id="trade-cta"]').click();
-    await flush();
-    await flush();
+    for (let i = 0; i < 6; i++) await flush();
     expect(approve).toHaveBeenCalledTimes(1);
-    const cta = container.querySelector('[data-test-id="trade-cta"]');
-    expect(cta.textContent).toMatch(/Place limit-buy/i);
-    expect(cta.dataset.action).toBe('limit');
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(createOrder).toHaveBeenCalledTimes(1);
+    // After the chain completes, both pending flags clear and the trigger
+    // input gets reset — CTA returns to disabled "Enter trigger price" state.
     expect(handle.getState().limitApprovePending).toBe(false);
+    expect(handle.getState().limitSubmitting).toBe(false);
     handle.destroy();
   });
 
@@ -3464,10 +3472,102 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
     trigger.dispatchEvent(new Event('input'));
     await flush();
     const cta = container.querySelector('[data-test-id="trade-cta"]');
-    // CTA should be Approve, not "Place limit-buy".
-    expect(cta.dataset.action).toBe('limit-approve');
+    // CTA should be labelled "Approve" (auto-chain to sign on click).
+    expect(cta.textContent).toBe('Approve');
+    expect(cta.dataset.action).toBe('limit');
+    // No click → no wallet popups.
     expect(signTypedData).not.toHaveBeenCalled();
     expect(createOrder).not.toHaveBeenCalled();
+    handle.destroy();
+  });
+
+  it('auto-chain: single CTA click triggers approve THEN sign + createOrder', async () => {
+    // Wave 4 follow-up — clicking the CTA in limit-mode with insufficient
+    // allowance runs approve → re-reads allowance → continues to sign + POST,
+    // all in one user gesture.
+    let approvedYet = false;
+    const readAllowance = vi.fn().mockImplementation(async () => {
+      return approvedYet ? MAX_UINT256 : 0n;
+    });
+    const approve = vi.fn().mockImplementation(async () => {
+      approvedYet = true;
+      return '0xapprovehash';
+    });
+    const signTypedData = vi.fn().mockResolvedValue('0x' + '11'.repeat(65));
+    const createOrder = vi.fn().mockResolvedValue({ ok: true });
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      signTypedData,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    // Multiple flushes — approve receipt → refreshLimitAllowance → sign → POST.
+    for (let i = 0; i < 6; i++) await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(createOrder).toHaveBeenCalledTimes(1);
+    // Approve must complete before sign — assert call-order via mock invocation
+    // order.
+    expect(approve.mock.invocationCallOrder[0]).toBeLessThan(
+      signTypedData.mock.invocationCallOrder[0],
+    );
+    expect(handle.getState().limitApprovePending).toBe(false);
+    expect(handle.getState().limitSubmitting).toBe(false);
+    handle.destroy();
+  });
+
+  it('auto-chain: approve rejection does NOT proceed to sign', async () => {
+    // If the user rejects the approve popup, the EIP-712 signer must NOT be
+    // popped.
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const rejection = Object.assign(new Error('User rejected'), { code: 4001 });
+    const approve = vi.fn().mockRejectedValue(rejection);
+    const signTypedData = vi.fn();
+    const createOrder = vi.fn();
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      signTypedData,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 6; i++) await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(signTypedData).not.toHaveBeenCalled();
+    expect(createOrder).not.toHaveBeenCalled();
+    expect(handle.getState().limitApprovePending).toBe(false);
+    expect(handle.getState().limitSubmitting).toBe(false);
     handle.destroy();
   });
 });
