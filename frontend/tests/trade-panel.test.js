@@ -3324,12 +3324,17 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
   });
 
   it('approve success: re-reads allowance and CTA flips to "Place limit-buy"', async () => {
-    const readAllowance = vi
-      .fn()
-      .mockResolvedValueOnce(0n) // initial mount
-      .mockResolvedValueOnce(0n) // mode toggle
-      .mockResolvedValue(MAX_UINT256); // after approve
-    const approve = vi.fn().mockResolvedValue('0xhash');
+    // First N calls return 0n (so CTA stays "Approve" before user clicks).
+    // After the approve resolves, we flip the mock to return MAX_UINT256 so
+    // the post-approve re-read sees the new value and CTA updates.
+    let approvedYet = false;
+    const readAllowance = vi.fn().mockImplementation(async () => {
+      return approvedYet ? MAX_UINT256 : 0n;
+    });
+    const approve = vi.fn().mockImplementation(async () => {
+      approvedYet = true;
+      return '0xhash';
+    });
     const payment = makePayment({ readAllowance, approve });
     const handle = mountTradePanel(container, {
       apiClient: makeApi(),
@@ -3351,7 +3356,8 @@ describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
     trigger.dispatchEvent(new Event('input'));
     await flush();
     container.querySelector('[data-test-id="trade-cta"]').click();
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    await flush();
+    await flush();
     expect(approve).toHaveBeenCalledTimes(1);
     const cta = container.querySelector('[data-test-id="trade-cta"]');
     expect(cta.textContent).toMatch(/Place limit-buy/i);
