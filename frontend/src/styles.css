@@ -361,7 +361,19 @@ button {
 .pt-center__bottom {
   flex: 0 0 320px;
   border-top: 1px solid var(--border);
-  overflow: auto;
+  /* IMPORTANT: do NOT scroll here. The scroll lives on `.pt-bottom__body` so
+     the tab-bar (`.pt-bottom__tabs`) stays sticky while only the tab content
+     scrolls. If this wrapper scrolls instead, the whole tab-bar slides up
+     with the content. */
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Make .pt-bottom fill the bottom zone so its internal flex layout
+   (`tabs` flex:0 0 auto + `body` flex:1 1 auto overflow:auto) routes the
+   scroll to the content area rather than the outer wrapper. */
+.pt-center__bottom > .pt-bottom {
+  height: 100%;
 }
 
 .pt-right {
