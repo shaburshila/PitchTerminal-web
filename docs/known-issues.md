@@ -119,6 +119,36 @@
   Финальная верификация «most expensive first» произойдёт автоматически
   когда worker догонит backfill. +1 backend test, +2 frontend tests.
 
+### #8 [limit-orders] Cancel требует только server-side DELETE; on-chain отмена pending для post-MVP
+- **Severity:** P3 (полностью покрытый сценарий).
+- **Context:** F2.x ship'нул limit-mode + Orders tab live. Cancel-кнопка вызывает
+  `DELETE /api/v1/orders/{id}` (api-spec §7.3) — server-side только, no on-chain
+  signature. Это безопасно так как keeper не исполнит cancelled-ордер (B2.3
+  должен прочитать статус перед `execute()`), но в edge-кейсе где keeper-worker
+  упал между «status=executing» и cancel-нажатием — пользователь может оказаться
+  с уже отправленной tx после клика Cancel. Сейчас просто 404/204 (idempotent).
+- **Fix:** post-MVP — добавить on-chain `cancelOrder(nonce)` если контракт
+  получит такую функцию (currently `LimitOrderExecutor` использует
+  per-(owner,nonce) bitmap который implicitly cancel'нет на следующем
+  `execute()`, но не освобождает approval). Для MVP server-side cancel
+  достаточен.
+- **Found:** 2026-05-25.
+- **Status:** **deferred** (post-MVP).
+
+### #9 [limit-orders] Trigger price denomination не отображает quote-currency
+- **Severity:** P3.
+- **Context:** Limit-form показывает trigger price в "country wei за 1 player"
+  (для player-venue) или "PITCH wei за 1 country" (для country-venue) —
+  правильно по docs/eip712.md §1. UI hint **показывает** quote-symbol
+  ("≤ 12.5 BRA"), но сам label "Trigger price" не дифференцирует. Если юзер
+  привык к PITCH-денонимированному графику (`unit=pitch`), а торгует
+  player-venue (нативно в country) — может ввести "PITCH/share" по ошибке.
+- **Fix:** показать quote-currency сразу под label-ом, e.g.
+  "Trigger price (country units per 1 PLR)". Минорный UX-improvement;
+  активная hint-строка уже снимает основную долю риска.
+- **Found:** 2026-05-25.
+- **Status:** open (P3, не блокер для F2.x ship).
+
 ### #5a [referral] История рефералов (post-MVP)
 - **Severity:** P3.
 - **Issue:** UI чтобы посмотреть кто пришёл по твоему ref-коду и сколько

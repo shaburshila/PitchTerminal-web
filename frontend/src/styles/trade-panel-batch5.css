@@ -298,6 +298,13 @@
   color: var(--down);
 }
 
+/* F2.x — `.pt-trade__quote` uses `display:flex` which overrides the UA
+   `hidden` attribute. Re-assert `display:none` so the market quote block
+   disappears when the panel switches to Limit mode. */
+.pt-trade__quote[hidden] {
+  display: none;
+}
+
 /* ── Country hint (F1.3) ────────────────────────────────────────────────── */
 
 .pt-trade__hint {
@@ -576,4 +583,46 @@
 
 .pt-trade__cover-cta-star {
   font-size: 13px;
+}
+
+/* ── F2.x Limit-order fields ────────────────────────────────────────────── */
+
+.pt-trade__limit {
+  padding: 0;
+}
+
+.pt-trade__limit-price,
+.pt-trade__limit-ttl {
+  display: block;
+  padding: 12px 14px 0;
+}
+
+.pt-trade__limit-ttl .pt-trade__input--ttl {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-0);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pt-trade__limit-hint {
+  padding: 12px 14px 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-trade__limit-error {
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--down);
+  border-radius: var(--radius-sm);
+  color: var(--down);
+  font-size: 11.5px;
+  background: rgba(255, 92, 92, 0.06);
 }
