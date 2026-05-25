@@ -581,7 +581,7 @@ class TestChartUnit:
 
         If the bug were «apply latest country rate to all historical events»,
         both player trade-points would equal 10.0 (flat) and the chart shape
-        would be just country-mode × constant. Correct historical-rate
+        would be just country-mode times a constant. Correct historical-rate
         lookup yields 2.0 → 10.0 (rising).
         """
 
