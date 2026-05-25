@@ -74,12 +74,19 @@ def _normalize_token_or_404(raw: str) -> dict[str, Any]:
 
 
 def _market_row_or_default(token: str) -> dict[str, Any]:
-    """Read ``market_state`` for ``token``; return zero-filled defaults if missing."""
+    """Read ``market_state`` for ``token``; return zero-filled defaults if missing.
+
+    ``ask_quote_per_base`` / ``bid_quote_per_base`` (added in migration
+    0002) are NULL until the price-loop has populated them at least once.
+    They are exposed only for the frontend fee-breakdown UI (and the SSE
+    prices channel) — keeper trigger evaluation NEVER uses them.
+    """
 
     row = fetch_one(
         "SELECT price_country, price_pitch, supply, change_pct_all, "
         "change_pct_1d, change_pct_12h, change_pct_6h, change_pct_1h, change_pct_15m, "
         "trades_count, holders_count, "
+        "ask_quote_per_base, bid_quote_per_base, "
         "EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_ts "
         "FROM market_state WHERE token_address = %s",
         (token,),
@@ -97,6 +104,8 @@ def _market_row_or_default(token: str) -> dict[str, Any]:
             "change_pct_15m": 0.0,
             "trades_count": 0,
             "holders_count": 0,
+            "ask_quote_per_base": None,
+            "bid_quote_per_base": None,
             "updated_at_ts": None,
         }
     return dict(row)
@@ -116,11 +125,17 @@ def _serialize_token(
 ) -> dict[str, Any]:
     """Build a single token entry for the ``/tokens`` response (spec §4.1)."""
 
+    # Directional quotes are wei-strings (NULL when worker hasn't populated
+    # them yet) so the frontend never loses precision converting from float.
+    ask_wei = market.get("ask_quote_per_base")
+    bid_wei = market.get("bid_quote_per_base")
     base: dict[str, Any] = {
         "address": row["address"],
         "name": row["name"],
         "symbol": row["symbol"],
         "pricePitch": float(market["price_pitch"]) / 1e18,
+        "askPrice": str(int(ask_wei)) if ask_wei is not None else None,
+        "bidPrice": str(int(bid_wei)) if bid_wei is not None else None,
         "supply": str(int(market["supply"])),
         "tradesCount": int(market["trades_count"]),
         "holdersCount": int(market["holders_count"]),

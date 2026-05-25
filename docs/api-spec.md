@@ -344,6 +344,8 @@ Rate-limit: 10 / минута / IP.
       "role": "captain",
       "pricePitch": 12.345678,
       "priceCountry": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000",
       "supply": "960000000000000000000000",
       "tradesCount": 1234,
       "holdersCount": 56,
@@ -358,6 +360,8 @@ Rate-limit: 10 / минута / IP.
       "name": "Brazil",
       "symbol": "BRA",
       "pricePitch": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000",
       "supply": "960000000000000000000000",
       "tradesCount": 567,
       "holdersCount": 89,
@@ -371,6 +375,14 @@ Rate-limit: 10 / минута / IP.
 
 - `role` ∈ `"best"|"captain"|"rookie"`. У стран поля `role`, `country`,
   `countryAddress` отсутствуют (не null — отсутствуют ключи).
+- `pricePitch` / `priceCountry` — **fee-free MID** цены (= `Hook.currentPrice`).
+  Это то же значение, что показывает график.
+- `askPrice` / `bidPrice` — **fee-included** направленные котировки в wei
+  (quote-wei за 1 целую базу = 10^18). `askPrice` — что покупатель платит
+  за 1 base (MID/0.95 при 5% комиссии); `bidPrice` — что продавец получает
+  (MID×0.95). Используются только для UI breakdown комиссии в trade-панели;
+  НИКОГДА не используются keeper'ом как триггер. `null` пока worker не
+  заполнил их (первый тик price-loop'а).
 - `stale=true` если `now - lastUpdate > config.freshnessThresholdSec`.
 - Списки несортированные — фронт сортирует.
 - Формулы `changePct`, `holdersCount`, `tradesCount` — см.
@@ -980,7 +992,9 @@ Last-Event-ID** — фронт сам дотягивает свежее сост
     {
       "address": "0x...",
       "pricePitch": 12.345678,
-      "priceCountry": 0.001234
+      "priceCountry": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000"
     }
   ]
 }
@@ -989,6 +1003,12 @@ Last-Event-ID** — фронт сам дотягивает свежее сост
 Поле `stale=true` шлётся отдельным событием (с пустым `tokens: []`) ровно один раз
 при пересечении freshness threshold — фронт зажигает индикатор и держит до
 следующего нормального `prices`-события.
+
+`askPrice` / `bidPrice` — fee-included directional quotes в wei
+(quote-wei за 1 целую базу). Те же семантики, что в §4.1: ASK = MID/0.95,
+BID = MID×0.95 при 5% комиссии. Только для UI breakdown комиссии; keeper
+сравнивает с `pricePitch` / `priceCountry` (MID). `null` если worker'ом
+не заполнено.
 
 **Механизм формирования дельты** (важно для multi-process API): worker сравнивает
 текущий снимок цен с предыдущим in-memory и **публикует NOTIFY `pt_prices` с
