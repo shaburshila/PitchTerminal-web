@@ -145,14 +145,50 @@ function supplyToNumber(supplyWei) {
   }
 }
 
+/**
+ * Resolve a CSS custom property (e.g. `--up`) to a literal string at runtime.
+ * Returns `fallback` when the variable is unset, the host has no
+ * `getComputedStyle`, or the value is empty. lightweight-charts does NOT parse
+ * `var(--xxx)` strings (silent invisible render, see MEMORY.md lesson cead73e),
+ * so every chart-series colour MUST be resolved through this helper before
+ * being handed to the library.
+ */
+export function readToken(name, fallback) {
+  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') {
+    return fallback;
+  }
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    const trimmed = typeof v === 'string' ? v.trim() : '';
+    return trimmed || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Resolve candle / marker colours from tokens.css. Called once per chart mount
+ * + once per series rebuild so a theme swap at runtime (unlikely, but cheap)
+ * picks up the new palette. Fallbacks match the tokens.css canonical values so
+ * tests / SSR environments without a live DOM still produce visible output.
+ */
+function readCandleColors() {
+  return {
+    up: readToken('--up', '#3ddb8e'),
+    down: readToken('--down', '#ff5a5f'),
+    accent: readToken('--accent', '#3ddb8e'),
+  };
+}
+
 /** Map a chart trade-point or events-channel trade to a series marker. */
-function pointToMarker(point) {
+function pointToMarker(point, colors) {
   if (!point || point.type === 'spot') return null;
   if (point.type !== 'buy' && point.type !== 'sell') return null;
+  const c = colors ?? readCandleColors();
   return {
     time: point.time,
     position: point.type === 'buy' ? 'belowBar' : 'aboveBar',
-    color: point.type === 'buy' ? '#4caf6e' : '#ff5c5c',
+    color: point.type === 'buy' ? c.up : c.down,
     shape: point.type === 'buy' ? 'arrowUp' : 'arrowDown',
   };
 }
@@ -472,18 +508,22 @@ export function mountChart(container, options = {}) {
 
   function createSeries() {
     if (!chartInstance) return null;
+    // Resolve --up / --down / --accent at series-create time so a stylesheet
+    // swap is reflected on the next rebuild. lightweight-charts won't parse
+    // `var(--xxx)` — we must pass literal hex.
+    const c = readCandleColors();
     if (state.type === 'candles' && typeof chartInstance.addCandlestickSeries === 'function') {
       return chartInstance.addCandlestickSeries({
-        upColor: '#4caf6e',
-        downColor: '#ff5c5c',
-        borderUpColor: '#4caf6e',
-        borderDownColor: '#ff5c5c',
-        wickUpColor: '#4caf6e',
-        wickDownColor: '#ff5c5c',
+        upColor: c.up,
+        downColor: c.down,
+        borderUpColor: c.up,
+        borderDownColor: c.down,
+        wickUpColor: c.up,
+        wickDownColor: c.down,
       });
     }
     if (typeof chartInstance.addLineSeries === 'function') {
-      return chartInstance.addLineSeries({ color: '#3ddb8e', lineWidth: 2 });
+      return chartInstance.addLineSeries({ color: c.accent, lineWidth: 2 });
     }
     return null;
   }
@@ -498,6 +538,7 @@ export function mountChart(container, options = {}) {
     // Otherwise the default (my=on, others=off) renders nothing for anon
     // users (issue from user report: "клики на My/Others не показывают").
     const anon = !state.ownAddress;
+    const colors = readCandleColors();
     return state.points
       .filter((p) => {
         if (!p || (p.type !== 'buy' && p.type !== 'sell')) return false;
@@ -507,7 +548,7 @@ export function mountChart(container, options = {}) {
         if (!mine && !state.show.others) return false;
         return true;
       })
-      .map(pointToMarker)
+      .map((p) => pointToMarker(p, colors))
       .filter(Boolean)
       .sort((a, b) => a.time - b.time);
   }
@@ -626,7 +667,9 @@ export function mountChart(container, options = {}) {
     try {
       avgPriceLine = series.createPriceLine({
         price: avg,
-        color: '#e0a93a',
+        // Warn token from tokens.css. lightweight-charts won't parse var(--…),
+        // so we resolve to a literal hex. Fallback keeps tests/SSR rendering.
+        color: readToken('--warn', '#e0a93a'),
         lineWidth: 1,
         lineStyle: 2, // dashed (lightweight-charts LineStyle.Dashed = 2)
         axisLabelVisible: true,
@@ -673,10 +716,10 @@ export function mountChart(container, options = {}) {
     try {
       netPosPriceLine = series.createPriceLine({
         price,
-        // lightweight-charts doesn't parse CSS variables — pass the canonical
-        // green from tokens.css as a literal hex. Keep in sync with --accent
-        // / --up in styles/tokens.css.
-        color: '#3ddb8e',
+        // lightweight-charts doesn't parse CSS variables — resolve --accent to
+        // a literal hex via readToken(). Fallback keeps tests/SSR rendering
+        // the canonical green from tokens.css.
+        color: readToken('--accent', '#3ddb8e'),
         lineWidth: 1,
         lineStyle: 2, // dashed
         axisLabelVisible: true,
@@ -1064,10 +1107,13 @@ export function mountChart(container, options = {}) {
     const addr = trade.token || trade.tokenAddress;
     if (!addr) return;
     if (addr.toLowerCase() !== String(state.token.address || '').toLowerCase()) return;
-    const marker = pointToMarker({
-      type: trade.type,
-      time: trade.time ?? trade.timestamp,
-    });
+    const marker = pointToMarker(
+      {
+        type: trade.type,
+        time: trade.time ?? trade.timestamp,
+      },
+      readCandleColors(),
+    );
     if (!marker) return;
     state.points.push({
       type: trade.type,
