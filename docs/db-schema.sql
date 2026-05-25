@@ -111,6 +111,10 @@ CREATE TABLE market_state (
     change_pct_15m    DOUBLE PRECISION NOT NULL DEFAULT 0,
     trades_count      INTEGER        NOT NULL DEFAULT 0 CHECK (trades_count  >= 0),
     holders_count     INTEGER        NOT NULL DEFAULT 0 CHECK (holders_count >= 0),
+    ask_quote_per_base NUMERIC(78, 0) NULL
+                                      CHECK (ask_quote_per_base IS NULL OR ask_quote_per_base > 0),
+    bid_quote_per_base NUMERIC(78, 0) NULL
+                                      CHECK (bid_quote_per_base IS NULL OR bid_quote_per_base > 0),
     updated_at        TIMESTAMPTZ    NOT NULL DEFAULT now()
 );
 -- change_pct без CHECK: может быть положительным или отрицательным (правда,
@@ -119,6 +123,14 @@ CREATE TABLE market_state (
 
 -- price_country = 0 у токенов стран (страны торгуются в PITCH).
 -- Изменения change_pct и holders_count — пересчитываются worker'ом из events.
+
+-- ask_quote_per_base / bid_quote_per_base — fee-INCLUSIVE directional quotes
+-- in quote-wei per 1 whole base (10^18 base units), used by the limit-order
+-- keeper to evaluate triggers against the actual execution rate (not the
+-- fee-free mid-price). Denomination matches price_country/price_pitch:
+-- player tokens → country wei; country tokens → PITCH wei. NULL when the
+-- worker has not yet populated them; keeper SKIPS such orders rather than
+-- falling back to mid. Sourced from Hook.quoteBuy / Hook.quoteSell.
 
 -- =============================================================================
 -- app_state — key-value служебное состояние
