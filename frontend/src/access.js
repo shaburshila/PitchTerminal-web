@@ -771,6 +771,35 @@ export function openPayModal(opts = {}) {
     }
 
     try {
+      // 0. Defense-in-depth self-referral guard. `getEffectiveRef` already
+      // drops a self-referrer at modal-open time, but the user may have
+      // switched wallets between open and click (e.g. swapped accounts in
+      // MetaMask). Re-check the live wallet here — if it now equals the
+      // cached referrer we abort BEFORE touching allowance to avoid an
+      // approve round-trip and a guaranteed on-chain revert (the contract
+      // also rejects self-referral).
+      if (referrer && referrer !== ZERO_ADDRESS) {
+        const live = (getCurrentAddress() || '').toLowerCase();
+        if (live && live === referrer.toLowerCase()) {
+          console.warn(
+            'openPayModal.onPay: self-referral detected (live wallet === referrer); aborting',
+            { owner: live, referrer },
+          );
+          try {
+            showToast("Self-referral isn't allowed — please reopen to buy at full price.", {
+              kind: 'warn',
+            });
+          } catch {
+            /* toast is best-effort */
+          }
+          busy = false;
+          cancelBtn.disabled = false;
+          updatePayButton();
+          setStatus('');
+          return;
+        }
+      }
+
       // 1. Read allowance.
       setStatus('Checking token allowance…');
       let allowance = await client.readAllowance({

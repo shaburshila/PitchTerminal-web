@@ -267,6 +267,38 @@ describe('openPayModal — self-referrer silent skip', () => {
   });
 });
 
+describe('openPayModal — late self-referral guard (wallet switched mid-modal)', () => {
+  // Scenario: user opens the modal with wallet A and a valid referrer B
+  // (different addresses → discount applied). Before clicking Pay, they
+  // switch to wallet B in their injected provider, which would make them
+  // their own referrer. The pre-tx guard MUST abort the flow rather than
+  // submitting a tx that would (a) revert on-chain (contract rejects
+  // self-ref) or (b) silently switch to full-price with a stale allowance.
+  it('aborts when live wallet equals the cached referrer at click time', async () => {
+    // Opener wallet = WALLET, referrer = REF_WALLET → discount, modal opens.
+    localStorage.setItem('referralWallet', REF_WALLET);
+    const api = makeApiClient();
+    const payment = makePaymentClient();
+    openPayModal({ apiClient: api, payment });
+    await flush(10);
+    // Pre-click sanity: discount line shown, total = 0.75 PITCH.
+    expect(document.querySelector('[data-test-id="pay-discount"]')).not.toBeNull();
+
+    // Simulate wallet-switch: live account flips to the referrer.
+    accountState.address = REF_WALLET;
+
+    document.querySelector('[data-test-id="pay-submit"]').click();
+    await flush(20);
+
+    // No approve, no buy — guard fires BEFORE touching allowance to avoid
+    // wasted popups + a guaranteed on-chain revert.
+    expect(payment.calls.approve.length).toBe(0);
+    expect(payment.calls.buy.length).toBe(0);
+    // Modal stays open so the user can recover (reopen or cancel).
+    expect(document.querySelector('[data-test-id="pay-overlay"]')).not.toBeNull();
+  });
+});
+
 describe('openPayModal — contract-as-referrer silent skip', () => {
   it('treats access contract as no-ref', async () => {
     localStorage.setItem('referralWallet', ACCESS_ADDR);

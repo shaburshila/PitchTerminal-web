@@ -212,12 +212,14 @@ describe('mountHeaderActions', () => {
     expect(onProfile).not.toHaveBeenCalled();
   });
 
-  // Batch 10: premium-gating UX. Profile + Referral show the `is-locked`
+  // Premium-gating UX: Profile is premium-only and shows the `is-locked`
   // visual state when the user isn't premium; clicks open the pay modal
-  // instead of routing into the gated surface.
-  describe('locked state (batch 10)', () => {
+  // instead of routing into the gated surface. Referral is intentionally
+  // available to *all* users (anon / free / premium) — only the disconnected
+  // sub-state shows a "connect wallet" hint inside the dropdown.
+  describe('locked state', () => {
     it.each(['unknown', 'anon', 'free'])(
-      'marks both buttons is-locked when access state is %s',
+      'marks ONLY profileBtn is-locked when access state is %s (referral stays unlocked)',
       (state) => {
         const { profileBtn, referralBtn } = makeButtons();
         mountHeaderActions({
@@ -227,13 +229,28 @@ describe('mountHeaderActions', () => {
           ...makeDeps({ getAccessState: () => state }),
         });
         expect(profileBtn.classList.contains('is-locked')).toBe(true);
-        expect(referralBtn.classList.contains('is-locked')).toBe(true);
         expect(profileBtn.getAttribute('aria-disabled')).toBe('true');
-        expect(referralBtn.getAttribute('aria-disabled')).toBe('true');
+        // Referral is open to all — never locked.
+        expect(referralBtn.classList.contains('is-locked')).toBe(false);
+        expect(referralBtn.hasAttribute('aria-disabled')).toBe(false);
       },
     );
 
-    it('does not mark is-locked when access state is premium', () => {
+    it('strips a stale is-locked class from referralBtn defensively', () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      referralBtn.classList.add('is-locked');
+      referralBtn.setAttribute('aria-disabled', 'true');
+      mountHeaderActions({
+        profileBtn,
+        referralBtn,
+        onProfile: () => {},
+        ...makeDeps({ getAccessState: () => 'free' }),
+      });
+      expect(referralBtn.classList.contains('is-locked')).toBe(false);
+      expect(referralBtn.hasAttribute('aria-disabled')).toBe(false);
+    });
+
+    it('does not mark profile is-locked when access state is premium', () => {
       const { profileBtn, referralBtn } = makeButtons();
       mountHeaderActions({
         profileBtn,
@@ -261,18 +278,43 @@ describe('mountHeaderActions', () => {
       expect(openPayModal).toHaveBeenCalledTimes(1);
     });
 
-    it('Referral click on locked state opens pay modal, not copy', async () => {
+    it('Referral click on FREE state opens dropdown (NOT pay modal)', async () => {
       const { profileBtn, referralBtn } = makeButtons();
       const openPayModal = vi.fn();
       const deps = makeDeps({ getAccessState: () => 'free', openPayModal });
       mountHeaderActions({ profileBtn, referralBtn, onProfile: () => {}, ...deps });
       referralBtn.click();
       await new Promise((r) => setTimeout(r, 0));
-      expect(deps.copy).not.toHaveBeenCalled();
-      expect(openPayModal).toHaveBeenCalledTimes(1);
+      await new Promise((r) => setTimeout(r, 0));
+      const dropdown = document.querySelector('[data-test-id="header-referral-dropdown"]');
+      expect(dropdown).not.toBeNull();
+      expect(dropdown.hidden).toBe(false);
+      // Free users with a connected wallet see the actual link.
+      const urlEl = document.querySelector('[data-test-id="header-referral-url"]');
+      expect(urlEl.textContent).toBe('https://pitchwc-terminal.xyz/?ref=cooluser');
+      expect(openPayModal).not.toHaveBeenCalled();
     });
 
-    it('subscription flips is-locked when access state changes', () => {
+    it('Referral click on ANON state opens dropdown with connect-wallet hint', async () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      const openPayModal = vi.fn();
+      const deps = makeDeps({
+        getAccessState: () => 'anon',
+        getAccount: vi.fn().mockReturnValue({ isConnected: false, address: null }),
+        openPayModal,
+      });
+      mountHeaderActions({ profileBtn, referralBtn, onProfile: () => {}, ...deps });
+      referralBtn.click();
+      await new Promise((r) => setTimeout(r, 0));
+      const dropdown = document.querySelector('[data-test-id="header-referral-dropdown"]');
+      expect(dropdown.hidden).toBe(false);
+      const status = document.querySelector('[data-test-id="header-referral-status"]');
+      expect(status.hidden).toBe(false);
+      expect(status.textContent).toMatch(/Connect your wallet/i);
+      expect(openPayModal).not.toHaveBeenCalled();
+    });
+
+    it('subscription flips profile is-locked when access state changes; referral stays unlocked', () => {
       const { profileBtn, referralBtn } = makeButtons();
       let listener = () => {};
       const subscribeAccess = (fn) => {
@@ -287,6 +329,7 @@ describe('mountHeaderActions', () => {
         ...makeDeps({ getAccessState: () => state, subscribeAccess }),
       });
       expect(profileBtn.classList.contains('is-locked')).toBe(true);
+      expect(referralBtn.classList.contains('is-locked')).toBe(false);
       state = 'premium';
       listener('premium');
       expect(profileBtn.classList.contains('is-locked')).toBe(false);
