@@ -268,7 +268,65 @@ $ ssh -p 2222 deploy@${VPS_IP} 'cd ~/pitchterminal/infra && docker compose -f do
 
 ---
 
+## 9.5 Включение keeper'а (Phase 2 — limit orders)
+
+После того как `LimitOrderExecutor` задеплоен на mainnet и адрес положен в `EXECUTOR_CONTRACT`, нужно поднять keeper-EOA. Он подписывает `executeOrder(...)` от своего имени. Контракт permissionless, поэтому никаких ролей на executor выдавать ему не надо — компрометация = потеря только остатка ETH на этом адресе.
+
+```bash
+# 1. Сгенерить новый EOA (локально, не на VPS — pk должен попасть в password manager, не в bash_history VPS)
+$ cast wallet new
+# 2. Зафандить адрес ~0.01 ETH на Base (operational float)
+# 3. На VPS положить pk в .env
+$ ssh -p 2222 deploy@${VPS_IP}
+$ cd ~/pitchterminal
+$ nano .env       # KEEPER_PRIVATE_KEY=0x...
+$ chmod 600 .env  # уже должно быть 600, на всякий
+# 4. Пересоздать worker (НЕ restart — restart не перечитывает env)
+$ cd infra
+$ docker compose up -d --force-recreate --no-deps worker
+# 5. Verify
+$ docker compose logs --since 30s worker | grep keeper
+# OK: keeper.recovery_no_rows / keeper.recovery_begin / keeper.tick_no_orders
+# BAD: keeper.disabled (pk не подхватился — typo в строке или забыл префикс 0x)
+```
+
+> **`docker compose restart` ≠ `docker compose up -d --force-recreate`.** Restart перезапускает существующий контейнер с уже зафиксированным env-набором — изменения в `.env` ИГНОРИРУЮТСЯ. `up -d --force-recreate` создаёт новый контейнер с актуальным env. `--no-deps` не цепляет postgres (важно — см. troubleshooting ниже).
+
+### Симлинк `infra/.env → ../.env` (требуется для compose variable substitution)
+
+Compose-файл использует `${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}` для подстановки. Substitution читает переменные **из shell или из `.env` файла в директории compose-file** — то есть из `infra/.env`. `env_file: ../.env` в YAML-блоке сервиса в substitution НЕ участвует — он только пробрасывается внутрь контейнера.
+
+Без симлинка `infra/.env` substitution получает дефолт `pt:pt`, что не совпадает с реальным паролем postgres (длинный из `~/pitchterminal/.env`) — worker падает с `password authentication failed for user "pt"`.
+
+Setup (один раз на VPS):
+```bash
+$ cd ~/pitchterminal/infra && ln -s ../.env .env
+```
+
+Альтернатива — всегда вызывать `docker compose --env-file ../.env ...` (что и делает §8 этого runbook'а), но CD-скрипт деплоя `docker compose up -d --build` без `--env-file` не подхватит — поэтому симлинк надёжнее.
+
+---
+
 ## 10. Troubleshooting
+
+### `password authentication failed for user "pt"` в логах worker'а или api
+
+Compose substitution `${DATABASE_URL:-...}` не нашёл переменную и подставил дефолт `pt:pt`, который не соответствует фактическому паролю postgres. Симптом: после `docker compose up -d --force-recreate` (или CD-redeploy) worker/api валятся с auth-fail, хотя `.env` правильный.
+
+Фикс: создать симлинк `infra/.env -> ../.env` (см. §9.5). Существующий postgres data volume **не** надо трогать (`docker volume rm pt_pgdata` — DATA LOSS).
+
+### `FileNotFoundError: '/app/abis/LimitOrderExecutor.json'` в логах keeper'а
+
+Старая backend image (до коммита `f419794`) не копировала `abis/` внутрь. Quick-fix без redeploy:
+
+```bash
+$ docker exec --user root pt-worker mkdir -p /app/abis
+$ docker cp ~/pitchterminal/backend/abis/. pt-worker:/app/abis/
+$ docker exec --user root pt-worker chmod -R a+r /app/abis
+$ docker compose restart worker
+```
+
+Live-патч переживёт только до следующего recreate. Правильное решение — pull обновлённого образа (после `f419794` `abis/` уже встроены).
 
 ### Caddy не получил Let's Encrypt cert
 
