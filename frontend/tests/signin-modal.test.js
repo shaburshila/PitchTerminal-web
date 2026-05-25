@@ -116,4 +116,69 @@ describe('signin-modal', () => {
     // Only one overlay alive.
     expect(document.querySelectorAll('[data-test-id="signin-overlay"]').length).toBe(1);
   });
+
+  // B5 — Focus trap (WCAG 2.4.3 + 2.1.2). Tab must cycle within the overlay
+  // so keyboard users can't reach the dim background app while the modal is
+  // open. Focus also restores to the element that opened the modal on close.
+  describe('focus trap (B5)', () => {
+    function dispatchTab(shift = false) {
+      const ev = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: shift,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(ev);
+      return ev;
+    }
+
+    it('Tab from the last focusable wraps to the first', () => {
+      showSignInModal({});
+      const submit = document.querySelector('[data-test-id="signin-submit"]');
+      const cancel = document.querySelector('[data-test-id="signin-cancel"]');
+      // Modal opens with submit focused. Move focus to last (submit comes
+      // AFTER cancel in DOM order — submit is `last`).
+      submit.focus();
+      expect(document.activeElement).toBe(submit);
+      const ev = dispatchTab(false);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(cancel);
+    });
+
+    it('Shift+Tab from the first focusable wraps to the last', () => {
+      showSignInModal({});
+      const submit = document.querySelector('[data-test-id="signin-submit"]');
+      const cancel = document.querySelector('[data-test-id="signin-cancel"]');
+      cancel.focus();
+      expect(document.activeElement).toBe(cancel);
+      const ev = dispatchTab(true);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(submit);
+    });
+
+    it('Tab from outside the overlay snaps back to the first focusable', () => {
+      // External trigger button — simulate focus leaking out (e.g. click on
+      // the dimmed background app).
+      const extern = document.createElement('button');
+      document.body.appendChild(extern);
+      showSignInModal({});
+      extern.focus();
+      expect(document.activeElement).toBe(extern);
+      const ev = dispatchTab(false);
+      expect(ev.defaultPrevented).toBe(true);
+      const cancel = document.querySelector('[data-test-id="signin-cancel"]');
+      // First focusable in DOM order is cancel.
+      expect(document.activeElement).toBe(cancel);
+    });
+
+    it('restores focus to the opener element when closed', () => {
+      const trigger = document.createElement('button');
+      document.body.appendChild(trigger);
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+      const handle = showSignInModal({});
+      handle.close();
+      expect(document.activeElement).toBe(trigger);
+    });
+  });
 });
