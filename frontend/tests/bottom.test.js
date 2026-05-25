@@ -587,6 +587,154 @@ describe('mountBottomTabs', () => {
     });
   });
 
+  // ── Wave 2B Task 3 — pushBalances (SSE live Holders update) ─────────────
+  describe('pushBalances (SSE live holders)', () => {
+    function balanceEntry(address, token, wei) {
+      return { address, token, wei };
+    }
+
+    it('updates an existing holder\'s position when balance arrives for active token', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      // First holder (0x...01) starts at position=30. Update to 100.
+      handle.pushBalances([
+        balanceEntry(
+          '0x0000000000000000000000000000000000000001',
+          TOKEN_A,
+          '100000000000000000000', // 100 * 1e18
+        ),
+      ]);
+
+      const rows = container.querySelectorAll('[data-test-id="holder-row"]');
+      // Find row by address text content
+      const updated = Array.from(rows).find((r) => r.textContent.includes('0x0000…0001'));
+      expect(updated).toBeTruthy();
+      // Position cell shows 100 (formatted)
+      expect(updated.textContent).toContain('100');
+    });
+
+    it('adds a new holder when an unknown trader gets a positive balance', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      handle.pushBalances([
+        balanceEntry(
+          '0x0000000000000000000000000000000000000099',
+          TOKEN_A,
+          '5000000000000000000',
+        ),
+      ]);
+
+      const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      expect(finalRows).toBe(initialRows + 1);
+      const counter = container.querySelector('[data-test-id="bottom-tab-count-holders"]');
+      expect(counter.textContent).toBe(String(finalRows));
+    });
+
+    it('drops a holder from the count when their balance goes to 0', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      // First holder (position=30) sells off everything.
+      handle.pushBalances([
+        balanceEntry('0x0000000000000000000000000000000000000001', TOKEN_A, '0'),
+      ]);
+
+      const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      expect(finalRows).toBe(initialRows - 1);
+    });
+
+    it('ignores balance entries for a different token', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      handle.pushBalances([
+        balanceEntry(
+          '0x0000000000000000000000000000000000000099',
+          TOKEN_B, // different token
+          '5000000000000000000',
+        ),
+      ]);
+      const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      expect(finalRows).toBe(initialRows);
+    });
+
+    it('handles case-insensitive token comparison', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A.toLowerCase());
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      handle.pushBalances([
+        balanceEntry(
+          '0x0000000000000000000000000000000000000099',
+          TOKEN_A.toUpperCase(),
+          '5000000000000000000',
+        ),
+      ]);
+      const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      expect(finalRows).toBe(initialRows + 1);
+    });
+
+    it('is a no-op with empty array', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      // Should not throw.
+      handle.pushBalances([]);
+      handle.pushBalances(null);
+      handle.pushBalances(undefined);
+    });
+
+    it('is a no-op when no active token is set', () => {
+      const api = makeApi(makeTradesResponse());
+      const handle = mountBottomTabs(container, { apiClient: api });
+      // Don't setToken — pushBalances should silently return.
+      handle.pushBalances([
+        balanceEntry(
+          '0x0000000000000000000000000000000000000099',
+          TOKEN_A,
+          '5000000000000000000',
+        ),
+      ]);
+      // No holders pane rendered yet.
+      expect(container.querySelectorAll('[data-test-id="holder-row"]').length).toBe(0);
+    });
+
+    it('ignores malformed entries (non-numeric wei, missing fields)', async () => {
+      const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+      container.querySelector('[data-test-id="bottom-tab-holders"]').click();
+
+      const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      // None of these should mutate state.
+      handle.pushBalances([
+        { address: '0xnotgood', token: TOKEN_A, wei: '1.5e18' },
+        { address: '0xnotgood', token: TOKEN_A, wei: 'abc' },
+        { address: null, token: TOKEN_A, wei: '1000000000000000000' },
+        { token: TOKEN_A, wei: '1000000000000000000' },
+        null,
+        'not an object',
+      ]);
+      const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
+      expect(finalRows).toBe(initialRows);
+    });
+  });
+
   it('destroy clears container', async () => {
     const api = makeApi(makeTradesResponse());
     const handle = mountBottomTabs(container, { apiClient: api });

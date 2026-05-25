@@ -715,6 +715,14 @@ function bootstrap() {
         if (trades.length === 0) return;
         bottom.pushTrades(trades);
         for (const trade of trades) chart.applyTrade(trade);
+        // Wave 2B Task 3: forward the additive `balances` field to the
+        // Holders tab so the count + per-row amounts update live without
+        // waiting for a token-switch /trades refetch. No-op when the
+        // backend hasn't started shipping the field yet (defensive).
+        const balances = payload?.balances;
+        if (Array.isArray(balances) && balances.length > 0) {
+          bottom.pushBalances(balances);
+        }
       },
       // F0.14: forward premium `orders` channel updates to the Orders tab.
       // The bottom tabs no-op if the Orders sub-tab hasn't been mounted yet
