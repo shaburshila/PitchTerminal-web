@@ -7,9 +7,13 @@
   --border: #2a3140;
   --text: #e6edf3;
   --text-muted: #8b949e;
-  --accent: #3a7bff; /* deeper than 4f8cff — gives white text 4.5:1 contrast (WCAG AA) */
-  --accent-hover: #5a92ff;
-  --focus-ring: #6ea0ff;
+  /* Phase 1.5 batch 9: accent swapped from legacy blue (#3a7bff) to brand
+     green (#3ddb8e — matches tokens.css `--accent`/`--up`/mockups). Text on
+     accent backgrounds is now dark (#0a0f0d, see `.pt-btn--primary` etc),
+     giving ~13:1 contrast vs the previous white-on-blue 4.5:1. */
+  --accent: #3ddb8e;
+  --accent-hover: #5fe5a3;
+  --focus-ring: #5fe5a3;
   --danger: #ff5c5c;
   --success: #4caf6e;
 
@@ -276,7 +280,7 @@ body.mode-dashboard .pt-profile {
 .pt-btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: #0a0f0d;
 }
 
 .pt-btn--primary:hover {
@@ -343,7 +347,7 @@ body.mode-dashboard .pt-profile {
 
 .pt-sidebar__tab[aria-selected='true'] {
   background: var(--accent);
-  color: #fff;
+  color: #0a0f0d;
   border-color: var(--accent);
 }
 
@@ -455,7 +459,7 @@ body.mode-dashboard .pt-profile {
 .pt-sidebar__fav-toggle[aria-pressed='true'],
 .pt-sidebar__fav-toggle.is-on {
   background: var(--accent);
-  color: #fff;
+  color: #0a0f0d;
   border-color: var(--accent);
 }
 
@@ -575,7 +579,7 @@ body.mode-dashboard .pt-profile {
 
 .pt-bottom__tab[aria-selected='true'] {
   background: var(--accent);
-  color: #fff;
+  color: #0a0f0d;
   border-color: var(--accent);
 }
 
@@ -645,7 +649,7 @@ body.mode-dashboard .pt-profile {
 }
 
 .pt-bottom__row--mine {
-  background: rgba(58, 123, 255, 0.08);
+  background: rgba(61, 219, 142, 0.08);
 }
 
 .pt-bottom__row--mine td.addr a {
@@ -736,7 +740,7 @@ body.mode-dashboard .pt-profile {
 .pt-chart__type-btn[aria-pressed='true'],
 .pt-chart__unit-btn[aria-pressed='true'] {
   background: var(--accent);
-  color: #fff;
+  color: #0a0f0d;
 }
 
 .pt-chart__tf-btn:focus-visible,
@@ -1470,7 +1474,7 @@ body.mode-dashboard .pt-profile {
 
 .pt-pay__uniswap-link,
 .pt-pay__portable {
-  color: var(--accent, #4a8cff);
+  color: var(--accent, #3ddb8e);
   text-decoration: underline;
 }
 
@@ -2233,7 +2237,7 @@ body.mode-dashboard .pt-profile {
 .pt-trade__side-btn.is-active {
   background: var(--bg-3, #243049);
   color: var(--text, #eee);
-  border-color: var(--accent, #5b8def);
+  border-color: var(--accent, #3ddb8e);
 }
 
 .pt-trade__side-btn--buy.is-active {
@@ -2354,8 +2358,8 @@ body.mode-dashboard .pt-profile {
   font-size: 13px;
   font-weight: 500;
   background: transparent;
-  border: 1px solid var(--accent, #4a78ff);
-  color: var(--accent, #4a78ff);
+  border: 1px solid var(--accent, #3ddb8e);
+  color: var(--accent, #3ddb8e);
   border-radius: 4px;
   cursor: pointer;
 }
@@ -2365,5 +2369,5 @@ body.mode-dashboard .pt-profile {
 }
 
 .pt-trade__country-cta:hover {
-  background: rgba(74, 120, 255, 0.08);
+  background: rgba(61, 219, 142, 0.08);
 }

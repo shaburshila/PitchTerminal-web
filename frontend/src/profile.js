@@ -640,7 +640,7 @@ export function mountProfile(container, opts = {}) {
       autoSize: true,
     });
     if (typeof chartInstance.addLineSeries === 'function') {
-      chartSeries = chartInstance.addLineSeries({ color: '#3a7bff', lineWidth: 2 });
+      chartSeries = chartInstance.addLineSeries({ color: '#3ddb8e', lineWidth: 2 });
       // lightweight-charts requires ascending time order.
       const data = series
         .filter((p) => typeof p?.time === 'number' && typeof p?.value === 'number')

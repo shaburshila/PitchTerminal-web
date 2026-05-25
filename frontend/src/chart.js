@@ -483,7 +483,7 @@ export function mountChart(container, options = {}) {
       });
     }
     if (typeof chartInstance.addLineSeries === 'function') {
-      return chartInstance.addLineSeries({ color: '#3a7bff', lineWidth: 2 });
+      return chartInstance.addLineSeries({ color: '#3ddb8e', lineWidth: 2 });
     }
     return null;
   }
