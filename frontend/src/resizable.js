@@ -136,10 +136,7 @@ export function saveLayout(storage, snapshot) {
   const sanitized = sanitizeSnapshot({ v: STORAGE_VERSION, ...snapshot });
   if (!sanitized) return;
   try {
-    storage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ v: STORAGE_VERSION, ...sanitized }),
-    );
+    storage.setItem(STORAGE_KEY, JSON.stringify({ v: STORAGE_VERSION, ...sanitized }));
   } catch {
     /* quota / disabled — accept loss */
   }

@@ -98,12 +98,16 @@ export function showSignInModal(opts = {}) {
       typeof location !== 'undefined' && location.hostname ? location.hostname : 'pitchterminal';
     const previewHost = el('span', { className: 'pt-modal__siwe-host', text: host });
     preview.appendChild(previewHost);
-    preview.appendChild(document.createTextNode(' wants you to sign in with your Ethereum account\n'));
+    preview.appendChild(
+      document.createTextNode(' wants you to sign in with your Ethereum account\n'),
+    );
     preview.appendChild(document.createTextNode('\n'));
     const keyURI = el('span', { className: 'pt-modal__siwe-key', text: 'URI: ' });
     preview.appendChild(keyURI);
     const uri =
-      typeof location !== 'undefined' && location.origin ? location.origin : 'https://pitchterminal';
+      typeof location !== 'undefined' && location.origin
+        ? location.origin
+        : 'https://pitchterminal';
     preview.appendChild(document.createTextNode(`${uri}\n`));
     const keyVer = el('span', { className: 'pt-modal__siwe-key', text: 'Version: ' });
     preview.appendChild(keyVer);
