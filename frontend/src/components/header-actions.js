@@ -269,7 +269,7 @@ export function mountHeaderActions(opts) {
     );
     heroText.appendChild(
       el('p', {
-        text: 'Two-sided rebate: you both pocket 25% of every trade fee.',
+        text: 'Two-sided split on the one-time Pro upgrade: 25% off for them, 25% back to you.',
       }),
     );
     hero.appendChild(heroText);
@@ -288,7 +288,7 @@ export function mountHeaderActions(opts) {
     youCard.appendChild(
       el('div', {
         className: 'pt-ref-modal__benefit-sub',
-        text: 'Earn 25% of every trading fee paid by people who joined via your link. Forever.',
+        text: 'Earn 0.25 PITCH for every Pro upgrade made through your link. Paid on-chain instantly.',
       }),
     );
     benefits.appendChild(youCard);
@@ -304,7 +304,7 @@ export function mountHeaderActions(opts) {
     themCard.appendChild(
       el('div', {
         className: 'pt-ref-modal__benefit-sub',
-        text: 'Friends who click your link pay 25% less in trading fees on every trade.',
+        text: 'Friends who join via your link pay 0.75 PITCH instead of 1 PITCH to unlock Pro.',
       }),
     );
     benefits.appendChild(themCard);
@@ -373,8 +373,8 @@ export function mountHeaderActions(opts) {
       className: 'pt-ref-modal__footnote',
       dataset: { testId: 'referral-modal-footnote' },
       text:
-        'The 25/25 rebate applies to trading fees on every trade your referrals make — ' +
-        'as long as their account exists.',
+        'The 25/25 split applies once per Pro upgrade (1 PITCH one-time payment). ' +
+        'Trading on PitchTerminal itself is free.',
     });
     card.appendChild(footnote);
 
@@ -399,7 +399,7 @@ export function mountHeaderActions(opts) {
       copyBtn.disabled = false;
       const tweet =
         `I trade pitchwc.app player + country tokens on PitchTerminal. ` +
-        `Join with my link to get 25% off trading fees.`;
+        `Join with my link and pay only 0.75 PITCH to unlock Pro (25% off).`;
       shareXAnchor.href =
         'https://twitter.com/intent/tweet?text=' +
         encodeURIComponent(tweet) +
