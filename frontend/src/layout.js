@@ -62,12 +62,27 @@ function buildHeader() {
     className: 'pt-header__right',
   });
 
+  // Phase 1.5 batch 10: Profile + Referral are premium-only surfaces. We keep
+  // the buttons visible for everyone (canonical mockup hides them in the
+  // wallet-chip dropdown — separate refactor) but render them in a disabled
+  // visual state with a small lock badge when the user isn't premium. Click
+  // on a locked button opens the pay modal instead of routing into the gated
+  // surface. header-actions.js wires the access-store subscription that
+  // toggles `is-locked`.
   const profileBtn = el('button', {
     className: 'pt-btn pt-header__action',
     dataset: { testId: 'header-profile-btn' },
     attrs: { type: 'button', 'aria-label': 'Open profile' },
     text: 'Profile',
   });
+  profileBtn.appendChild(
+    el('span', {
+      className: 'pt-header__action-lock',
+      dataset: { testId: 'header-profile-lock' },
+      attrs: { 'aria-hidden': 'true' },
+      text: '🔒',
+    }),
+  );
 
   const referralBtn = el('button', {
     className: 'pt-btn pt-header__action',
@@ -75,6 +90,14 @@ function buildHeader() {
     attrs: { type: 'button', 'aria-label': 'Copy referral link' },
     text: 'Referral',
   });
+  referralBtn.appendChild(
+    el('span', {
+      className: 'pt-header__action-lock',
+      dataset: { testId: 'header-referral-lock' },
+      attrs: { 'aria-hidden': 'true' },
+      text: '🔒',
+    }),
+  );
 
   // Wallet-area placeholder — `mountWalletChip` (F0.9/F0.10) replaces its
   // children with the connect-button → chip flow on every `onAccountChange`.

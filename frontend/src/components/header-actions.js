@@ -29,6 +29,22 @@
 import * as defaultApi from '../api.js';
 import { getAccount as defaultGetAccount } from '../wallet.js';
 import { showToast as defaultShowToast } from '../ui/toast.js';
+import {
+  get as defaultGetAccessState,
+  subscribe as defaultSubscribeAccess,
+} from '../access-store.js';
+
+const LOCKED_CLASS = 'is-locked';
+
+/**
+ * Lazily import `access.js`'s `openPayModal` — viem/wagmi are heavy, so
+ * non-locked sessions never pay the import cost. Tests inject `opts.openPayModal`
+ * and never hit this path.
+ */
+async function defaultOpenPayModal(opts) {
+  const mod = await import('../access.js');
+  return mod.openPayModal(opts);
+}
 
 // Canonical production host. Hard-coded so a developer running the app on
 // `http://localhost:5173` still copies a link that works for the recipient.
@@ -73,6 +89,9 @@ async function copyToClipboard(text) {
  *   showToast?: (msg: string, opts?: object) => void,
  *   copy?: (text: string) => Promise<boolean>,
  *   prodHost?: string,
+ *   getAccessState?: () => 'unknown'|'anon'|'free'|'premium',
+ *   subscribeAccess?: (fn: (s: 'unknown'|'anon'|'free'|'premium') => void) => () => void,
+ *   openPayModal?: (opts?: object) => unknown,
  * }} opts
  * @returns {{ destroy: () => void }}
  */
@@ -93,10 +112,42 @@ export function mountHeaderActions(opts) {
   const showToast = opts.showToast ?? defaultShowToast;
   const copy = opts.copy ?? copyToClipboard;
   const host = opts.prodHost ?? PROD_HOST;
+  const getAccessState = opts.getAccessState ?? defaultGetAccessState;
+  const subscribeAccess = opts.subscribeAccess ?? defaultSubscribeAccess;
+  const openPayModal = opts.openPayModal ?? defaultOpenPayModal;
+
+  // Phase 1.5 batch 10: Profile + Referral are premium-only. When the user is
+  // not premium we mark both buttons `is-locked` (CSS surfaces the lock badge
+  // + dims the label) and intercept clicks to open the pay modal instead of
+  // routing into the gated surface.
+  let locked = getAccessState() !== 'premium';
+  function applyLockedState() {
+    const state = getAccessState();
+    const isLocked = state !== 'premium';
+    locked = isLocked;
+    profileBtn.classList.toggle(LOCKED_CLASS, isLocked);
+    referralBtn.classList.toggle(LOCKED_CLASS, isLocked);
+    profileBtn.setAttribute('aria-disabled', String(isLocked));
+    referralBtn.setAttribute('aria-disabled', String(isLocked));
+  }
+  applyLockedState();
+  const unsubscribeAccess = subscribeAccess(() => applyLockedState());
+
+  function tryOpenPay() {
+    try {
+      openPayModal();
+    } catch (err) {
+      console.error('mountHeaderActions: openPayModal threw:', err);
+    }
+  }
 
   let referralBusy = false;
 
   function onProfileClick() {
+    if (locked) {
+      tryOpenPay();
+      return;
+    }
     try {
       onProfile();
     } catch (e) {
@@ -109,6 +160,10 @@ export function mountHeaderActions(opts) {
   }
 
   async function onReferralClick() {
+    if (locked) {
+      tryOpenPay();
+      return;
+    }
     if (referralBusy) return;
     referralBusy = true;
     referralBtn.disabled = true;
@@ -161,6 +216,11 @@ export function mountHeaderActions(opts) {
   function destroy() {
     profileBtn.removeEventListener('click', onProfileClick);
     referralBtn.removeEventListener('click', onReferralClick);
+    try {
+      unsubscribeAccess();
+    } catch {
+      /* ignore */
+    }
   }
 
   return { destroy };

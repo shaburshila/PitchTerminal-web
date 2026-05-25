@@ -54,14 +54,62 @@ async function defaultOpenPayModal(opts) {
 }
 
 /**
+ * Phase 1.5 batch 10: per-zone copy for the rich Pro-upsell card. Each zone
+ * gets a tailored title + subtitle + feature list. The shape mirrors the
+ * Batch 5 trade-panel cover so the soft-lock and the in-panel cover read as
+ * one design system.
+ */
+const ZONE_CONFIGS = {
+  orders: {
+    title: 'Limit orders',
+    subtitle:
+      'Set price triggers, take-profit and stop-loss. Our keeper executes the moment the market hits your level.',
+    features: ['Limit orders', 'Take-profit', 'Stop-loss', 'Price alerts'],
+  },
+  'my-wallet': {
+    title: 'Portfolio tracking',
+    subtitle: 'See your live positions and per-token PnL across every market you trade.',
+    features: ['Live positions', 'PnL tracking', 'Trade history', 'Multi-token wallet'],
+  },
+  profile: {
+    title: 'Trader profile',
+    subtitle: 'Your full trading history, volume and referral earnings — all in one place.',
+    features: ['Trade history', 'Volume tracking', 'Referral earnings', 'Performance stats'],
+  },
+  right: {
+    title: 'Trading requires Pro',
+    subtitle:
+      'Trade 192 markets, place limit orders, sleep through fills. Our 24/7 server fires your orders the moment they trigger.',
+    features: ['Market swaps', 'Limit orders', 'Take-profit', 'Price alerts'],
+  },
+};
+
+const DEFAULT_CONFIG = {
+  title: 'Premium required',
+  subtitle: 'Upgrade to Pro to unlock this feature.',
+  features: [],
+};
+
+/**
  * @typedef {object} SoftLockOpts
  * @property {string} [zone]
- *   Optional zone label propagated to overlay dataset (`data-zone`) for
- *   easier debugging / per-zone styling overrides.
+ *   Optional zone label propagated to overlay dataset (`data-zone`). Also
+ *   selects a default copy preset (orders / my-wallet / profile / right) for
+ *   the rich Pro-upsell card.
  * @property {string} [label]
- *   Overlay headline. Defaults to "Premium access required".
+ *   Card headline. Overrides the zone-default title. Defaults to "Premium
+ *   required" if no zone preset matches.
+ * @property {string} [subtitle]
+ *   Card subtitle. Overrides the zone-default subtitle.
+ * @property {string[]} [features]
+ *   Bullet list of Pro features. Overrides the zone-default list. Pass `[]`
+ *   to hide the feature list entirely.
+ * @property {string} [priceLabel]
+ *   Label above the price quote. Defaults to "One-time payment".
+ * @property {string} [priceValue]
+ *   Price string. Defaults to "1 PITCH".
  * @property {string} [buttonText]
- *   Pay button label. Defaults to "Pay".
+ *   CTA button label. Defaults to "★ Upgrade to Pro".
  * @property {(s:'unknown'|'anon'|'free'|'premium') => boolean} [isLocked]
  *   Override the lock predicate. By default, anything other than `'premium'`
  *   locks. Tests can pass an explicit function to assert specific transitions.
@@ -96,8 +144,13 @@ export function mountSoftLock(target, opts = {}) {
   const isLockedFn = typeof opts.isLocked === 'function' ? opts.isLocked : (s) => s !== 'premium';
   const openPayFn =
     typeof opts.openPayModal === 'function' ? opts.openPayModal : defaultOpenPayModal;
-  const label = opts.label ?? 'Premium access required';
-  const buttonText = opts.buttonText ?? 'Pay';
+  const zoneConfig = (opts.zone && ZONE_CONFIGS[opts.zone]) || DEFAULT_CONFIG;
+  const label = opts.label ?? zoneConfig.title;
+  const subtitle = opts.subtitle ?? zoneConfig.subtitle;
+  const features = Array.isArray(opts.features) ? opts.features : zoneConfig.features;
+  const priceLabel = opts.priceLabel ?? 'One-time payment';
+  const priceValue = opts.priceValue ?? '1 PITCH';
+  const buttonText = opts.buttonText ?? '★ Upgrade to Pro';
   const payOpts = opts.payOpts ?? undefined;
 
   // Tear down any previous mount on the same target so callers don't have to
@@ -129,7 +182,7 @@ export function mountSoftLock(target, opts = {}) {
     el('div', {
       className: 'pt-soft-lock__icon',
       attrs: { 'aria-hidden': 'true' },
-      text: '🔒',
+      text: '★',
     }),
   );
   card.appendChild(
@@ -139,8 +192,40 @@ export function mountSoftLock(target, opts = {}) {
       text: label,
     }),
   );
+  if (subtitle) {
+    card.appendChild(
+      el('div', {
+        className: 'pt-soft-lock__sub',
+        dataset: { testId: 'soft-lock-sub' },
+        text: subtitle,
+      }),
+    );
+  }
+  if (features.length > 0) {
+    const list = el('ul', {
+      className: 'pt-soft-lock__feats',
+      dataset: { testId: 'soft-lock-feats' },
+    });
+    for (const feat of features) {
+      list.appendChild(el('li', { text: String(feat) }));
+    }
+    card.appendChild(list);
+  }
+  if (priceValue) {
+    const quote = el('div', { className: 'pt-soft-lock__quote' });
+    quote.appendChild(el('span', { className: 'pt-soft-lock__quote-l', text: priceLabel }));
+    quote.appendChild(el('span', { className: 'pt-soft-lock__quote-sep', text: '·' }));
+    quote.appendChild(
+      el('span', {
+        className: 'pt-soft-lock__quote-r',
+        dataset: { testId: 'soft-lock-price' },
+        text: priceValue,
+      }),
+    );
+    card.appendChild(quote);
+  }
   const payBtn = el('button', {
-    className: 'pt-btn pt-btn--primary pt-soft-lock__btn',
+    className: 'pt-soft-lock__cta',
     dataset: { testId: 'soft-lock-pay' },
     attrs: { type: 'button' },
     text: buttonText,

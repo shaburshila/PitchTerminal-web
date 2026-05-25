@@ -23,6 +23,12 @@ function makeDeps(overrides = {}) {
     showToast: vi.fn(),
     copy: vi.fn().mockResolvedValue(true),
     prodHost: 'https://pitchwc-terminal.xyz',
+    // Batch 10: default to premium so the pre-existing tests exercise the
+    // unlocked happy-path. Locked-state behavior is exercised in its own
+    // describe block below.
+    getAccessState: () => 'premium',
+    subscribeAccess: () => () => {},
+    openPayModal: vi.fn(),
     ...overrides,
   };
 }
@@ -133,5 +139,101 @@ describe('mountHeaderActions', () => {
     handle.destroy();
     profileBtn.click();
     expect(onProfile).not.toHaveBeenCalled();
+  });
+
+  // Batch 10: premium-gating UX. Profile + Referral show the `is-locked`
+  // visual state when the user isn't premium; clicks open the pay modal
+  // instead of routing into the gated surface.
+  describe('locked state (batch 10)', () => {
+    it.each(['unknown', 'anon', 'free'])(
+      'marks both buttons is-locked when access state is %s',
+      (state) => {
+        const { profileBtn, referralBtn } = makeButtons();
+        mountHeaderActions({
+          profileBtn,
+          referralBtn,
+          onProfile: () => {},
+          ...makeDeps({ getAccessState: () => state }),
+        });
+        expect(profileBtn.classList.contains('is-locked')).toBe(true);
+        expect(referralBtn.classList.contains('is-locked')).toBe(true);
+        expect(profileBtn.getAttribute('aria-disabled')).toBe('true');
+        expect(referralBtn.getAttribute('aria-disabled')).toBe('true');
+      },
+    );
+
+    it('does not mark is-locked when access state is premium', () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      mountHeaderActions({
+        profileBtn,
+        referralBtn,
+        onProfile: () => {},
+        ...makeDeps({ getAccessState: () => 'premium' }),
+      });
+      expect(profileBtn.classList.contains('is-locked')).toBe(false);
+      expect(referralBtn.classList.contains('is-locked')).toBe(false);
+      expect(profileBtn.getAttribute('aria-disabled')).toBe('false');
+    });
+
+    it('Profile click on locked state opens pay modal, not onProfile', () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      const onProfile = vi.fn();
+      const openPayModal = vi.fn();
+      mountHeaderActions({
+        profileBtn,
+        referralBtn,
+        onProfile,
+        ...makeDeps({ getAccessState: () => 'free', openPayModal }),
+      });
+      profileBtn.click();
+      expect(onProfile).not.toHaveBeenCalled();
+      expect(openPayModal).toHaveBeenCalledTimes(1);
+    });
+
+    it('Referral click on locked state opens pay modal, not copy', async () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      const openPayModal = vi.fn();
+      const deps = makeDeps({ getAccessState: () => 'free', openPayModal });
+      mountHeaderActions({ profileBtn, referralBtn, onProfile: () => {}, ...deps });
+      referralBtn.click();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(deps.copy).not.toHaveBeenCalled();
+      expect(openPayModal).toHaveBeenCalledTimes(1);
+    });
+
+    it('subscription flips is-locked when access state changes', () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      let listener = () => {};
+      const subscribeAccess = (fn) => {
+        listener = fn;
+        return () => {};
+      };
+      let state = 'free';
+      mountHeaderActions({
+        profileBtn,
+        referralBtn,
+        onProfile: () => {},
+        ...makeDeps({ getAccessState: () => state, subscribeAccess }),
+      });
+      expect(profileBtn.classList.contains('is-locked')).toBe(true);
+      state = 'premium';
+      listener('premium');
+      expect(profileBtn.classList.contains('is-locked')).toBe(false);
+      expect(referralBtn.classList.contains('is-locked')).toBe(false);
+    });
+
+    it('destroy unsubscribes the access listener', () => {
+      const { profileBtn, referralBtn } = makeButtons();
+      const unsubscribe = vi.fn();
+      const subscribeAccess = vi.fn(() => unsubscribe);
+      const handle = mountHeaderActions({
+        profileBtn,
+        referralBtn,
+        onProfile: () => {},
+        ...makeDeps({ subscribeAccess }),
+      });
+      handle.destroy();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
   });
 });

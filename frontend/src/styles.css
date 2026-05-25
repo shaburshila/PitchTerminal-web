@@ -118,10 +118,48 @@ button {
      wallet-chip. Uses the redesign accent (Inter face, tabular zeros) so
      the buttons read as "secondary actions" against the primary connect
      CTA / wallet-chip on the right. */
+  position: relative;
   font-family: var(--font-ui, inherit);
   padding: 5px 12px;
   font-size: 12px;
   border-radius: var(--radius-pill, var(--radius-md));
+}
+
+/* Phase 1.5 batch 10: lock-badge overlay for premium-gated header actions.
+   Hidden by default; .pt-header__action.is-locked makes it visible and dims
+   the button itself. Click handler still fires (intercepted by JS to open
+   pay modal), so we avoid `disabled` attr — pointer-events stay on. */
+.pt-header__action-lock {
+  display: none;
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: var(--bg-0);
+  font-size: 8px;
+  line-height: 14px;
+  text-align: center;
+  border: 1.5px solid var(--bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  font-family: var(--font-ui, system-ui);
+}
+
+.pt-header__action.is-locked {
+  opacity: 0.55;
+  cursor: pointer; /* Stays clickable — click → pay modal. */
+}
+
+.pt-header__action.is-locked:hover {
+  opacity: 0.85;
+  border-color: var(--warn);
+}
+
+.pt-header__action.is-locked .pt-header__action-lock {
+  display: block;
 }
 
 .pt-header__wallet-area {
@@ -1514,43 +1552,168 @@ body.mode-dashboard .pt-profile {
   align-items: center;
   justify-content: center;
   z-index: 10;
-  background: rgba(14, 17, 23, 0.55);
-  backdrop-filter: blur(2px);
+  padding: 24px 16px;
+  /* Phase 1.5 batch 10: gold-radial backdrop matching the trade-panel cover
+     (Batch 5). The scrim is the new green-tinted bg-0 instead of legacy
+     blue-tinted #0e1117 so the two overlays share one design system. */
+  background:
+    radial-gradient(circle at 50% 28%, rgba(224, 169, 58, 0.1), transparent 60%),
+    linear-gradient(180deg, rgba(15, 22, 20, 0.82), rgba(10, 15, 13, 0.96));
+  backdrop-filter: blur(3px);
+  overflow-y: auto;
 }
 
 .pt-soft-lock[hidden] {
   display: none;
 }
 
+/* Phase 1.5 batch 10: rich Pro-upsell card. Same visual language as
+   .pt-trade__cover (Batch 5) — gold icon, feature list, 1 PITCH price quote,
+   gradient CTA. */
 .pt-soft-lock__card {
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
-  max-width: 260px;
   text-align: center;
+  max-width: 320px;
+  padding: 16px 12px;
 }
 
 .pt-soft-lock__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #e0a93a, #c98e1b);
+  color: #1a1410;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 24px;
+  font-weight: 700;
   line-height: 1;
+  box-shadow:
+    0 6px 20px rgba(224, 169, 58, 0.25),
+    0 1px 0 rgba(255, 255, 255, 0.2) inset;
+  margin-bottom: 14px;
+  position: relative;
+}
+
+.pt-soft-lock__icon::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 18px;
+  border: 1px solid rgba(224, 169, 58, 0.25);
 }
 
 .pt-soft-lock__label {
-  font-size: 13px;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--text);
-  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+  line-height: 1.3;
 }
 
-.pt-soft-lock__btn {
-  /* Reuse pt-btn--primary visuals; just a margin tweak so it doesn't hug
-     the label too tight. */
-  margin-top: 4px;
+.pt-soft-lock__sub {
+  font-size: 12px;
+  color: var(--text-2, var(--text-muted));
+  line-height: 1.5;
+  max-width: 260px;
+  margin: 0 auto 14px;
+}
+
+.pt-soft-lock__feats {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 14px;
+  text-align: left;
+  width: 100%;
+  max-width: 260px;
+}
+
+.pt-soft-lock__feats li {
+  font-size: 11px;
+  color: var(--text-2, var(--text-muted));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pt-soft-lock__feats li::before {
+  content: '✓';
+  color: var(--warn, #e0a93a);
+  font-weight: 700;
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.pt-soft-lock__quote {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--bg-2, var(--bg-elev-2));
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 260px;
+}
+
+.pt-soft-lock__quote-l {
+  font-size: 10.5px;
+  color: var(--text-3, var(--text-muted));
+}
+
+.pt-soft-lock__quote-sep {
+  color: var(--line-strong, var(--border));
+}
+
+.pt-soft-lock__quote-r {
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-soft-lock__cta {
+  width: 100%;
+  max-width: 260px;
+  height: 38px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #e0a93a, #c98e1b);
+  color: #1a1410;
+  font-family: var(--font-ui, inherit);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.18) inset,
+    0 4px 14px rgba(224, 169, 58, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: filter 120ms ease;
+}
+
+.pt-soft-lock__cta:hover {
+  filter: brightness(1.06);
+}
+
+.pt-soft-lock__cta:focus-visible {
+  outline: 2px solid rgba(224, 169, 58, 0.6);
+  outline-offset: 2px;
 }
 
 /* F0.14 — My Wallet tab -------------------------------------------------- */
