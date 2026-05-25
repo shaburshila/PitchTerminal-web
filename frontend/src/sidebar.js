@@ -356,8 +356,14 @@ export function mountSidebar(container, options = {}) {
       // player rows whose `country` field has a mapped flag. Fall back to
       // text-only when the symbol is unmapped (covers any future country
       // ticker not yet vendored in /public/flags/).
+      //
+      // Batch 9 fix: backend's `players[].country` is a free-form name
+      // ("France"), not the ISO-mapped ticker hasFlag() expects ("FRA"). We
+      // resolve via the same path enrichTokenPayload uses for the trade panel
+      // — countryAddress → state.tokens.countries[].symbol.
       const symbol = el('div', { className: 'symbol' });
-      const flagSymbol = state.tab === 'countries' ? token.symbol : token.country;
+      const flagSymbol =
+        state.tab === 'countries' ? token.symbol : enrichTokenPayload(token).countrySymbol;
       if (flagSymbol && hasFlag(flagSymbol)) {
         const flag = el('img', {
           className: 'pt-sidebar__flag',

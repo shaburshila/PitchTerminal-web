@@ -378,15 +378,20 @@ describe('mountSidebar', () => {
     expect(flags[0].getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('player tab rows render a flag <img> for mapped country field', async () => {
+  it('player tab rows render a flag <img> resolved via countryAddress (batch 9 fix)', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
     await handle.refresh();
-    // Fixture players have country "USA" (mapped), "France" (full-word, not in
-    // the ticker map), "England" (also full-word). Only Pulisic gets a flag.
+    // Players resolve their flag via countryAddress → countries table (not
+    // via the free-form `country` field which carries "France" / "England"
+    // strings hasFlag() can't map). Fixture sort: Mbappé (+20%) → Pulisic
+    // (+5%) → Smith (-10%). Mbappé (0xccc2 → FRA) + Pulisic (0xccc1 → USA)
+    // both resolve; Smith (0xccc3) has no matching country in fixture so
+    // the fallback "England" name fails hasFlag and renders no flag.
     const flags = container.querySelectorAll('[data-test-id="sidebar-flag"]');
-    expect(flags.length).toBe(1);
-    expect(flags[0].getAttribute('src')).toBe('/flags/us.svg');
+    expect(flags.length).toBe(2);
+    expect(flags[0].getAttribute('src')).toBe('/flags/fr.svg');
+    expect(flags[1].getAttribute('src')).toBe('/flags/us.svg');
   });
 
   it('change cell has positive/negative class', async () => {
