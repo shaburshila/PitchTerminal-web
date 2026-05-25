@@ -100,6 +100,30 @@ function formatNumber(value, opts = {}) {
   return value.toPrecision(3);
 }
 
+/**
+ * Convert a wei decimal-string into a whole-token Number for display.
+ * BigInt-based for the integer part so 18+ digit values don't lose precision
+ * via Number-cast; sub-1e18 remainder is approximated for display only.
+ *
+ * Used by `pushBalances` (Wave 2B Task 3) to render the new holder amount
+ * after an SSE balance update. Returns NaN on bad input so callers can skip.
+ */
+function weiStrToWhole(weiStr) {
+  if (typeof weiStr !== 'string' || !/^-?\d+$/.test(weiStr)) return NaN;
+  try {
+    const big = BigInt(weiStr);
+    const WEI = 1000000000000000000n;
+    const negative = big < 0n;
+    const abs = negative ? -big : big;
+    const whole = abs / WEI;
+    const rem = abs % WEI;
+    const result = Number(whole) + Number(rem) / 1e18;
+    return negative ? -result : result;
+  } catch {
+    return NaN;
+  }
+}
+
 function formatPercent(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
   if (value < 0.01 && value > 0) return '<0.01%';
@@ -117,11 +141,13 @@ function formatPercent(value) {
  *   pageSize?: number,
  *   softLock?: object,
  *   onBalance?: (addr: string|null, balance: number) => void,
+ *   onTokenSelect?: (item: { token: string, symbol: string, kind: string|null }) => void,
  * }} [options]
  * @returns {{
  *   setToken: (token: string|null) => Promise<void>,
  *   setMyAddress: (address: string|null) => void,
  *   pushTrades: (trades: object[]) => void,
+ *   pushBalances: (balances: Array<{address: string, token: string, wei: string}>) => void,
  *   refresh: () => Promise<void>,
  *   destroy: () => void,
  * }}
@@ -265,6 +291,9 @@ export function mountBottomTabs(container, options = {}) {
       softLock: options.softLock,
       onTabCount: (n) => setTabCount('my-wallet', n),
       onBalance: options.onBalance ?? null,
+      // Wave 2B: multi-token portfolio table → clicking a row selects that
+      // token in the main app. Host (main.js) wires this to `selectToken`.
+      onTokenSelect: options.onTokenSelect ?? null,
     });
     return myWalletHandle;
   }
@@ -692,6 +721,83 @@ export function mountBottomTabs(container, options = {}) {
     renderTradeCounts();
   }
 
+  /**
+   * Wave 2B Task 3 — apply SSE `balances` field from the `event: events`
+   * payload to the local Holders state, so the Holders count + per-holder
+   * amounts update live without waiting for a full /trades refresh on
+   * token-switch.
+   *
+   * Input shape (api-spec §8.3, additive after Phase 2):
+   *   balances: [{ address: '0x...', token: '0x...', wei: '1234500000000000000' }]
+   *
+   * Behaviour:
+   *   - Filter by current active token (case-insensitive). Entries for other
+   *     tokens are ignored (transfers / cross-market trades — out of scope).
+   *   - Update `state.wallets[].position` for matching trader addresses.
+   *   - Add a new wallet entry when the trader wasn't in the list before
+   *     (with zeros for buys/sells/spent/received — they'll be backfilled
+   *     on the next /trades round-trip).
+   *   - When the new balance is 0 the entry stays in `state.wallets` but is
+   *     filtered out of the rendered table (renderHolders already filters
+   *     `position > 0`); count decreases naturally.
+   *   - Re-render only the Holders pane + tab counts.
+   *
+   * Race protection: no generation counter needed here because we mutate
+   * the same `state.wallets` array the next /trades fetch will replace;
+   * if a fetch lands AFTER this update it overwrites with the server's
+   * authoritative view (which is what we want).
+   *
+   * Precision: input is a wei decimal-string (NUMERIC(78,0) on backend).
+   * We use BigInt arithmetic for the integer part and a float remainder
+   * for display. See main.js#weiToWhole for the same pattern.
+   *
+   * @param {Array<{address: string, token: string, wei: string}>} balances
+   */
+  function pushBalances(balances) {
+    if (!Array.isArray(balances) || balances.length === 0 || !state.token) return;
+    const token = state.token;
+    let touched = false;
+    for (const entry of balances) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.token !== 'string' || entry.token.toLowerCase() !== token) continue;
+      if (typeof entry.address !== 'string' || !entry.address) continue;
+      if (typeof entry.wei !== 'string' || !/^-?\d+$/.test(entry.wei)) continue;
+      const balance = weiStrToWhole(entry.wei);
+      if (!Number.isFinite(balance)) continue;
+      // Negative wei would only appear from out-of-order indexing; the
+      // backend clamps to 0 before NOTIFY, but we defensively clamp again.
+      const safeBalance = balance < 0 ? 0 : balance;
+      const addrLc = entry.address.toLowerCase();
+      const existing = state.wallets.find(
+        (w) => typeof w?.address === 'string' && w.address.toLowerCase() === addrLc,
+      );
+      if (existing) {
+        if (existing.position !== safeBalance) {
+          existing.position = safeBalance;
+          touched = true;
+        }
+      } else if (safeBalance > 0) {
+        // New holder — add a stub row. Buys/sells/spent/received remain at
+        // zero until the next /trades fetch backfills them.
+        state.wallets.push({
+          address: entry.address,
+          buys: 0,
+          sells: 0,
+          position: safeBalance,
+          spent: 0,
+          received: 0,
+          avgBuy: 0,
+          avgNet: 0,
+        });
+        touched = true;
+      }
+    }
+    if (touched) {
+      renderHolders();
+      renderTradeCounts();
+    }
+  }
+
   async function refresh() {
     if (!state.token) return;
     state.gen += 1;
@@ -759,6 +865,7 @@ export function mountBottomTabs(container, options = {}) {
     setToken,
     setMyAddress,
     pushTrades,
+    pushBalances,
     refresh,
     pushOrderUpdate,
     refreshMyWallet,

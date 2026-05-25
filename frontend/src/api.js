@@ -271,6 +271,24 @@ export function getProfile({ tradesLimit, tradesCursor } = {}) {
   return apiFetch(`/profile${buildQuery({ tradesLimit, tradesCursor })}`);
 }
 
+/**
+ * GET /portfolio — lightweight multi-token positions for the session wallet.
+ * PREMIUM. Returns all tokens (country + player) where net wei-position > 0,
+ * sorted by `valuePitch` desc. See api-spec §6.2.
+ *
+ * Response shape (see api-spec §6.2):
+ *   { items: [ { token, symbol, kind, balance (wei str), balanceDisplay,
+ *                avgEntryPitch (wei str), currentPricePitch (wei str),
+ *                valuePitch (wei str), pnlPitch (wei str),
+ *                *Display, feesPaidWei, spentBaseWei, receivedBaseWei } ] }
+ *
+ * Throws ApiError with status 401 (auth.unauthenticated) or 402
+ * (access.payment_required).
+ */
+export function getPortfolio() {
+  return apiFetch('/portfolio');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Limit orders (PREMIUM)
 // ─────────────────────────────────────────────────────────────────────────────
