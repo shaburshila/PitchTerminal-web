@@ -1,7 +1,7 @@
 """B2.4 — expiry cycle for ``limit_orders``.
 
 Once per ``EXPIRY_TICK_INTERVAL_SEC`` (30 s, called from
-``worker.main``), :func:`tick` walks every pending order whose
+``worker.main``), :func:`tick` walks every open order whose
 ``expires_at`` has passed and marks it ``expired``. For each row it also
 emits a ``NOTIFY pt_orders <id>`` so the SSE handler in
 :mod:`app.routes.stream` pushes the status change to the connected client.
@@ -9,10 +9,10 @@ emits a ``NOTIFY pt_orders <id>`` so the SSE handler in
 The SQL is intentionally tight (single UPDATE … RETURNING id) so the partial
 index ``limit_orders_expiring_idx`` (see ``docs/db-schema.sql``) is used as
 the scan path — the planner picks it because the WHERE clause matches the
-index predicate exactly (``status='pending' AND expires_at IS NOT NULL``).
+index predicate exactly (``status='open' AND expires_at IS NOT NULL``).
 
 Per ``docs/plans/backend.md`` B2.4 + ``docs/api-spec.md`` §7 (table of
-status transitions: ``pending → expired`` by API/worker).
+status transitions: ``open → expired`` by API/worker).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ EXPIRY_TICK_INTERVAL_SEC = 30
 
 
 def tick(conn: Any | None = None) -> int:
-    """Mark expired ``pending`` orders and emit a ``pt_orders`` NOTIFY for each.
+    """Mark expired ``open`` orders and emit a ``pt_orders`` NOTIFY for each.
 
     Args:
         conn: Optional psycopg connection. When ``None`` (the production
@@ -46,7 +46,7 @@ def tick(conn: Any | None = None) -> int:
     sql = (
         "UPDATE limit_orders "
         "SET status = 'expired' "
-        "WHERE status = 'pending' "
+        "WHERE status = 'open' "
         "  AND expires_at IS NOT NULL "
         "  AND expires_at <= now() "
         "RETURNING id"

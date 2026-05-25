@@ -64,7 +64,7 @@ def _clean_orders() -> Iterator[None]:
 
 def _insert_order(
     *,
-    status: str = "pending",
+    status: str = "open",
     expires_in_sec: int | None = None,
     nonce_idx: int = 0,
 ) -> int:
@@ -164,7 +164,7 @@ class TestExpiryTick:
             count = expiry.tick()
 
         assert count == 0
-        assert _status_of(oid) == "pending"
+        assert _status_of(oid) == "open"
         assert notify_calls == []
 
     def test_pending_no_expiry_untouched(self) -> None:
@@ -174,7 +174,7 @@ class TestExpiryTick:
         with patch.object(expiry, "notify", side_effect=lambda *_a, **_kw: None):
             count = expiry.tick()
         assert count == 0
-        assert _status_of(oid) == "pending"
+        assert _status_of(oid) == "open"
 
     def test_non_pending_with_past_expiry_untouched(self) -> None:
         """Filled / cancelled / failed / expired must NOT be re-touched."""
@@ -216,7 +216,7 @@ class TestExpiryTick:
         assert count == 2
         assert _status_of(oid_a) == "expired"
         assert _status_of(oid_b) == "expired"
-        assert _status_of(oid_c) == "pending"
+        assert _status_of(oid_c) == "open"
         # NOTIFY emitted once per id (order not guaranteed).
         payloads = sorted(p for _ch, p in notify_calls)
         assert payloads == sorted([str(oid_a), str(oid_b)])

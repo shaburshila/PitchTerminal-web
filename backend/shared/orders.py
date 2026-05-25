@@ -73,9 +73,14 @@ _NONCE_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 
 class OrderStatus(StrEnum):
-    """Lifecycle of a limit order (db-schema ``order_status``)."""
+    """Lifecycle of a limit order (db-schema ``order_status``).
 
-    PENDING = "pending"
+    ``OPEN`` was historically named ``PENDING``; migration 0003 renamed the
+    Postgres enum value to ``'open'`` so the UX-facing label stops misleading
+    users into thinking an armed order was already being executed.
+    """
+
+    OPEN = "open"
     EXECUTING = "executing"
     FILLED = "filled"
     FAILED = "failed"
@@ -141,6 +146,17 @@ class OrderIn(BaseModel):
     Mirrors EIP-712 ``Order`` 1:1 (camelCase). Numeric uint256 fields accept
     decimal strings or ints; the model normalizes them to ``int`` so the rest
     of the backend works with primitives, not strings.
+
+    ``displayTargetPrice`` is a non-signed companion to ``targetPrice``:
+
+    * ``targetPrice`` (signed) — execution-space value the on-chain executor
+      verifies; ASK for limit-buy, BID for take-profit (fee-included).
+    * ``displayTargetPrice`` (optional, non-signed) — MID-space value the
+      user typed (chart price). The keeper compares it against
+      ``market_state.price_*`` to decide when to fire. ``None`` is allowed
+      for backwards-compatibility with pre-0004 clients; the keeper falls
+      back to deriving MID from the signed execution-space target via the
+      fixed pitchwc fee constant. See :mod:`shared.fee`.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -151,6 +167,7 @@ class OrderIn(BaseModel):
     venue: Literal[0, 1]
     side: Literal[0, 1]
     targetPrice: int
+    displayTargetPrice: int | None = None
     amountIn: int
     slippageBps: int = Field(ge=0)
     expiry: int = Field(ge=0)
@@ -179,9 +196,28 @@ class OrderIn(BaseModel):
             raise ValueError("must be > 0")
         return n
 
+    @field_validator("displayTargetPrice", mode="before")
+    @classmethod
+    def _coerce_display(cls, v: Any) -> int | None:
+        # Accept None / missing / explicit null for backwards-compat.
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        n = _as_int(v)
+        if n <= 0:
+            raise ValueError("displayTargetPrice must be > 0 when present")
+        return n
+
 
 class OrderOut(BaseModel):
-    """List/detail response shape (api-spec §7.1; camelCase, wei as strings)."""
+    """List/detail response shape (api-spec §7.1; camelCase, wei as strings).
+
+    ``displayTargetPrice`` mirrors the request field: the MID-space target
+    the user typed. ``None`` for pre-0004 rows where the field is NULL in
+    the DB; frontend should fall back to deriving it from ``targetPrice``
+    via the fee constant if it wants to display the original MID.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -194,6 +230,7 @@ class OrderOut(BaseModel):
     venue: str
     side: str
     targetPrice: str
+    displayTargetPrice: str | None
     amountIn: str
     slippageBps: int
     expiresAt: int | None

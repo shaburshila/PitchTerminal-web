@@ -85,6 +85,43 @@ class TestMigrationRoundTrip:
         assert _table_count() == baseline_tables
         assert _enum_count() == baseline_enums
 
+    def test_order_status_open_value_present(self) -> None:
+        """Migration 0003 renamed enum value 'pending' → 'open'."""
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT enumlabel FROM pg_enum e "
+                "JOIN pg_type t ON t.oid = e.enumtypid "
+                "WHERE t.typname = 'order_status' "
+                "ORDER BY e.enumsortorder"
+            )
+            labels = [r[0] for r in cur.fetchall()]
+        assert "open" in labels
+        assert "pending" not in labels
+        # Default should also reflect the new label.
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'limit_orders' AND column_name = 'status'"
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert "'open'" in str(row[0])
+
+    def test_display_target_price_column_present(self) -> None:
+        """Migration 0004 adds nullable limit_orders.display_target_price."""
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT data_type, is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'limit_orders' "
+                "  AND column_name = 'display_target_price'"
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert row[0] == "numeric"
+        assert row[1] == "YES"  # nullable for pre-0004 backwards-compat
+
     def test_referral_codes_table_present_after_upgrade(self) -> None:
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
             cur.execute(

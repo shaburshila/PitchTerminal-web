@@ -116,7 +116,8 @@ def _fetch_prices(addresses: list[str]) -> dict[str, Any]:
     # safer (positional arg, no concat).
     rows = fetch_all(
         """
-        SELECT token_address, price_pitch, price_country, updated_at
+        SELECT token_address, price_pitch, price_country,
+               ask_quote_per_base, bid_quote_per_base, updated_at
         FROM market_state
         WHERE token_address = ANY(%s)
         """,
@@ -126,11 +127,22 @@ def _fetch_prices(addresses: list[str]) -> dict[str, Any]:
     for row in rows:
         price_pitch_wei = int(row["price_pitch"])
         price_country_wei = int(row["price_country"])
+        # Directional quotes — fee-INCLUDED ASK/BID. NULL until the
+        # worker's price-loop has populated them at least once; the
+        # frontend fee-breakdown UI treats null as "no data yet" and
+        # falls back to displaying the mid alone. Wei-strings here so
+        # precision is preserved (mid prices fit in JSON numbers, but the
+        # spread of ask/bid relative to mid is what the UI needs to be
+        # exact about).
+        ask_wei = row.get("ask_quote_per_base")
+        bid_wei = row.get("bid_quote_per_base")
         tokens.append(
             {
                 "address": row["token_address"],
                 "pricePitch": price_pitch_wei / 1e18,
                 "priceCountry": price_country_wei / 1e18,
+                "askPrice": str(int(ask_wei)) if ask_wei is not None else None,
+                "bidPrice": str(int(bid_wei)) if bid_wei is not None else None,
             }
         )
     return {"updatedAt": now_ts, "stale": False, "tokens": tokens}

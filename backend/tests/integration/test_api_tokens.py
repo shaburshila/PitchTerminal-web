@@ -180,6 +180,66 @@ class TestListTokens:
             "0x" + "5" * 40,  # NULL → last
         ]
 
+    def test_ask_bid_quotes_in_response(self, app) -> None:
+        """Directional quotes from market_state surface as wei-strings."""
+
+        addr = "0x" + "a" * 40
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Brazil', 'BRA', 'country', NULL, NULL)",
+                (addr,),
+            )
+            cur.execute(
+                "INSERT INTO market_state "
+                "(token_address, price_country, price_pitch, supply, "
+                " ask_quote_per_base, bid_quote_per_base) "
+                "VALUES (%s, 0, %s, 0, %s, %s)",
+                (
+                    addr,
+                    10 * 10**18,  # MID = 10
+                    (10 * 10**18 * 10_000) // 9_500,  # ASK = MID / 0.95
+                    (10 * 10**18 * 9_500) // 10_000,  # BID = MID * 0.95
+                ),
+            )
+            conn.commit()
+
+        resp = app.test_client().get("/api/v1/tokens")
+        body = resp.get_json()
+        country = next(c for c in body["countries"] if c["address"] == addr)
+        # Wei-strings; MID stays a float (price_pitch / 1e18).
+        assert country["pricePitch"] == 10.0
+        assert country["askPrice"] == str((10 * 10**18 * 10_000) // 9_500)
+        assert country["bidPrice"] == str((10 * 10**18 * 9_500) // 10_000)
+        # The ASK strictly exceeds MID; BID strictly below MID.
+        assert int(country["askPrice"]) > 10 * 10**18
+        assert int(country["bidPrice"]) < 10 * 10**18
+
+    def test_ask_bid_null_when_worker_hasnt_populated(self, app) -> None:
+        """Missing quote columns surface as ``None`` (frontend renders MID only)."""
+
+        addr = "0x" + "b" * 40
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Argentina', 'ARG', 'country', NULL, NULL)",
+                (addr,),
+            )
+            # No ask/bid columns set → NULL by default.
+            cur.execute(
+                "INSERT INTO market_state "
+                "(token_address, price_country, price_pitch, supply) "
+                "VALUES (%s, 0, %s, 0)",
+                (addr, 5 * 10**18),
+            )
+            conn.commit()
+
+        resp = app.test_client().get("/api/v1/tokens")
+        body = resp.get_json()
+        country = next(c for c in body["countries"] if c["address"] == addr)
+        assert country["askPrice"] is None
+        assert country["bidPrice"] is None
+
 
 class TestChart:
     """spec §4.2 — `/chart` returns `{kind, name, symbol, country, candles, points}`."""

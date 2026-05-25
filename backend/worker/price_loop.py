@@ -3,11 +3,13 @@
 Each tick:
 
 1. Load the token list from the DB (192 rows: 48 countries + 144 players).
-2. Build one Multicall3 batch:
+2. Build one Multicall3 batch (4 sub-calls per token):
    * For every **player** token: ``Hook.currentPrice(player)`` against the
-     Player Hook, plus ``totalSupply()`` on the token itself.
-   * For every **country** token: ``Hook.currentPrice(country)`` against the
-     Country Hook (its price in PITCH), plus ``totalSupply()``.
+     Player Hook, plus ``totalSupply()`` on the token itself, plus
+     ``Hook.quoteBuy(player, 10^18)`` + ``Hook.quoteSell(player, 10^18)`` for
+     directional fee-inclusive ASK/BID used by the limit-order keeper.
+   * For every **country** token: same shape against the Country Hook
+     (its price + quotes are in PITCH), plus ``totalSupply()``.
 3. Decode results.
 4. Compute derived stats per token using SQL on the ``events`` table —
    ``trades_count``, ``holders_count``, and ``change_pct_*`` for the six
@@ -57,6 +59,14 @@ log = get_logger("worker.price_loop")
 
 _PRICE_SEL = Web3.keccak(text="currentPrice(address)")[:4]
 _SUPPLY_SEL = bytes.fromhex("18160ddd")  # totalSupply()
+# Directional quotes — fee-INCLUSIVE. ``quoteBuy(token, amountIn)`` returns
+# the base-wei a trader would receive for spending ``amountIn`` of the quote
+# token; ``quoteSell(token, amountIn)`` returns the quote-wei a trader would
+# receive for selling ``amountIn`` base-wei. We probe both with a 1-whole-unit
+# input (``10^18``) to derive the per-base ask/bid rate in quote-wei.
+_QUOTE_BUY_SEL = Web3.keccak(text="quoteBuy(address,uint256)")[:4]
+_QUOTE_SELL_SEL = Web3.keccak(text="quoteSell(address,uint256)")[:4]
+_ONE_WHOLE_PADDED = WEI.to_bytes(32, "big")
 
 
 # Period definitions for change_pct_* (in seconds). 'all' means «from the very
@@ -90,8 +100,13 @@ def _build_calls(
 
     Returns ``(calls, plan)`` where ``plan[i] == (token_address, call_kind)``
     aligned with ``calls[i]`` for decoding. ``call_kind`` ∈ ``{"price",
-    "supply"}``. Player prices target ``player_hook``, country prices target
-    ``country_hook``; supplies target the token itself.
+    "supply", "ask", "bid"}``. Price + ask/bid calls target the matching hook
+    (``player_hook`` / ``country_hook``); supply calls target the token itself.
+
+    Per-token call budget: 4 calls (price + supply + quoteBuy + quoteSell).
+    Worst case 192 tokens x 4 = 768 sub-calls, still well under Multicall3's
+    practical limit (single ``aggregate3`` tx; on Base mainnet we routinely
+    batch 1k+ calls).
     """
 
     calls: list[tuple[str, bytes]] = []
@@ -105,10 +120,18 @@ def _build_calls(
             # Without a hook configured we can't fetch the price; emit a
             # zero-supply fallback to keep ``market_state`` shape consistent.
             continue
-        calls.append((hook, _PRICE_SEL + _addr_padded(addr)))
+        addr_padded = _addr_padded(addr)
+        calls.append((hook, _PRICE_SEL + addr_padded))
         plan.append((addr, "price"))
         calls.append((addr, _SUPPLY_SEL))
         plan.append((addr, "supply"))
+        # Directional quotes — fee-INCLUSIVE. Used by the keeper to compare
+        # against ``target_price`` so a limit-buy fires when the actual ASK
+        # rate (not the mid) crosses below target.
+        calls.append((hook, _QUOTE_BUY_SEL + addr_padded + _ONE_WHOLE_PADDED))
+        plan.append((addr, "quote_buy"))
+        calls.append((hook, _QUOTE_SELL_SEL + addr_padded + _ONE_WHOLE_PADDED))
+        plan.append((addr, "quote_sell"))
 
     return calls, plan
 
@@ -234,8 +257,18 @@ def _upsert_market_state(
     change_pct: dict[str, float],
     trades_count: int,
     holders_count: int,
+    ask_quote_per_base_wei: int | None,
+    bid_quote_per_base_wei: int | None,
 ) -> None:
-    """UPSERT one row in ``market_state``."""
+    """UPSERT one row in ``market_state``.
+
+    ``ask_quote_per_base_wei`` and ``bid_quote_per_base_wei`` are NULLable —
+    pass ``None`` when the hook reverted or returned 0 so the keeper can tell
+    "no quote available" apart from "quote = 0" and skip the order rather
+    than falling back to the fee-excluded mid price. Both are denominated in
+    quote-wei per 1 whole base unit (10^18), matching ``price_country`` /
+    ``price_pitch`` semantics (player → country wei; country → PITCH wei).
+    """
 
     now = datetime.now(tz=UTC)
     with get_conn() as conn, conn.cursor() as cur:
@@ -245,22 +278,26 @@ def _upsert_market_state(
                 token_address, price_country, price_pitch, supply,
                 change_pct_all, change_pct_1d, change_pct_12h,
                 change_pct_6h, change_pct_1h, change_pct_15m,
-                trades_count, holders_count, updated_at
+                trades_count, holders_count,
+                ask_quote_per_base, bid_quote_per_base,
+                updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (token_address) DO UPDATE SET
-                price_country  = EXCLUDED.price_country,
-                price_pitch    = EXCLUDED.price_pitch,
-                supply         = EXCLUDED.supply,
-                change_pct_all = EXCLUDED.change_pct_all,
-                change_pct_1d  = EXCLUDED.change_pct_1d,
-                change_pct_12h = EXCLUDED.change_pct_12h,
-                change_pct_6h  = EXCLUDED.change_pct_6h,
-                change_pct_1h  = EXCLUDED.change_pct_1h,
-                change_pct_15m = EXCLUDED.change_pct_15m,
-                trades_count   = EXCLUDED.trades_count,
-                holders_count  = EXCLUDED.holders_count,
-                updated_at     = EXCLUDED.updated_at
+                price_country      = EXCLUDED.price_country,
+                price_pitch        = EXCLUDED.price_pitch,
+                supply             = EXCLUDED.supply,
+                change_pct_all     = EXCLUDED.change_pct_all,
+                change_pct_1d      = EXCLUDED.change_pct_1d,
+                change_pct_12h     = EXCLUDED.change_pct_12h,
+                change_pct_6h      = EXCLUDED.change_pct_6h,
+                change_pct_1h      = EXCLUDED.change_pct_1h,
+                change_pct_15m     = EXCLUDED.change_pct_15m,
+                trades_count       = EXCLUDED.trades_count,
+                holders_count      = EXCLUDED.holders_count,
+                ask_quote_per_base = EXCLUDED.ask_quote_per_base,
+                bid_quote_per_base = EXCLUDED.bid_quote_per_base,
+                updated_at         = EXCLUDED.updated_at
             """,
             (
                 addr,
@@ -275,6 +312,8 @@ def _upsert_market_state(
                 change_pct["15m"],
                 int(trades_count),
                 int(holders_count),
+                None if ask_quote_per_base_wei is None else int(ask_quote_per_base_wei),
+                None if bid_quote_per_base_wei is None else int(bid_quote_per_base_wei),
                 now,
             ),
         )
@@ -351,6 +390,16 @@ def tick() -> None:
             tc = _trades_count(addr)
             hc = _holders_count(addr)
 
+            # Directional, fee-INCLUSIVE quotes for keeper trigger evaluation
+            # (see docs/api-spec.md §4.5 and worker/keeper.py). Both are
+            # quote-wei per 1 whole base. ``quote_buy`` returned base-wei for
+            # spending exactly 1 quote; invert to get quote-wei per 1 base.
+            # ``quote_sell`` already gave quote-wei for selling 1 base.
+            base_out = int(d.get("quote_buy", 0))
+            quote_out = int(d.get("quote_sell", 0))
+            ask_wei: int | None = (WEI * WEI) // base_out if base_out > 0 else None
+            bid_wei: int | None = quote_out if quote_out > 0 else None
+
             _upsert_market_state(
                 addr,
                 price_country_wei=price_country_wei,
@@ -359,6 +408,8 @@ def tick() -> None:
                 change_pct=change_pct,
                 trades_count=tc,
                 holders_count=hc,
+                ask_quote_per_base_wei=ask_wei,
+                bid_quote_per_base_wei=bid_wei,
             )
             updated += 1
 

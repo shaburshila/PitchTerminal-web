@@ -146,7 +146,7 @@ My Wallet и Orders для не-premium размыты. Кросс-токенн�
   Дефолт — **max-approve** (один approve навсегда на эту пару). Кнопка «Approve»
   в UI явно подписана с указанием токена («Approve BRA to enable limit orders»).
 - **Вкладка Orders:** список ордеров по токену (тип, цель, сумма, slippage, отсчёт TTL,
-  статус). Статусы: pending → executing → filled / failed; cancelled; expired. Отмена
+  статус). Статусы: open → executing → filled / failed; cancelled; expired. Отмена
   ордера; персональный kill-switch ставит на паузу все свои ордера. Кросс-токенный список
   — в профиле.
 

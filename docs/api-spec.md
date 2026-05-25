@@ -344,6 +344,8 @@ Rate-limit: 10 / минута / IP.
       "role": "captain",
       "pricePitch": 12.345678,
       "priceCountry": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000",
       "supply": "960000000000000000000000",
       "tradesCount": 1234,
       "holdersCount": 56,
@@ -358,6 +360,8 @@ Rate-limit: 10 / минута / IP.
       "name": "Brazil",
       "symbol": "BRA",
       "pricePitch": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000",
       "supply": "960000000000000000000000",
       "tradesCount": 567,
       "holdersCount": 89,
@@ -371,6 +375,14 @@ Rate-limit: 10 / минута / IP.
 
 - `role` ∈ `"best"|"captain"|"rookie"`. У стран поля `role`, `country`,
   `countryAddress` отсутствуют (не null — отсутствуют ключи).
+- `pricePitch` / `priceCountry` — **fee-free MID** цены (= `Hook.currentPrice`).
+  Это то же значение, что показывает график.
+- `askPrice` / `bidPrice` — **fee-included** направленные котировки в wei
+  (quote-wei за 1 целую базу = 10^18). `askPrice` — что покупатель платит
+  за 1 base (MID/0.95 при 5% комиссии); `bidPrice` — что продавец получает
+  (MID×0.95). Используются только для UI breakdown комиссии в trade-панели;
+  НИКОГДА не используются keeper'ом как триггер. `null` пока worker не
+  заполнил их (первый тик price-loop'а).
 - `stale=true` если `now - lastUpdate > config.freshnessThresholdSec`.
 - Списки несортированные — фронт сортирует.
 - Формулы `changePct`, `holdersCount`, `tradesCount` — см.
@@ -828,8 +840,10 @@ valueSeries — только массив позиций.
 Список ордеров пользователя. Доступ PREMIUM.
 
 **Query:**
-- `status` — фильтр; `pending`, `executing`, `filled`, `failed`, `cancelled`,
-  `expired`, или CSV (`pending,executing`). Default — все.
+- `status` — фильтр; `open`, `executing`, `filled`, `failed`, `cancelled`,
+  `expired`, или CSV (`open,executing`). Default — все.
+  Значение `open` ранее называлось `pending` — переименовано миграцией 0003,
+  чтобы UX-метка не вводила пользователей в заблуждение (см. §7 ниже).
 - `token` — фильтр по токену (lowercase-адрес).
 - `limit`, `cursor` — пагинация.
 
@@ -846,12 +860,13 @@ valueSeries — только массив позиций.
       "tokenKind": "player",
       "venue": "player",
       "side": "limit-buy",
-      "targetPrice": "1234500000000000000",
+      "targetPrice": "1298947368421052631",
+      "displayTargetPrice": "1234000000000000000",
       "amountIn": "1000000000000000000",
       "slippageBps": 100,
       "expiresAt": 1709500000,
       "nonce": "0xabcdef...",
-      "status": "pending",
+      "status": "open",
       "createdAt": 1709000000,
       "executedTxHash": null,
       "failReason": null,
@@ -866,7 +881,12 @@ valueSeries — только массив позиций.
 
 - `venue` ∈ `"player"|"country"` (выбирает Router/Hook).
 - `side` ∈ `"limit-buy"|"take-profit"`.
-- `targetPrice`, `amountIn` — wei-строки (uint256).
+- `targetPrice`, `amountIn` — wei-строки (uint256). `targetPrice` — execution-
+  space значение (ASK/BID, fee-included), которое верифицирует контракт.
+- `displayTargetPrice` — wei-строка или `null`. MID-space значение, которое
+  пользователь ввёл (см. §7.2). `null` для ордеров, созданных до миграции 0004
+  (фронт может вывести значение из `targetPrice` через `(1 - 5%)` если нужно
+  отобразить пользователю).
 - `expiresAt: null` означает «без срока».
 - `status` — текущее значение; переходы см. §7 functional-spec.md и
   таблицу ниже.
@@ -879,12 +899,12 @@ valueSeries — только массив позиций.
 
 | Из | В | Кто | Условие |
 |---|---|---|---|
-| `pending` | `executing` | keeper | Цель достигнута, tx подана; пишет `executed_tx_hash` |
+| `open` | `executing` | keeper | Цель достигнута, tx подана; пишет `executed_tx_hash` |
 | `executing` | `filled` | keeper | Receipt получен, статус `1`, `OrderExecuted` присутствует |
 | `executing` | `failed` | keeper | Receipt со статусом `0` и причина терминальная (нет approve, нет средств, bad quote token) |
-| `executing` | `pending` | keeper | Revert по «цена ушла» — ордер живёт дальше; `retry_after = now + COOLDOWN_SEC` |
-| `pending` | `cancelled` | API | `DELETE /orders/{id}` |
-| `pending` | `expired` | worker | Отдельный цикл — `expires_at ≤ now` |
+| `executing` | `open` | keeper | Revert по «цена ушла» — ордер живёт дальше; `retry_after = now + COOLDOWN_SEC` |
+| `open` | `cancelled` | API | `DELETE /orders/{id}` |
+| `open` | `expired` | worker | Отдельный цикл — `expires_at ≤ now` |
 
 `armed` дублируется в каждом ответе, чтобы фронт не делал отдельный запрос.
 
@@ -900,7 +920,7 @@ valueSeries — только массив позиций.
 **Recovery подвисших executing-ордеров.** При старте worker'а keeper'а сначала
 обходит все ордера в статусе `executing` (индекс `limit_orders_executing_idx`):
 для каждого делает `eth_getTransactionReceipt(executed_tx_hash)` и применяет
-обычные переходы (`filled` / `failed` / `pending` по причине revert'а). Если
+обычные переходы (`filled` / `failed` / `open` по причине revert'а). Если
 receipt ещё не доступен (tx в mempool) — оставляет в `executing`, дождётся на
 следующем тике. Это закрывает дыру «worker упал между подачей tx и приёмом
 receipt — ордер навсегда в executing».
@@ -918,7 +938,8 @@ receipt — ордер навсегда в executing».
     "quoteToken": "0x...",
     "venue": 0,
     "side": 0,
-    "targetPrice": "1234500000000000000",
+    "targetPrice": "1298947368421052631",
+    "displayTargetPrice": "1234000000000000000",
     "amountIn": "1000000000000000000",
     "slippageBps": 100,
     "expiry": 1709500000,
@@ -928,13 +949,23 @@ receipt — ордер навсегда в executing».
 }
 ```
 
-- Поля точно соответствуют EIP-712 `Order` (см. [eip712.md](eip712.md)).
+- Поля EIP-712-сигнатуры точно соответствуют `Order` (см. [eip712.md](eip712.md));
+  `displayTargetPrice` НЕ входит в подпись (см. ниже).
 - `venue`: 0=player, 1=country.
 - `side`: 0=limit-buy, 1=take-profit.
 - `quoteToken`: для player-venue — адрес country-токена этого игрока (фронт берёт из
   `/api/v1/tokens`); для country-venue — адрес PITCH.
 - `expiry`: 0 = без срока; иначе unix-секунды.
 - `nonce`: 32-байтовый hex-string (256-битный, рекомендуется случайный).
+- `targetPrice` — **execution-space** значение, которое верифицирует контракт:
+  ASK для limit-buy (= MID/0.95), BID для take-profit (= MID×0.95). Это значение
+  входит в EIP-712-подпись.
+- `displayTargetPrice` (опционально) — **MID-space** значение, которое пользователь
+  ввёл (цена с графика, без 5% комиссии bonding curve). Keeper сравнивает именно
+  его с `market_state.price_*` (= `Hook.currentPrice`), чтобы решить «триггер
+  сработал». НЕ входит в подпись. Для обратной совместимости (старые клиенты)
+  поле необязательно — если NULL, backend выводит MID из `targetPrice` через
+  фиксированную константу комиссии pitchwc (5%); см. `shared/fee.py`.
 - Сервер не доверяет полю `owner` запроса — берёт его из JWT и сравнивает; при
   несовпадении 401. Также сервер проверяет `quoteToken` против seed
   (`tokens.country_address` для players, `PITCH_TOKEN` для countries) — несовпадение
@@ -961,7 +992,7 @@ receipt — ордер навсегда в executing».
 
 Отмена ордера (server-side, бесплатно). Доступ PREMIUM.
 
-- Только pending → cancelled.
+- Только open → cancelled.
 - Не свой ордер → 404 (не 403 — не раскрываем существование чужих).
 - Уже cancelled/filled/expired → 204 (идемпотентно).
 
@@ -982,7 +1013,7 @@ receipt — ордер навсегда в executing».
 ```
 
 Поведение: при `armed=false` keeper пропускает ордера этого пользователя (статус
-остаётся `pending`). Этим переключателем пользователь временно ставит все свои
+остаётся `open`). Этим переключателем пользователь временно ставит все свои
 ордера на паузу без отмены.
 
 ---
@@ -1030,7 +1061,9 @@ Last-Event-ID** — фронт сам дотягивает свежее сост
     {
       "address": "0x...",
       "pricePitch": 12.345678,
-      "priceCountry": 0.001234
+      "priceCountry": 0.001234,
+      "askPrice": "1298947368421052631",
+      "bidPrice": "1172500000000000000"
     }
   ]
 }
@@ -1039,6 +1072,12 @@ Last-Event-ID** — фронт сам дотягивает свежее сост
 Поле `stale=true` шлётся отдельным событием (с пустым `tokens: []`) ровно один раз
 при пересечении freshness threshold — фронт зажигает индикатор и держит до
 следующего нормального `prices`-события.
+
+`askPrice` / `bidPrice` — fee-included directional quotes в wei
+(quote-wei за 1 целую базу). Те же семантики, что в §4.1: ASK = MID/0.95,
+BID = MID×0.95 при 5% комиссии. Только для UI breakdown комиссии; keeper
+сравнивает с `pricePitch` / `priceCountry` (MID). `null` если worker'ом
+не заполнено.
 
 **Механизм формирования дельты** (важно для multi-process API): worker сравнивает
 текущий снимок цен с предыдущим in-memory и **публикует NOTIFY `pt_prices` с

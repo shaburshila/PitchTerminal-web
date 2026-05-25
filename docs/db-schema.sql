@@ -25,8 +25,11 @@ CREATE TYPE event_side AS ENUM ('buy', 'sell');
 CREATE TYPE order_side AS ENUM ('limit-buy', 'take-profit');
 CREATE TYPE order_venue AS ENUM ('player', 'country');
 CREATE TYPE order_status AS ENUM (
-    'pending', 'executing', 'filled', 'failed', 'cancelled', 'expired'
+    'open', 'executing', 'filled', 'failed', 'cancelled', 'expired'
 );
+-- 'open' was historically named 'pending'; renamed in migration 0003 because
+-- the UX label misled users into thinking the order was already being
+-- processed. Semantically it means "armed, waiting for trigger condition".
 
 CREATE TYPE order_fail_reason AS ENUM (
     'no_allowance',          -- approve отозван / недостаточен
@@ -111,6 +114,10 @@ CREATE TABLE market_state (
     change_pct_15m    DOUBLE PRECISION NOT NULL DEFAULT 0,
     trades_count      INTEGER        NOT NULL DEFAULT 0 CHECK (trades_count  >= 0),
     holders_count     INTEGER        NOT NULL DEFAULT 0 CHECK (holders_count >= 0),
+    ask_quote_per_base NUMERIC(78, 0) NULL
+                                      CHECK (ask_quote_per_base IS NULL OR ask_quote_per_base > 0),
+    bid_quote_per_base NUMERIC(78, 0) NULL
+                                      CHECK (bid_quote_per_base IS NULL OR bid_quote_per_base > 0),
     updated_at        TIMESTAMPTZ    NOT NULL DEFAULT now()
 );
 -- change_pct без CHECK: может быть положительным или отрицательным (правда,
@@ -119,6 +126,14 @@ CREATE TABLE market_state (
 
 -- price_country = 0 у токенов стран (страны торгуются в PITCH).
 -- Изменения change_pct и holders_count — пересчитываются worker'ом из events.
+
+-- ask_quote_per_base / bid_quote_per_base — fee-INCLUSIVE directional quotes
+-- in quote-wei per 1 whole base (10^18 base units), used by the limit-order
+-- keeper to evaluate triggers against the actual execution rate (not the
+-- fee-free mid-price). Denomination matches price_country/price_pitch:
+-- player tokens → country wei; country tokens → PITCH wei. NULL when the
+-- worker has not yet populated them; keeper SKIPS such orders rather than
+-- falling back to mid. Sourced from Hook.quoteBuy / Hook.quoteSell.
 
 -- =============================================================================
 -- app_state — key-value служебное состояние
@@ -160,13 +175,21 @@ CREATE TABLE limit_orders (
     venue             order_venue    NOT NULL,
     side              order_side     NOT NULL,
     target_price      NUMERIC(78, 0) NOT NULL CHECK (target_price > 0),
+    -- display_target_price — MID-space target the user typed (chart-space).
+    -- Compared by keeper against market_state.price_* (which is Hook.currentPrice).
+    -- target_price (above) stays in execution-space (fee-included ASK/BID) — that's
+    -- what's in the EIP-712 signature and what the on-chain executor verifies.
+    -- Nullable for backwards-compat with pre-migration-0004 rows; keeper falls
+    -- back to deriving the MID target via the fixed 5% fee constant when NULL.
+    display_target_price NUMERIC(78, 0) NULL
+                                     CHECK (display_target_price IS NULL OR display_target_price > 0),
     amount_in         NUMERIC(78, 0) NOT NULL CHECK (amount_in > 0),
     slippage_bps      INTEGER        NOT NULL CHECK (slippage_bps BETWEEN 0 AND 10000),
     expires_at        TIMESTAMPTZ    NULL,   -- NULL = без срока (соответствует expiry=0 в EIP-712)
     nonce             CHAR(66)       NOT NULL
                                      CHECK (nonce ~ '^0x[0-9a-f]{64}$'),
     signature         BYTEA          NOT NULL,
-    status            order_status   NOT NULL DEFAULT 'pending',
+    status            order_status   NOT NULL DEFAULT 'open',
     created_at        TIMESTAMPTZ    NOT NULL DEFAULT now(),
     executed_tx_hash  CHAR(66)       NULL
                                      CHECK (executed_tx_hash IS NULL
@@ -182,7 +205,7 @@ CREATE TABLE limit_orders (
 
 CREATE INDEX limit_orders_pending_idx
     ON limit_orders(token_address, side)
-    WHERE status = 'pending';
+    WHERE status = 'open';
 
 CREATE INDEX limit_orders_executing_idx
     ON limit_orders(executed_tx_hash)
@@ -194,7 +217,7 @@ CREATE INDEX limit_orders_owner_idx
 
 CREATE INDEX limit_orders_expiring_idx
     ON limit_orders(expires_at)
-    WHERE status = 'pending' AND expires_at IS NOT NULL;
+    WHERE status = 'open' AND expires_at IS NOT NULL;
 
 -- venue → определяет какую пару Router/Hook использовать (см. eip712.md).
 -- Подпись сохраняется в БД, чтобы keeper мог пере-исполнить (например, после

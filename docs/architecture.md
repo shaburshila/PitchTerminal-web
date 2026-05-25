@@ -379,7 +379,7 @@ premium — on-chain, сессии — stateless JWT, поэтому **табл�
 | `events` | Все Buy/Sell — питает графики, сделки, холдеров, PnL | id (bigint PK), block_number, tx_hash, log_index, token_address (FK), side, trader_address, base_value, token_value, fee, ts. UNIQUE (tx_hash, log_index) → идемпотентность пере-сканов. Индексы: (token_address, block_number), trader_address |
 | `market_state` | **Derived/cache** — динамика по токену, пересчитываема. Пишет worker, читает API | token_address (PK, FK), price_country, price_pitch, supply, change_pct (6 периодов), trades_count, updated_at |
 | `app_state` | Key-value служебное состояние | key (PK), value — курсор скана (last_scanned_block), будущие флаги |
-| `limit_orders` | Подписанные лимит-ордера + статус | id (bigint PK), owner_address, token_address (FK), side (ENUM), target_price, amount, slippage_bps, expires_at (nullable), nonce, signature, status (ENUM), created_at, executed_tx_hash, fail_reason. UNIQUE (owner_address, nonce). Частичный индекс WHERE status='pending' |
+| `limit_orders` | Подписанные лимит-ордера + статус | id (bigint PK), owner_address, token_address (FK), side (ENUM), target_price, amount, slippage_bps, expires_at (nullable), nonce, signature, status (ENUM), created_at, executed_tx_hash, fail_reason. UNIQUE (owner_address, nonce). Частичный индекс WHERE status='open' |
 | `auth_nonces` | Одноразовые SIWE-nonce | nonce (PK), created_at. Delete-on-use + периодическая чистка протухших (~5 мин) |
 | `user_settings` | Персональные настройки | owner_address (PK), orders_armed (kill-switch). Расширяемо |
 | `telegram_links` | Связка chatId ↔ кошелёк — **добавляется в фазе 3** (Telegram пост-MVP) | owner_address (PK), chat_id, linked_at |
@@ -665,7 +665,7 @@ PitchTerminal-web/
 | Сбой RPC (worker) | Тик пропущен → ретрай на следующем (worker не падает); данные устаревают → индикатор свежести. Fallback на публичный Base RPC при повторных сбоях |
 | Падение worker | API отдаёт последние данные из Postgres (с индикатором свежести); Docker-restart; возобновление скана с `app_state.last_scanned_block` (вставки идемпотентны) |
 | Падение API-процесса | Прочие процессы / Docker-restart; SSE-клиенты переподключаются |
-| Реверт `execute()` — **цена ушла за условие** | Ордер остаётся **`pending`** — цель может сработать снова; НЕ `failed` |
+| Реверт `execute()` — **цена ушла за условие** | Ордер остаётся **`open`** — цель может сработать снова; НЕ `failed` |
 | Реверт `execute()` — терминальный (нет средств, отозван approve) | Ордер → `failed` (с причиной, если декодируема) |
 | Истёк TTL ордера | Ордер → `expired` |
 | Транзиентный сбой подачи `execute()` | Ретрай на следующем тике |

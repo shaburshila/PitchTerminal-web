@@ -531,7 +531,7 @@ cd frontend && pnpm test
 - [ ] Создание ордера в UI → строка появляется в `/orders`.
 - [ ] Keeper срабатывает при достижении цели → статус `executing` → `filled` (в
       успешном кейсе).
-- [ ] Реверт по «цена ушла» оставляет `pending` (см. [api-spec.md](api-spec.md) §7.1).
+- [ ] Реверт по «цена ушла» оставляет `open` (см. [api-spec.md](api-spec.md) §7.1).
 - [ ] TTL-экспирация переводит в `expired`.
 - [ ] Per-user kill-switch блокирует исполнение, не отменяя ордера.
 - [ ] On-chain `cancel(nonce)` помечает nonce использованным.

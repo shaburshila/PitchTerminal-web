@@ -12,7 +12,7 @@ Out-of-scope for B2.1 (handled by sibling tasks):
 
 * SSE channel ``pt_orders`` consumption → B2.2.
 * Keeper tick / on-chain execution → B2.3.
-* Expiry cycle (``status='pending' AND expires_at <= now()``) → B2.4.
+* Expiry cycle (``status='open' AND expires_at <= now()``) → B2.4.
 
 We still emit the ``pt_orders`` NOTIFY on insert so the channel is ready to be
 plugged in by B2.2 without round-tripping through B2.1.
@@ -39,6 +39,7 @@ from app.errors import abort_with_problem
 from app.limits import limiter
 from shared.config import config
 from shared.db import fetch_all, fetch_one, get_conn
+from shared.fee import execution_to_mid_wei
 from shared.notify import notify
 from shared.orders import (
     OrderIn,
@@ -171,6 +172,11 @@ def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     if row.get("expires_at_ts") is not None:
         expires_ts = int(row["expires_at_ts"])
 
+    # display_target_price is NULL for pre-migration-0004 rows; return it
+    # as None and let the frontend derive a display value if it cares.
+    display_target = row.get("display_target_price")
+    display_target_str = str(int(display_target)) if display_target is not None else None
+
     return {
         "id": str(row["id"]),
         "owner": row["owner_address"].strip(),
@@ -181,6 +187,7 @@ def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
         "venue": row["venue"],
         "side": row["side"],
         "targetPrice": str(int(row["target_price"])),
+        "displayTargetPrice": display_target_str,
         "amountIn": str(int(row["amount_in"])),
         "slippageBps": int(row["slippage_bps"]),
         "expiresAt": expires_ts,
@@ -219,7 +226,8 @@ def list_orders() -> Any:
 
     sql_parts = [
         "SELECT lo.id, lo.owner_address, lo.token_address, lo.quote_address, "
-        "lo.venue, lo.side, lo.target_price, lo.amount_in, lo.slippage_bps, "
+        "lo.venue, lo.side, lo.target_price, lo.display_target_price, "
+        "lo.amount_in, lo.slippage_bps, "
         "EXTRACT(EPOCH FROM lo.expires_at)::bigint AS expires_at_ts, "
         "lo.nonce, lo.status, "
         "EXTRACT(EPOCH FROM lo.created_at)::bigint AS created_at_ts, "
@@ -273,24 +281,40 @@ def _ensure_target_price_not_yet_met(
     Per api-spec §7.2 #7: blocks accidental market-as-limit. Tolerance 0.1%.
     Skipped when ``market_price is None`` (worker hasn't seen the token yet —
     keeper will catch it on the first tick).
+
+    Both sides of the comparison live in MID-space:
+
+    * ``market_price`` — fee-free MID from ``market_state.price_*``
+      (= ``Hook.currentPrice``).
+    * Target — the user-typed MID. We prefer ``displayTargetPrice`` from
+      the request body; for legacy clients that don't send it we derive
+      MID from the signed execution-space ``targetPrice`` via the fixed
+      pitchwc fee constant (see :mod:`shared.fee`).
     """
 
     if market_price is None or market_price == 0:
         return
 
-    target = int(order.targetPrice)
-    side = int(order.side)
-    tol = (target * _TARGET_PRICE_TOLERANCE_BPS) // 10_000
-    if side == 0:  # limit-buy: triggers when market_price <= target
-        if market_price <= target + tol:
+    side_int = int(order.side)
+    # Resolve MID-space target. ``side_int`` 0=limit-buy, 1=take-profit;
+    # ``execution_to_mid_wei`` understands both naming conventions.
+    side_label = "limit-buy" if side_int == 0 else "take-profit"
+    if order.displayTargetPrice is not None:
+        target_mid = int(order.displayTargetPrice)
+    else:
+        target_mid = execution_to_mid_wei(int(order.targetPrice), side_label)
+
+    tol = (target_mid * _TARGET_PRICE_TOLERANCE_BPS) // 10_000
+    if side_int == 0:  # limit-buy: triggers when market_mid <= target_mid
+        if market_price <= target_mid + tol:
             abort_with_problem(
                 code="orders.bad_target_price",
                 title="Target price already met",
                 status=422,
                 detail="current market price already satisfies the condition",
             )
-    else:  # take-profit: triggers when market_price >= target
-        if market_price + tol >= target:
+    else:  # take-profit: triggers when market_mid >= target_mid
+        if market_price + tol >= target_mid:
             abort_with_problem(
                 code="orders.bad_target_price",
                 title="Target price already met",
@@ -302,7 +326,8 @@ def _ensure_target_price_not_yet_met(
 def _existing_order_for_nonce(owner: str, nonce: str) -> dict[str, Any] | None:
     row = fetch_one(
         "SELECT lo.id, lo.owner_address, lo.token_address, lo.quote_address, "
-        "lo.venue, lo.side, lo.target_price, lo.amount_in, lo.slippage_bps, "
+        "lo.venue, lo.side, lo.target_price, lo.display_target_price, "
+        "lo.amount_in, lo.slippage_bps, "
         "EXTRACT(EPOCH FROM lo.expires_at)::bigint AS expires_at_ts, "
         "lo.nonce, lo.status, lo.signature, "
         "EXTRACT(EPOCH FROM lo.created_at)::bigint AS created_at_ts, "
@@ -316,7 +341,13 @@ def _existing_order_for_nonce(owner: str, nonce: str) -> dict[str, Any] | None:
 
 
 def _same_order(existing: dict[str, Any], new: OrderIn, new_sig: bytes) -> bool:
-    """Idempotency check: same nonce + same canonical fields + same signature."""
+    """Idempotency check: same nonce + same canonical fields + same signature.
+
+    ``display_target_price`` is part of the canonical comparison even
+    though it's not in the signature — replaying the same request with a
+    different MID-space label would change keeper behaviour, so we treat
+    a mismatch as "different order, 409". Two NULL values compare equal.
+    """
 
     if existing["token_address"].strip().lower() != new.token.lower():
         return False
@@ -328,6 +359,15 @@ def _same_order(existing: dict[str, Any], new: OrderIn, new_sig: bytes) -> bool:
         return False
     if int(existing["target_price"]) != int(new.targetPrice):
         return False
+    existing_display = existing.get("display_target_price")
+    new_display = new.displayTargetPrice
+    if existing_display is None and new_display is not None:
+        return False
+    if existing_display is not None and new_display is None:
+        return False
+    if existing_display is not None and new_display is not None:
+        if int(existing_display) != int(new_display):
+            return False
     if int(existing["amount_in"]) != int(new.amountIn):
         return False
     if int(existing["slippage_bps"]) != int(new.slippageBps):
@@ -423,6 +463,9 @@ def create_order() -> Any:
 
     # 7. Insert
     expires_at_sql = "to_timestamp(%s)" if order.expiry != 0 else "NULL"
+    display_target_param: int | None = (
+        int(order.displayTargetPrice) if order.displayTargetPrice is not None else None
+    )
     insert_params: list[Any] = [
         order.owner.lower(),
         order.token.lower(),
@@ -430,6 +473,7 @@ def create_order() -> Any:
         ("player" if int(order.venue) == 0 else "country"),
         ("limit-buy" if int(order.side) == 0 else "take-profit"),
         int(order.targetPrice),
+        display_target_param,
         int(order.amountIn),
         int(order.slippageBps),
     ]
@@ -440,10 +484,11 @@ def create_order() -> Any:
     sql = (
         "INSERT INTO limit_orders ("
         "owner_address, token_address, quote_address, venue, side, "
-        "target_price, amount_in, slippage_bps, expires_at, nonce, signature"
-        f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,{expires_at_sql},%s,%s) "
+        "target_price, display_target_price, amount_in, slippage_bps, "
+        "expires_at, nonce, signature"
+        f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,{expires_at_sql},%s,%s) "
         "RETURNING id, owner_address, token_address, quote_address, venue, side, "
-        "target_price, amount_in, slippage_bps, "
+        "target_price, display_target_price, amount_in, slippage_bps, "
         "EXTRACT(EPOCH FROM expires_at)::bigint AS expires_at_ts, "
         "nonce, status, EXTRACT(EPOCH FROM created_at)::bigint AS created_at_ts, "
         "executed_tx_hash, fail_reason, fail_detail"
@@ -524,7 +569,7 @@ def cancel_order(order_id: str) -> Any:
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE limit_orders SET status='cancelled' WHERE id = %s AND status='pending'",
+            "UPDATE limit_orders SET status='cancelled' WHERE id = %s AND status='open'",
             (oid,),
         )
 
@@ -557,7 +602,7 @@ def list_armed_orders() -> Any:
 
     Filters:
 
-    * ``status = 'pending'``.
+    * ``status = 'open'``.
     * ``retry_after IS NULL OR now() >= retry_after``.
     * ``user_settings.orders_armed`` is true (or row missing — default true).
     * Order's price condition is met against the cached ``market_state`` row
@@ -577,7 +622,8 @@ def list_armed_orders() -> Any:
 
     rows = fetch_all(
         "SELECT lo.id, lo.owner_address, lo.token_address, lo.quote_address, "
-        "lo.venue, lo.side, lo.target_price, lo.amount_in, lo.slippage_bps, "
+        "lo.venue, lo.side, lo.target_price, lo.display_target_price, "
+        "lo.amount_in, lo.slippage_bps, "
         "EXTRACT(EPOCH FROM lo.expires_at)::bigint AS expires_at_ts, "
         "lo.nonce, lo.status, lo.signature, "
         "EXTRACT(EPOCH FROM lo.created_at)::bigint AS created_at_ts, "
@@ -589,30 +635,37 @@ def list_armed_orders() -> Any:
         "LEFT JOIN tokens t        ON t.address = lo.token_address "
         "LEFT JOIN market_state ms ON ms.token_address = lo.token_address "
         "LEFT JOIN user_settings us ON us.owner_address = lo.owner_address "
-        "WHERE lo.status = 'pending' "
+        "WHERE lo.status = 'open' "
         "  AND (lo.retry_after IS NULL OR lo.retry_after <= now()) "
         "  AND (lo.expires_at IS NULL OR lo.expires_at > now()) "
         "ORDER BY lo.id ASC LIMIT 500"
     )
 
+    # Trigger evaluation uses MID-space: market_state.price_* is fee-free
+    # from Hook.currentPrice; the per-order target we compare is the MID-
+    # space value the user typed (display_target_price), falling back to
+    # deriving MID from the signed execution-space target_price when NULL.
     out = []
     for r in rows:
         if not bool(r["armed"]):
             continue
         venue = r["venue"]
-        market = int(r["price_country"]) if venue == "player" else int(r["price_pitch"])
-        if market == 0:
+        market_mid = int(r["price_country"]) if venue == "player" else int(r["price_pitch"])
+        if market_mid == 0:
             continue  # worker has not seen the market yet
-        target = int(r["target_price"])
         side = r["side"]
-        triggers = (side == "limit-buy" and market <= target) or (
-            side == "take-profit" and market >= target
+        if r.get("display_target_price") is not None:
+            target_mid = int(r["display_target_price"])
+        else:
+            target_mid = execution_to_mid_wei(int(r["target_price"]), side)
+        triggers = (side == "limit-buy" and market_mid <= target_mid) or (
+            side == "take-profit" and market_mid >= target_mid
         )
         if not triggers:
             continue
         payload = _serialize_row(r)
         payload["signature"] = "0x" + bytes(r["signature"]).hex()
-        payload["currentPrice"] = str(market)
+        payload["currentPrice"] = str(market_mid)
         out.append(payload)
 
     return jsonify({"items": out, "count": len(out)})

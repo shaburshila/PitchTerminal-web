@@ -51,7 +51,7 @@ class TestFetchOrderForOwner:
         *,
         owner: str,
         order_id: int = 7,
-        status: str = "pending",
+        status: str = "open",
         tx_hash: str | None = None,
         fail_reason: str | None = None,
         updated_at_ts: int = 1_700_000_000,
@@ -73,7 +73,7 @@ class TestFetchOrderForOwner:
         assert out == {
             "order": {
                 "id": "7",
-                "status": "pending",
+                "status": "open",
                 "executedTxHash": None,
                 "failReason": None,
                 "updatedAt": 1_700_000_000,
