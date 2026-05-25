@@ -750,6 +750,75 @@ PITCH, country-токены. Player-токены **не показываются
 
 **Ошибки:** 401 / 402.
 
+### 6.2 `GET /api/v1/portfolio`
+
+Лёгкий мульти-токен срез позиций подключённого кошелька — все токены (country
+и player), у которых **net wei-position > 0**. Используется фронтом для
+вкладки **My Wallet** в нижнем блоке и для player-dots в сайдбаре. В отличие
+от `/api/v1/profile` (§6.1) не возвращает trades-список, on-chain balances и
+valueSeries — только массив позиций.
+
+**Доступ:** PREMIUM. Возвращает 401/402 при отсутствии сессии/доступа.
+
+**Запрос:** без параметров. Пагинация не нужна (юзер обычно держит <50
+токенов; на лимиты упремся только в синтетических нагрузочных тестах).
+
+**Ответ 200:**
+```json
+{
+  "items": [
+    {
+      "token": "0x...",
+      "symbol": "PLR",
+      "kind": "player",
+      "balance": "2000000000000000000",
+      "balanceDisplay": 2.0,
+      "avgEntryPitch": "2000000000000000000",
+      "currentPricePitch": "2000000000000000000",
+      "valuePitch": "4000000000000000000",
+      "pnlPitch": "0",
+      "avgEntryPitchDisplay": 2.0,
+      "currentPricePitchDisplay": 2.0,
+      "valuePitchDisplay": 4.0,
+      "pnlPitchDisplay": 0.0,
+      "feesPaidWei": "0",
+      "spentBaseWei": "4000000000000000000",
+      "receivedBaseWei": "0"
+    }
+  ]
+}
+```
+
+**Семантика полей:**
+
+- `balance`, `avgEntryPitch`, `currentPricePitch`, `valuePitch`, `pnlPitch` —
+  все wei-строки (NUMERIC(78,0), без потери точности). `pnlPitch` может быть
+  отрицательной строкой (например `"-4000000000000000000"`).
+- `balanceDisplay`, `*Display` — float-эквиваленты (округление до
+  4 знаков для объёма / 6 для цены) для удобства рендеринга в HTML без
+  BigInt-математики на фронте.
+- `avgEntryPitch` — fee-inclusive cost basis (`Σspent / Σbought`), для
+  player-токенов конвертирован в PITCH через текущую `market_state.price_pitch`
+  страны игрока. **Историческая цена страны на момент покупки** при этом
+  не учитывается — то же ограничение, что и `profile.positions[*].currentPrice`
+  для портативной версии; точный исторический breakeven доступен в
+  `/api/v1/profile` через сегмент `valueSeries`.
+- `valuePitch = balance * currentPricePitch / 1e18`.
+- `pnlPitch = valuePitch - balance * avgEntryPitch / 1e18`. Реалайзованную
+  часть P&L здесь НЕ показываем — открытая позиция, точка.
+- `feesPaidWei`, `spentBaseWei`, `receivedBaseWei` — diagnostics, помогают
+  фронту/тестам сверять (`spent - received - fees` агрегаты per token).
+
+**Сортировка ответа:** `valuePitch` desc — крупнейшие холдинги первыми.
+
+**Источник данных:** один SQL JOIN по `events × tokens × market_state`,
+без отдельного `wallets`/`positions` индекса (см.
+[db-schema.sql](db-schema.sql) — таких таблиц нет; events — source of truth).
+Стоимость запроса — O(events_of_wallet). Тяжёлые трейдеры (>10k событий)
+получают ~50ms на ответ; индекс `events(trader_address)` обязателен.
+
+**Ошибки:** 401 / 402.
+
 ---
 
 ## 7. Лимит-ордера
@@ -995,11 +1064,26 @@ payload = JSON-массив новых `event_id`'ов; API-процесс чи�
       "tx": "0x...",
       "timestamp": 1709000000
     }
+  ],
+  "balances": [
+    { "address": "0x...", "token": "0x...", "wei": "1234500000000000000" }
   ]
 }
 ```
-Шлётся только при наличии новых сделок (массив всегда непустой). Фронт фильтрует
-по текущему выбранному токену.
+Шлётся только при наличии новых сделок (массив `newTrades` всегда непустой). Фронт
+фильтрует по текущему выбранному токену.
+
+**`balances`** (additive поле, добавлено после Phase 2) — post-trade net token
+holdings для каждой уникальной пары `(token, trader)`, затронутой в этом батче.
+Bonding-curve хуки не имеют контрагента (кривая mint/burn'ит supply), поэтому
+у каждого события ровно один `trader` — соответственно `balances[]` содержит
+по одной записи на пару. Если одна и та же пара появляется в нескольких трейдах
+батча — entry один, с финальным (post-batch) балансом. Источник: re-aggregation
+`Σ(buys.token_value) - Σ(sells.token_value)` по `events` (точное wei, NUMERIC
+без потери точности). Фронт использует это поле для реактивного обновления
+вкладки **Holders** в нижнем блоке без round-trip на `/api/v1/tokens/{token}/trades`.
+Отрицательные значения (sell больше предыдущего баланса — возможно только при
+out-of-order indexing) clamp'ятся к `"0"` перед отправкой.
 
 **`event: config`** — реактивное обновление полей `/api/v1/config`, изменяющихся
 on-chain. Шлётся всем подключённым клиентам (auth-нейтрально, как и сам `/config`).
