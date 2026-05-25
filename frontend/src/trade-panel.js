@@ -49,6 +49,7 @@ import { base } from 'viem/chains';
 import * as defaultApi from './api.js';
 import { getAccount, onAccountChange, BASE_CHAIN_ID } from './wallet.js';
 import { showToast } from './ui/toast.js';
+import { get as getAccessState, subscribe as subscribeAccessState } from './access-store.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -317,6 +318,22 @@ export function disabledReason(ctx) {
   return null;
 }
 
+// ─── Pro-cover (Batch 5) — pay-modal lazy import ────────────────────────────
+
+/**
+ * Batch 5: Pro upsell cover overlay shown over the trade panel when the user
+ * is not premium. The cover button delegates to `access.js`'s `openPayModal`,
+ * lazily imported so that free-only test fixtures don't pull viem/wagmi into
+ * their dependency graph.
+ *
+ * Tests inject `options.openPayModal` to skip the dynamic import and assert
+ * the click handler invokes the modal opener directly.
+ */
+async function defaultOpenPayModal(opts) {
+  const mod = await import('./access.js');
+  return mod.openPayModal(opts);
+}
+
 // ─── Internal: viem client factory ──────────────────────────────────────────
 
 let _client = null;
@@ -478,6 +495,24 @@ function el(tag, { className, dataset, attrs, text } = {}) {
  *                                            Argument is the lowercase address;
  *                                            wiring in main.js looks the row up
  *                                            in the sidebar registry.
+ * @property {(opts?: object) => unknown} [openPayModal]
+ *                                            Batch 5: pay-modal factory used by the
+ *                                            pro-cover upsell button. Defaults to the
+ *                                            dynamic-import of `./access.js`. Tests
+ *                                            override with a `vi.fn()` to avoid
+ *                                            loading the heavy access module.
+ * @property {() => 'unknown'|'anon'|'free'|'premium'} [getAccessState]
+ *                                            Batch 5: read current access state.
+ *                                            Defaults to `access-store.js#get`.
+ * @property {(fn: (s: string) => void) => () => void} [subscribeAccess]
+ *                                            Batch 5: subscribe to access-state
+ *                                            transitions. Defaults to
+ *                                            `access-store.js#subscribe`.
+ * @property {boolean} [proCoverEnabled]
+ *                                            Batch 5: gate the pro-cover overlay
+ *                                            entirely (e.g. for the standalone
+ *                                            DOM unit tests that don't mock the
+ *                                            access store). Defaults to `true`.
  */
 
 /**
@@ -515,6 +550,17 @@ export function mountTradePanel(container, options = {}) {
   const onCountrySwitch =
     typeof options.onCountrySwitch === 'function' ? options.onCountrySwitch : null;
 
+  // Batch 5 — Pro-cover wiring. Tests can disable the overlay entirely by
+  // passing `proCoverEnabled: false`, or inject custom access-state getters /
+  // subscribers + pay-modal factory.
+  const proCoverEnabled = options.proCoverEnabled !== false;
+  const _getAccessState =
+    typeof options.getAccessState === 'function' ? options.getAccessState : getAccessState;
+  const _subscribeAccess =
+    typeof options.subscribeAccess === 'function' ? options.subscribeAccess : subscribeAccessState;
+  const _openPayModal =
+    typeof options.openPayModal === 'function' ? options.openPayModal : defaultOpenPayModal;
+
   container.replaceChildren();
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -550,9 +596,39 @@ export function mountTradePanel(container, options = {}) {
   };
 
   // ── Build skeleton (build-once) ────────────────────────────────────────
+  // Batch 5: outer root holds an optional sticky header + a `pt-trade__body`
+  // wrapper for the actual form controls + the pro-cover overlay. The cover
+  // is absolutely positioned over `body` and toggled via the `is-locked`
+  // modifier on `root`. The CSS file (`trade-panel-batch5.css`) hides the body
+  // (visibility:hidden) when locked so the cover sits flush against the head.
   const root = el('div', {
     className: 'pt-trade',
     dataset: { testId: 'trade-panel', zone: 'trade' },
+  });
+
+  // Sticky header — "Trade · SYMBOL" matches the premium mockup.
+  const head = el('div', {
+    className: 'pt-trade__head',
+    dataset: { testId: 'trade-head' },
+  });
+  const headLabel = el('span', {
+    className: 'pt-trade__head-label',
+    dataset: { testId: 'trade-head-label' },
+    text: 'Trade',
+  });
+  const headLock = el('span', {
+    className: 'pt-trade__head-lock',
+    dataset: { testId: 'trade-head-lock' },
+    attrs: { 'aria-hidden': 'true' },
+    text: '🔒',
+  });
+  headLock.hidden = true;
+  head.appendChild(headLabel);
+  head.appendChild(headLock);
+
+  const body = el('div', {
+    className: 'pt-trade__body',
+    dataset: { testId: 'trade-body' },
   });
 
   // Mode toggle (Market / Limit). Limit is disabled.
@@ -725,18 +801,89 @@ export function mountTradePanel(container, options = {}) {
     dataset: { testId: 'trade-status' },
   });
 
-  root.appendChild(modeRow);
-  root.appendChild(sideRow);
-  root.appendChild(balanceLine);
-  root.appendChild(amountWrap);
-  root.appendChild(pctRow);
-  root.appendChild(slipWrap);
-  root.appendChild(quoteBlock);
-  root.appendChild(hintBlock);
-  root.appendChild(cta);
-  root.appendChild(countryCta);
-  root.appendChild(status);
+  // Batch 5: SELL tab is built last in the loop, but the mockup orders BUY
+  // on the left + SELL on the right (which matches `TABS = ['buy', 'sell']`).
+  // The mockup also stacks side tabs above the MARKET/LIMIT mode segment,
+  // so we render `sideRow` first when appending — visually closer to mockup
+  // — then `modeRow`. Existing test-ids unchanged.
+  body.appendChild(sideRow);
+  body.appendChild(modeRow);
+  body.appendChild(balanceLine);
+  body.appendChild(amountWrap);
+  body.appendChild(pctRow);
+  body.appendChild(slipWrap);
+  body.appendChild(quoteBlock);
+  body.appendChild(hintBlock);
+  body.appendChild(cta);
+  body.appendChild(countryCta);
+  body.appendChild(status);
+
+  root.appendChild(head);
+  root.appendChild(body);
   container.appendChild(root);
+
+  // Batch 5: Pro-cover overlay. Built once + appended to root so it sits as a
+  // sibling of `body` and can be absolutely positioned via CSS to cover the
+  // entire panel (head + body). Visibility is driven by the `is-locked` class
+  // on `root` so a single class toggle controls both the cover's display and
+  // the body's pointer-events.
+  const cover = el('div', {
+    className: 'pt-trade__cover',
+    dataset: { testId: 'trade-cover' },
+    attrs: { role: 'group', 'aria-label': 'Trading requires Pro' },
+  });
+  cover.hidden = true;
+  const coverIcon = el('div', {
+    className: 'pt-trade__cover-icon',
+    attrs: { 'aria-hidden': 'true' },
+    text: '★',
+  });
+  const coverTitle = el('div', {
+    className: 'pt-trade__cover-title',
+    dataset: { testId: 'trade-cover-title' },
+    text: 'Trading requires Pro',
+  });
+  const coverSub = el('div', {
+    className: 'pt-trade__cover-sub',
+    text: 'Trade 192 markets, place limit orders, sleep through fills. Our 24/7 server fires your orders the moment they trigger.',
+  });
+  const coverFeats = el('ul', { className: 'pt-trade__cover-feats' });
+  for (const feat of ['Market swaps', 'Limit orders', 'Take-profit', 'Price alerts']) {
+    coverFeats.appendChild(el('li', { text: feat }));
+  }
+  const coverQuote = el('div', { className: 'pt-trade__cover-quote' });
+  coverQuote.appendChild(
+    el('span', { className: 'pt-trade__cover-quote-l', text: 'One-time payment' }),
+  );
+  coverQuote.appendChild(el('span', { className: 'pt-trade__cover-quote-sep', text: '·' }));
+  coverQuote.appendChild(
+    el('span', {
+      className: 'pt-trade__cover-quote-r',
+      dataset: { testId: 'trade-cover-price' },
+      text: '1 PITCH',
+    }),
+  );
+  const coverCta = el('button', {
+    className: 'pt-trade__cover-cta',
+    dataset: { testId: 'trade-cover-cta' },
+    attrs: { type: 'button' },
+  });
+  coverCta.appendChild(
+    el('span', {
+      className: 'pt-trade__cover-cta-star',
+      attrs: { 'aria-hidden': 'true' },
+      text: '★',
+    }),
+  );
+  coverCta.appendChild(el('span', { text: 'Upgrade to Pro' }));
+
+  cover.appendChild(coverIcon);
+  cover.appendChild(coverTitle);
+  cover.appendChild(coverSub);
+  cover.appendChild(coverFeats);
+  cover.appendChild(coverQuote);
+  cover.appendChild(coverCta);
+  root.appendChild(cover);
 
   // ── Derived: side-token mapping ────────────────────────────────────────
   /**
@@ -1000,12 +1147,40 @@ export function mountTradePanel(container, options = {}) {
     status.textContent = reason ?? '';
   }
 
+  // Batch 5 — sticky-header label tracks the currently selected token's
+  // symbol. Falls back to "Trade" when no token is picked (e.g. first paint
+  // before sidebar has resolved a row).
+  function renderHead() {
+    const sym = state.token?.symbol;
+    headLabel.textContent = typeof sym === 'string' && sym ? `Trade · ${sym}` : 'Trade';
+  }
+
+  // Batch 5 — Pro-cover visibility. Mirrors `soft-lock.js` semantics: anything
+  // other than `'premium'` shows the cover. `is-locked` on root drives CSS
+  // hiding the body content (visibility:hidden so the panel keeps its size).
+  // `headLock` icon mirrors the cover state so the locked panel still has a
+  // visual cue inside its sticky header.
+  function renderCover() {
+    if (!proCoverEnabled) {
+      root.classList.remove('is-locked');
+      cover.hidden = true;
+      headLock.hidden = true;
+      return;
+    }
+    const isLocked = _getAccessState() !== 'premium';
+    root.classList.toggle('is-locked', isLocked);
+    cover.hidden = !isLocked;
+    headLock.hidden = !isLocked;
+  }
+
   function renderAll() {
+    renderHead();
     renderSideAria();
     renderBalance();
     renderQuote();
     renderHint();
     renderCta();
+    renderCover();
   }
 
   // ── Chain reads ────────────────────────────────────────────────────────
@@ -1405,6 +1580,19 @@ export function mountTradePanel(container, options = {}) {
     onCountrySwitch(addr);
   }
 
+  // Batch 5 — pro-cover upgrade CTA. Delegates to the host-provided pay-modal
+  // factory (or the lazy default import). We swallow open-modal exceptions
+  // here so a broken modal dependency never bubbles past the click handler;
+  // the modal itself surfaces its own errors via toasts.
+  function onCoverCtaClick() {
+    if (cover.hidden) return;
+    try {
+      _openPayModal();
+    } catch (err) {
+      console.error('trade-panel: openPayModal threw:', err);
+    }
+  }
+
   modeRow.addEventListener('click', onModeClick);
   sideRow.addEventListener('click', onSideClick);
   amountInput.addEventListener('input', onAmountInput);
@@ -1412,6 +1600,14 @@ export function mountTradePanel(container, options = {}) {
   pctRow.addEventListener('click', onPctClick);
   cta.addEventListener('click', onCtaClick);
   countryCta.addEventListener('click', onCountryCtaClick);
+  coverCta.addEventListener('click', onCoverCtaClick);
+
+  // Batch 5 — subscribe to access-store transitions so the cover flips off
+  // (premium grant) or back on (account switch → unknown/free) without the
+  // host having to call refresh manually. Stored in `unsubscribeAccess` for
+  // destroy(). Subscribe BEFORE the initial paint so a transition between
+  // mount and the first renderAll() can't be missed.
+  const unsubscribeAccess = proCoverEnabled ? _subscribeAccess(() => renderCover()) : () => {};
 
   // ── Wallet subscription ────────────────────────────────────────────────
   const unsubscribeAccount = onAccountChange((acc) => {
@@ -1600,12 +1796,25 @@ export function mountTradePanel(container, options = {}) {
     pctRow.removeEventListener('click', onPctClick);
     cta.removeEventListener('click', onCtaClick);
     countryCta.removeEventListener('click', onCountryCtaClick);
+    coverCta.removeEventListener('click', onCoverCtaClick);
     unsubscribeAccount();
+    try {
+      unsubscribeAccess();
+    } catch {
+      /* ignore */
+    }
     container.replaceChildren();
   }
 
   // Initial paint.
   renderAll();
 
-  return { setToken, refreshQuote, getState, destroy };
+  // Batch 5 — expose lock state for hosts that need to coordinate other UI
+  // (e.g. main.js can keep the right-zone soft-lock disabled now that the
+  // panel ships its own cover, but a future debug overlay might want to query).
+  function isLocked() {
+    return proCoverEnabled && _getAccessState() !== 'premium';
+  }
+
+  return { setToken, refreshQuote, getState, destroy, isLocked };
 }

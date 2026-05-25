@@ -18,6 +18,11 @@ import './styles/resizable.css';
 // cascade against the legacy F0.x rules in styles.css. Pure CSS overlay —
 // the underlying JS components keep their existing class names + test-ids.
 import './styles/modals-batch7.css';
+// Phase 1.5 batch 5: trade-panel redesign + Pro upsell cover overlay. Loaded
+// after styles.css so the new `.pt-trade__*` declarations override the legacy
+// F1.1 rules. The pro-cover (`.pt-trade__cover`) ships its own complete
+// stylesheet — no shared styles cross over to other panels.
+import './styles/trade-panel-batch5.css';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
@@ -369,26 +374,28 @@ function bootstrap() {
       // Silent — CTA degrades to no-op if registry never loads.
     });
 
-  // F0.13: blur + lock the right-side trading panel for non-premium users.
-  // The trade-panel (mounted above) provides the actual content; the soft-lock
-  // overlay sits on top and blurs the panel until the user becomes premium.
-  // The Profile zone gets its own soft-lock since mode-profile hides .pt-right
-  // via CSS.
+  // F0.13 + Phase 1.5 Batch 5: premium gating.
   //
-  // Save the handles so the access-store subscriptions can be cleaned up at
+  // - **Right (trading) zone:** the trade panel ships its own dedicated
+  //   pro-cover overlay (see `trade-panel.js#renderCover`). It subscribes to
+  //   access-store directly, so no soft-lock is mounted here anymore. The
+  //   in-panel cover renders the full upsell card (icon + feature list + 1
+  //   PITCH price + "Upgrade to Pro" button) instead of a generic blur.
+  // - **Profile zone:** still uses the generic soft-lock because the profile
+  //   view is mounted lazily on tab-switch and doesn't carry its own lock.
+  //
+  // Save the handle so the access-store subscription can be cleaned up at
   // any future re-mount (currently bootstrap runs once, but tests and a
   // potential mode-switch refactor would leak listeners without this).
-  // Exposed via `window.__pt_locks` for ad-hoc debug + test teardown.
-  const rightLock = mountSoftLock(layout.right, {
-    zone: 'right',
-    label: 'Premium — trading panel',
-  });
+  // Exposed via `window.__pt_locks` for ad-hoc debug + test teardown — the
+  // shape is preserved (`rightLock` is null now) so the dev console keeps
+  // working.
   const profileLock = mountSoftLock(layout.profile, {
     zone: 'profile',
     label: 'Premium — profile',
   });
   if (typeof window !== 'undefined') {
-    window.__pt_locks = { rightLock, profileLock };
+    window.__pt_locks = { rightLock: null, profileLock, tradeIsLocked: () => trade.isLocked() };
   }
 
   // F0.15: Profile view is mounted lazily on first "View Profile" click and

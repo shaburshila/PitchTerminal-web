@@ -2197,3 +2197,158 @@ describe('mountTradePanel — F1.4 chain switch invalidates quote', () => {
     handle.destroy();
   });
 });
+
+// ─── Phase 1.5 batch 5: Pro upsell cover ───────────────────────────────────
+
+describe('mountTradePanel — batch 5 pro-cover', () => {
+  it('renders cover overlay DOM (icon, title, feature list, price, CTA)', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      // Force-locked state via a deterministic getter — independent of the
+      // module-level access-store singleton (which the suite doesn't reset).
+      getAccessState: () => 'free',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const cover = container.querySelector('[data-test-id="trade-cover"]');
+    expect(cover).toBeTruthy();
+    expect(cover.hidden).toBe(false);
+    expect(container.querySelector('[data-test-id="trade-cover-title"]').textContent).toMatch(
+      /Pro/i,
+    );
+    expect(container.querySelector('[data-test-id="trade-cover-price"]').textContent).toMatch(
+      /1 PITCH/,
+    );
+    // Feature list — 4 bullets per mockup.
+    const feats = cover.querySelectorAll('.pt-trade__cover-feats li');
+    expect(feats.length).toBe(4);
+    // CTA button is wired.
+    expect(container.querySelector('[data-test-id="trade-cover-cta"]')).toBeTruthy();
+    handle.destroy();
+  });
+
+  it('hides cover when access state is premium', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const cover = container.querySelector('[data-test-id="trade-cover"]');
+    expect(cover.hidden).toBe(true);
+    expect(container.querySelector('[data-test-id="trade-panel"]').classList.contains('is-locked')).toBe(
+      false,
+    );
+    handle.destroy();
+  });
+
+  it('shows the head lock icon and adds is-locked when not premium', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => 'free',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const lock = container.querySelector('[data-test-id="trade-head-lock"]');
+    expect(lock.hidden).toBe(false);
+    expect(
+      container.querySelector('[data-test-id="trade-panel"]').classList.contains('is-locked'),
+    ).toBe(true);
+    handle.destroy();
+  });
+
+  it('clicking the upsell CTA invokes the openPayModal factory', async () => {
+    const openPayModal = vi.fn();
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => 'free',
+      subscribeAccess: () => () => {},
+      openPayModal,
+    });
+    await flush();
+    container.querySelector('[data-test-id="trade-cover-cta"]').click();
+    expect(openPayModal).toHaveBeenCalledTimes(1);
+    handle.destroy();
+  });
+
+  it('subscribes to access-store transitions and flips cover on state change', async () => {
+    // Drive renders via a manual subscriber so we can assert the cover flips
+    // without mutating the real access-store singleton.
+    let listener = null;
+    let currentState = 'free';
+    const subscribeAccess = vi.fn((fn) => {
+      listener = fn;
+      return () => {
+        listener = null;
+      };
+    });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => currentState,
+      subscribeAccess,
+    });
+    await flush();
+    const cover = container.querySelector('[data-test-id="trade-cover"]');
+    expect(cover.hidden).toBe(false);
+    // Transition to premium and fire the listener — cover must hide.
+    currentState = 'premium';
+    listener('premium');
+    expect(cover.hidden).toBe(true);
+    // Back to free → cover comes back.
+    currentState = 'free';
+    listener('free');
+    expect(cover.hidden).toBe(false);
+    handle.destroy();
+    // destroy() must unsubscribe.
+    expect(listener).toBeNull();
+  });
+
+  it('proCoverEnabled:false hides the cover regardless of state', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      proCoverEnabled: false,
+      getAccessState: () => 'free',
+    });
+    await flush();
+    expect(container.querySelector('[data-test-id="trade-cover"]').hidden).toBe(true);
+    expect(
+      container.querySelector('[data-test-id="trade-panel"]').classList.contains('is-locked'),
+    ).toBe(false);
+    handle.destroy();
+  });
+
+  it('head label updates with the selected token symbol', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      proCoverEnabled: false,
+    });
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-head-label"]');
+    expect(label.textContent).toBe('Trade');
+    handle.setToken(PLAYER_TOKEN);
+    expect(label.textContent).toBe('Trade · PLR');
+    handle.destroy();
+  });
+
+  it('isLocked() handle returns false when premium, true when locked', async () => {
+    const lockedHandle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => 'free',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    expect(lockedHandle.isLocked()).toBe(true);
+    lockedHandle.destroy();
+    document.body.replaceChildren();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    const premiumHandle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    expect(premiumHandle.isLocked()).toBe(false);
+    premiumHandle.destroy();
+  });
+});

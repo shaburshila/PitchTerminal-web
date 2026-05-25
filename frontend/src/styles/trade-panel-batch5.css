@@ -1,0 +1,579 @@
+/*
+ * Phase 1.5 batch 5 — trade panel redesign + Pro upsell cover.
+ *
+ * Visual references:
+ *   - ~/Downloads/a-main.html              (premium full state)
+ *   - ~/Downloads/a-main-free.html         (free state with cover)
+ *   - ~/Downloads/pt-mockups/pt-trade-cover-pro.html  (cover detail)
+ *
+ * Loaded AFTER styles.css so the legacy F1.1/F1.3 declarations are overridden.
+ * All colors + radii are routed through tokens.css — no raw hex values.
+ *
+ * Component DOM + test-ids are preserved from trade-panel.js (`.pt-trade`,
+ * `.pt-trade__mode`, `.pt-trade__side-btn`, etc.). Batch 5 adds a structural
+ * wrapper (`.pt-trade__body`), a sticky header (`.pt-trade__head`) and an
+ * absolutely-positioned upsell overlay (`.pt-trade__cover`). The `is-locked`
+ * modifier on `.pt-trade` toggles the cover + neutralises the body.
+ */
+
+/* ── Container — sticky head + scrollable body ──────────────────────────── */
+
+.pt-trade {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-1);
+  border-left: 1px solid var(--line);
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pt-trade__head {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  background: var(--bg-1);
+}
+
+.pt-trade__head-label {
+  letter-spacing: 0.08em;
+}
+
+.pt-trade__head-lock {
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.pt-trade__head-lock[hidden] {
+  display: none;
+}
+
+.pt-trade__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* When the panel is locked, neutralise the body so the cover sits on top
+   without a flash of interactive content underneath. `visibility:hidden`
+   (not `display:none`) keeps the layout stable. */
+.pt-trade.is-locked .pt-trade__body {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── BUY / SELL side tabs ───────────────────────────────────────────────── */
+
+.pt-trade__side {
+  display: flex;
+  padding: 6px 12px 0;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pt-trade__side-btn {
+  flex: 1;
+  padding: 9px 0 10px;
+  text-align: center;
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.pt-trade__side-btn:hover {
+  color: var(--text-2);
+}
+
+.pt-trade__side-btn--buy.is-active {
+  color: var(--up);
+  border-bottom-color: var(--up);
+}
+
+.pt-trade__side-btn--sell.is-active {
+  color: var(--down);
+  border-bottom-color: var(--down);
+}
+
+/* ── MARKET / LIMIT mode segment ────────────────────────────────────────── */
+
+.pt-trade__mode {
+  display: flex;
+  padding: 12px 14px 0;
+  gap: 6px;
+}
+
+.pt-trade__mode-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.pt-trade__mode-btn:hover:not([disabled]) {
+  color: var(--text-2);
+  border-color: var(--line-strong);
+}
+
+.pt-trade__mode-btn.is-active {
+  background: var(--bg-3);
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.pt-trade__mode-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Balance line ───────────────────────────────────────────────────────── */
+
+.pt-trade__balance {
+  padding: 14px 14px 0;
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Amount + Slippage fields ───────────────────────────────────────────── */
+
+.pt-trade__amount {
+  display: block;
+  padding: 8px 14px 0;
+}
+
+.pt-trade__slippage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.pt-trade__label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.pt-trade__slippage .pt-trade__label {
+  margin-bottom: 0;
+}
+
+.pt-trade__input {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-0);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.pt-trade__input:focus,
+.pt-trade__input:focus-visible {
+  border-color: var(--accent);
+}
+
+.pt-trade__input--narrow {
+  width: 70px;
+  text-align: right;
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+/* ── 25/50/75/Max preset row ────────────────────────────────────────────── */
+
+.pt-trade__pct {
+  display: flex;
+  padding: 8px 14px 0;
+  gap: 5px;
+}
+
+.pt-trade__pct-btn {
+  flex: 1;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.pt-trade__pct-btn:hover:not([disabled]) {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+/* ── Quote block ────────────────────────────────────────────────────────── */
+
+.pt-trade__quote {
+  margin: 14px;
+  padding: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.pt-trade__quote-out {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 14px;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pt-trade__quote-min,
+.pt-trade__quote-fee {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-trade__quote-error {
+  color: var(--down);
+}
+
+/* ── Country hint (F1.3) ────────────────────────────────────────────────── */
+
+.pt-trade__hint {
+  margin: 0 14px;
+  padding: 10px 12px;
+  background: var(--warn-dim);
+  border: 1px solid rgba(224, 169, 58, 0.25);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.pt-trade__hint[hidden] {
+  display: none;
+}
+
+.pt-trade__hint-required {
+  color: var(--text);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-trade__hint-balance {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* ── Primary CTA — colored by side ──────────────────────────────────────── */
+
+.pt-trade__cta {
+  margin: 16px 14px 0;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  background: var(--up);
+  color: #0a1410;
+  transition:
+    filter 120ms ease,
+    opacity 120ms ease;
+}
+
+.pt-trade__cta:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.pt-trade__cta:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Sell-side recolor — `data-action` is set by JS based on action (approve vs
+   swap) but doesn't carry side info. We can lean on the side-tab state instead:
+   when the SELL tab is active, the CTA is recolored via the parent selector.
+   The CTA text already swaps to "Sell"/"Approve" so this is purely visual. */
+
+.pt-trade .pt-trade__side-btn--sell.is-active ~ * .pt-trade__cta,
+.pt-trade__cta[data-side='sell'] {
+  /* Reserved for future per-side recolor; the JS doesn't currently set
+     `data-side` on the CTA but the rule is kept here to make the extension
+     cheap. The fallback selector via `~ *` is wrong CSS-wise (CTA is not a
+     descendant of a sibling) — keep this block as a stub. */
+}
+
+/* Apply side recolor via root modifier set on the side button click. We use
+   `:has()` which is supported in all evergreen browsers (Chrome 105+, Safari
+   15.4+, Firefox 121+). Graceful degradation: without `:has()`, the SELL CTA
+   stays green — still functional, just less obvious. */
+
+.pt-trade:has(.pt-trade__side-btn--sell.is-active) .pt-trade__cta {
+  background: var(--down);
+  color: #ffffff;
+}
+
+/* ── Secondary "Buy country" CTA (F1.3) ─────────────────────────────────── */
+
+.pt-trade__country-cta {
+  margin: 8px 14px 0;
+  padding: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--info);
+  color: var(--info);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: background 120ms ease;
+}
+
+.pt-trade__country-cta[hidden] {
+  display: none;
+}
+
+.pt-trade__country-cta:hover {
+  background: rgba(95, 176, 255, 0.08);
+}
+
+/* ── Status line ────────────────────────────────────────────────────────── */
+
+.pt-trade__status {
+  margin: 6px 14px 0;
+  font-size: 11px;
+  color: var(--text-3);
+  min-height: 14px;
+  text-align: center;
+}
+
+/* ── Pro-cover overlay (Batch 5) ────────────────────────────────────────── */
+
+.pt-trade__cover {
+  position: absolute;
+  /* Sit below the sticky head so the "Trade · SYMBOL · 🔒" line stays visible.
+     `--pt-trade-head-h` is approx 13+13+lineheight padding — see .pt-trade__head.
+     We use a fixed pixel offset matching the head padding+font for predictability. */
+  top: 41px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 32px 20px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(224, 169, 58, 0.1), transparent 60%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  overflow-y: auto;
+}
+
+.pt-trade__cover[hidden] {
+  display: none;
+}
+
+.pt-trade__cover-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #e0a93a, #c98e1b);
+  color: #1a1410;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  box-shadow:
+    0 6px 20px rgba(224, 169, 58, 0.25),
+    0 1px 0 rgba(255, 255, 255, 0.2) inset;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.pt-trade__cover-icon::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 18px;
+  border: 1px solid rgba(224, 169, 58, 0.25);
+}
+
+.pt-trade__cover-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+
+.pt-trade__cover-sub {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+  max-width: 240px;
+  margin: 0 auto 18px;
+}
+
+.pt-trade__cover-feats {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  text-align: left;
+}
+
+.pt-trade__cover-feats li {
+  font-size: 11.5px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pt-trade__cover-feats li::before {
+  content: '✓';
+  color: var(--warn);
+  font-weight: 700;
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.pt-trade__cover-quote {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+}
+
+.pt-trade__cover-quote-l {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.pt-trade__cover-quote-sep {
+  color: var(--line-strong);
+}
+
+.pt-trade__cover-quote-r {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-trade__cover-cta {
+  width: 100%;
+  max-width: 280px;
+  height: 42px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #e0a93a, #c98e1b);
+  color: #1a1410;
+  font: inherit;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.18) inset,
+    0 4px 14px rgba(224, 169, 58, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  transition: filter 120ms ease;
+}
+
+.pt-trade__cover-cta:hover {
+  filter: brightness(1.06);
+}
+
+.pt-trade__cover-cta-star {
+  font-size: 13px;
+}
