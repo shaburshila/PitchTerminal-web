@@ -8,6 +8,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../src/wallet.js', () => ({
   onAccountChange: vi.fn(),
+  getAccount: vi.fn(() => ({
+    address: null,
+    chainId: null,
+    isConnected: false,
+    connectorId: null,
+  })),
 }));
 
 vi.mock('../src/api.js', () => {
@@ -22,6 +28,7 @@ vi.mock('../src/api.js', () => {
     getConfig: vi.fn(),
     getTokens: vi.fn(),
     getAccess: vi.fn(),
+    getProfile: vi.fn(),
     logout: vi.fn(),
   };
 });
@@ -50,11 +57,14 @@ vi.mock('../src/profile.js', () => ({ mountProfile: vi.fn() }));
 vi.mock('../src/access.js', () => ({ mountAccessBanner: vi.fn() }));
 vi.mock('../src/soft-lock.js', () => ({ mountSoftLock: vi.fn() }));
 vi.mock('../src/ui/toast.js', () => ({ showToast: vi.fn() }));
+vi.mock('../src/resizable.js', () => ({ mountResizable: vi.fn() }));
+vi.mock('../src/components/header-actions.js', () => ({ mountHeaderActions: vi.fn() }));
 
 const accessStoreMock = await import('../src/access-store.js');
 const apiMock = await import('../src/api.js');
 const signinMock = await import('../src/ui/signin-modal.js');
-const { createAccountChangeHandler } = await import('../src/main.js');
+const { createAccountChangeHandler, weiToWhole, createPositionsRefresher, createSparkRerender } =
+  await import('../src/main.js');
 
 const WALLET_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const WALLET_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -125,5 +135,193 @@ describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
       ([s]) => s === 'unknown',
     ).length;
     expect(afterUnknowns).toBe(baselineUnknowns);
+  });
+});
+
+describe('weiToWhole (Phase 1.5 follow-up: BigInt precision)', () => {
+  it('returns 0 for null / undefined / empty / non-string', () => {
+    expect(weiToWhole(null)).toBe(0);
+    expect(weiToWhole(undefined)).toBe(0);
+    expect(weiToWhole('')).toBe(0);
+    expect(weiToWhole(123)).toBe(0);
+  });
+
+  it('returns 0 for non-numeric strings', () => {
+    expect(weiToWhole('abc')).toBe(0);
+    expect(weiToWhole('1.5e10')).toBe(0);
+    expect(weiToWhole('1.0')).toBe(0);
+  });
+
+  it('handles single-token wei amount (10^18 → 1)', () => {
+    expect(weiToWhole('1000000000000000000')).toBe(1);
+  });
+
+  it('handles sub-token fractional wei amount (10^17 → 0.1)', () => {
+    expect(weiToWhole('100000000000000000')).toBeCloseTo(0.1, 10);
+  });
+
+  it('handles 18-char value (< 1 PITCH) approximately', () => {
+    // '1' × 18 = 111111111111111111 (~1.11e17 wei, ~0.111 PITCH).
+    // The buggy v1 implementation hit the `s.length > 18` branch as false and
+    // returned Number('111111111111111111') / 1e18 — Number() on an 18-digit
+    // integer-like > 2^53 (9.007e15) silently rounds. The BigInt fix doesn't
+    // help here much (the fractional remainder is itself larger than 2^53)
+    // but the result is still close to the true value.
+    const result = weiToWhole('111111111111111111');
+    expect(result).toBeCloseTo(0.1111111111111111, 4);
+  });
+
+  it('handles a 19-digit value exceeding 1 token without truncating low digits (issue #3)', () => {
+    // 12_345_678_901_234_567_890 wei = ~12.345 PITCH. The pre-fix code
+    // took the leading slice ('12') and discarded the fractional 18 digits
+    // entirely — net result was the integer floor only. BigInt division
+    // recovers the fractional component.
+    const result = weiToWhole('12345678901234567890');
+    expect(result).toBeGreaterThan(12.3);
+    expect(result).toBeLessThan(12.4);
+  });
+
+  it('handles a 19-digit value that the pre-fix code would have truncated to integer-only', () => {
+    // The pre-fix `Number(s.slice(0, s.length - 18))` for length=19 returns
+    // Number(first-char). For '99999999999999999999' (20 chars) it returned
+    // Number('99') = 99 — discarding 18 digits of value (~9.99 vs true
+    // ~99.99). Verify the fix integer-part is correct for the 20-char case:
+    // 99_999_999_999_999_999_999 wei ≈ 99.9999... PITCH.
+    const result = weiToWhole('99999999999999999999');
+    expect(result).toBeGreaterThan(99);
+    expect(result).toBeLessThanOrEqual(100);
+  });
+
+  it('handles large supply values (1_000_000 tokens) precisely', () => {
+    // 1_000_000 * 1e18 = 1e24 → returns 1_000_000
+    expect(weiToWhole('1000000000000000000000000')).toBe(1_000_000);
+  });
+
+  it('handles negative wei (defensive — backend should never send these)', () => {
+    expect(weiToWhole('-1000000000000000000')).toBe(-1);
+  });
+});
+
+describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', () => {
+  function makeSidebar() {
+    return { rerender: vi.fn() };
+  }
+
+  function makeProfileResp(addrs) {
+    return {
+      balances: {
+        countries: addrs.map((a) => ({ address: a, wei: '1000000000000000000' })),
+      },
+    };
+  }
+
+  it('skips the request entirely when wallet is disconnected (issue #4)', () => {
+    const getProfile = vi.fn();
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map([['0xstale', 42]]);
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: false }),
+      getProfile,
+      positionByAddr,
+      sidebar,
+    });
+    refresh();
+    expect(getProfile).not.toHaveBeenCalled();
+    // stale dots are still cleared synchronously so a disconnect wipes UI.
+    expect(positionByAddr.size).toBe(0);
+    expect(sidebar.rerender).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a stale slow response when a newer refresh completed first (issue #1)', async () => {
+    // First call hangs; second call resolves fast with the NEW wallet's
+    // countries. The first must NOT later overwrite positionByAddr.
+    let resolveSlow;
+    const slow = new Promise((r) => {
+      resolveSlow = r;
+    });
+    const getProfile = vi
+      .fn()
+      .mockImplementationOnce(() => slow)
+      .mockImplementationOnce(() => Promise.resolve(makeProfileResp(['0xNEW'])));
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map();
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: true }),
+      getProfile,
+      positionByAddr,
+      sidebar,
+    });
+
+    refresh(); // wallet-A — never resolves yet
+    refresh(); // wallet-B — resolves first
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // After the newer call resolved, we have the new wallet's dot.
+    expect(positionByAddr.has('0xnew')).toBe(true);
+    expect(positionByAddr.size).toBe(1);
+
+    // Now let the stale wallet-A call land. It must NOT overwrite.
+    resolveSlow(makeProfileResp(['0xOLD']));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(positionByAddr.has('0xnew')).toBe(true);
+    expect(positionByAddr.has('0xold')).toBe(false);
+  });
+
+  it('createSparkRerender.cleanup clears the pending timer (issue #2 leak)', () => {
+    const sidebar = { rerender: vi.fn() };
+    const clearSpy = vi.fn();
+    const setSpy = vi.fn(() => 'fake-handle');
+    const { schedule, cleanup } = createSparkRerender(sidebar, 5000, {
+      setTimeout: setSpy,
+      clearTimeout: clearSpy,
+    });
+    schedule();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    cleanup();
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(clearSpy).toHaveBeenCalledWith('fake-handle');
+    // No-op when called again — nothing pending.
+    cleanup();
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('createSparkRerender.schedule coalesces multiple calls into one timer', () => {
+    const sidebar = { rerender: vi.fn() };
+    const setSpy = vi.fn(() => 1);
+    const { schedule } = createSparkRerender(sidebar, 5000, {
+      setTimeout: setSpy,
+      clearTimeout: vi.fn(),
+    });
+    schedule();
+    schedule();
+    schedule();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a stale error response that lands after a successful refresh', async () => {
+    let rejectSlow;
+    const slow = new Promise((_, reject) => {
+      rejectSlow = reject;
+    });
+    const getProfile = vi
+      .fn()
+      .mockImplementationOnce(() => slow)
+      .mockImplementationOnce(() => Promise.resolve(makeProfileResp(['0xNEW'])));
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map();
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: true }),
+      getProfile,
+      positionByAddr,
+      sidebar,
+    });
+    refresh();
+    refresh();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(positionByAddr.has('0xnew')).toBe(true);
+    // Stale failure must not wipe the new positions.
+    rejectSlow(new Error('boom'));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(positionByAddr.has('0xnew')).toBe(true);
   });
 });

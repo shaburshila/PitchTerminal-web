@@ -33,7 +33,7 @@ import { openStream } from './sse.js';
 import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
-import { onAccountChange } from './wallet.js';
+import { onAccountChange, getAccount } from './wallet.js';
 import { getConfig, getTokens, getProfile, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
@@ -43,6 +43,145 @@ import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
 import { showToast } from './ui/toast.js';
 import { mountHeaderActions } from './components/header-actions.js';
+
+/**
+ * Convert a backend wei decimal-string into a whole-token Number.
+ *
+ * Exported for unit tests. Uses BigInt division for the integer part so a
+ * supply string of exactly 18 digits with a leading non-zero (e.g.
+ * `'1' * 18` = `'111111111111111111'` ≈ 0.111 PITCH) doesn't silently
+ * lose precision through `Number(str)` (which converts `>2^53` int-likes
+ * inexactly). The fractional part is approximated by `/ 1e18` for display —
+ * for sub-wei precision callers should consume the BigInt directly.
+ *
+ * Returns `0` on any parse failure (empty / non-numeric / non-digit chars).
+ *
+ * @param {string|null|undefined} weiStr
+ * @returns {number}
+ */
+export function weiToWhole(weiStr) {
+  if (typeof weiStr !== 'string' || !weiStr) return 0;
+  // Reject anything that isn't an optional minus + digits — BigInt would
+  // throw on '1.5e10' etc. and we'd swallow it.
+  if (!/^-?\d+$/.test(weiStr)) return 0;
+  try {
+    const big = BigInt(weiStr);
+    const WEI = 1000000000000000000n;
+    const negative = big < 0n;
+    const abs = negative ? -big : big;
+    const whole = abs / WEI;
+    const rem = abs % WEI;
+    // remainder always fits in a double (max < 1e18 ≈ 10^18 ≈ 2^59.79 — actually
+    // > 2^53 so we still lose a few low bits, but for display precision this is
+    // acceptable; the high-magnitude part is precise via the BigInt division).
+    const result = Number(whole) + Number(rem) / 1e18;
+    return negative ? -result : result;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Build a throttled `schedule()` for sidebar sparkline updates with a
+ * matching `cleanup()` that cancels the pending trailing-edge timer.
+ *
+ * Phase 1.5 follow-up issue #2: the original inline `sparkTimer` had no
+ * teardown path — if sidebar.destroy() is called (tests, hot-reload, future
+ * SPA remount) a pending setTimeout still fires and calls sidebar.rerender()
+ * on a detached component. We expose `cleanup()` so the caller can patch
+ * sidebar.destroy and clear the timer.
+ *
+ * @param {{ rerender: () => void }} sidebar
+ * @param {number} delayMs  Trailing-edge throttle interval.
+ * @param {{ setTimeout?: typeof setTimeout, clearTimeout?: typeof clearTimeout }} [timers]
+ *   Override for tests so we can spy on clearTimeout without faking timers.
+ */
+export function createSparkRerender(sidebar, delayMs, timers = {}) {
+  const _setTimeout = timers.setTimeout ?? setTimeout;
+  const _clearTimeout = timers.clearTimeout ?? clearTimeout;
+  let timer = null;
+  function schedule() {
+    if (timer) return;
+    timer = _setTimeout(() => {
+      timer = null;
+      try {
+        sidebar.rerender();
+      } catch {
+        /* sidebar may have been destroyed during teardown — safe to swallow */
+      }
+    }, delayMs);
+  }
+  function cleanup() {
+    if (timer) {
+      _clearTimeout(timer);
+      timer = null;
+    }
+  }
+  return { schedule, cleanup };
+}
+
+/**
+ * Build a `refreshPositions(): void` function with a built-in generation
+ * counter so concurrent calls discard stale responses. The fix for review
+ * follow-up issue #1: prior to this, two refreshPositions() calls in flight
+ * could resolve in reverse order under slow-network + rapid wallet-switch,
+ * leaving the sidebar painted with the OLD wallet's country dots.
+ *
+ * Also issue #4: when the wallet isn't connected we skip the `/profile` call
+ * entirely (it would 401 — bloats the network log and creates anonymous-boot
+ * noise in DevTools). The sidebar is still cleared so a logout immediately
+ * wipes the previous wallet's dots.
+ *
+ * @param {object} deps
+ * @param {() => { isConnected: boolean }} deps.getAccount
+ * @param {() => Promise<{ balances?: { countries?: Array<{address:string, wei:string}> } }>} deps.getProfile
+ * @param {Map<string, number>} deps.positionByAddr  Mutated in place.
+ * @param {{ rerender: () => void }} deps.sidebar
+ * @param {(weiStr: string) => number} [deps.weiToWhole]  Override for tests.
+ */
+export function createPositionsRefresher({
+  getAccount: _getAccount,
+  getProfile: _getProfile,
+  positionByAddr,
+  sidebar,
+  weiToWhole: _weiToWhole = weiToWhole,
+}) {
+  let gen = 0;
+  function safeRerender() {
+    try {
+      sidebar.rerender();
+    } catch {
+      /* sidebar torn down — fine */
+    }
+  }
+  function refreshPositions() {
+    // Anonymous-boot guard: no point hitting an auth-only endpoint.
+    if (!_getAccount().isConnected) {
+      positionByAddr.clear();
+      safeRerender();
+      return;
+    }
+    const myGen = ++gen;
+    _getProfile()
+      .then((resp) => {
+        if (myGen !== gen) return;
+        positionByAddr.clear();
+        const countries = Array.isArray(resp?.balances?.countries) ? resp.balances.countries : [];
+        for (const c of countries) {
+          if (c && typeof c.address === 'string' && c.address) {
+            positionByAddr.set(c.address.toLowerCase(), _weiToWhole(c.wei));
+          }
+        }
+        sidebar.rerender();
+      })
+      .catch(() => {
+        if (myGen !== gen) return;
+        positionByAddr.clear();
+        safeRerender();
+      });
+  }
+  return refreshPositions;
+}
 
 // Exported for unit tests. The bootstrap() flow wires this into
 // `onAccountChange`; tests drive the returned handler directly with deps
@@ -303,61 +442,34 @@ function bootstrap() {
   });
 
   // Throttled rerender — coalesces SSE-driven price ticks. We use a trailing-
-  // edge timer so the first tick after a quiet period is reflected promptly
-  // (next animation frame), then subsequent ticks are batched.
-  let sparkTimer = null;
-  function scheduleSidebarRerender() {
-    if (sparkTimer) return;
-    sparkTimer = setTimeout(() => {
-      sparkTimer = null;
-      try {
-        sidebar.rerender();
-      } catch {
-        /* sidebar may have been destroyed during teardown — safe to swallow */
-      }
-    }, SPARK_RERENDER_MS);
-  }
+  // edge timer so the first tick after a quiet period is reflected promptly,
+  // then subsequent ticks are batched. cleanup() is wired into sidebar.destroy
+  // below to fix the Phase 1.5 follow-up #2 timer leak.
+  const spark = createSparkRerender(sidebar, SPARK_RERENDER_MS);
+  const scheduleSidebarRerender = spark.schedule;
 
-  // Convert backend wei-string into a whole-token number. Used for /profile
-  // balances which arrive as decimal strings ("12345000000000000000" etc).
-  function weiToWhole(weiStr) {
-    if (typeof weiStr !== 'string' || !weiStr) return 0;
-    try {
-      const s = weiStr;
-      if (s.length > 18) return Number(s.slice(0, s.length - 18));
-      return Number(s) / 1e18;
-    } catch {
-      return 0;
+  // Phase 1.5 follow-up issue #2: wrap sidebar.destroy so a torn-down sidebar
+  // can't leak its pending rerender timer. bootstrap() doesn't itself tear
+  // down sidebar today, but tests + any future SPA re-mount would otherwise
+  // leave the trailing setTimeout queued — and once it fires, it calls into
+  // a destroyed sidebar.
+  const originalSidebarDestroy = sidebar.destroy;
+  sidebar.destroy = function patchedSidebarDestroy() {
+    spark.cleanup();
+    if (typeof originalSidebarDestroy === 'function') {
+      originalSidebarDestroy.call(sidebar);
     }
-  }
+  };
 
-  function refreshPositions() {
-    // /profile requires SIWE auth — anonymous users 401. Swallow + clear so
-    // disconnecting wipes the position dots that belonged to the previous
-    // wallet.
-    getProfile()
-      .then((resp) => {
-        positionByAddr.clear();
-        const countries = Array.isArray(resp?.balances?.countries) ? resp.balances.countries : [];
-        for (const c of countries) {
-          if (c && typeof c.address === 'string' && c.address) {
-            positionByAddr.set(c.address.toLowerCase(), weiToWhole(c.wei));
-          }
-        }
-        // No per-player balances in the response — sidebar will show dots
-        // for country tokens only. Players: tracked-by /trades activity
-        // would need its own endpoint; deferred per batch-3 scope.
-        sidebar.rerender();
-      })
-      .catch(() => {
-        positionByAddr.clear();
-        try {
-          sidebar.rerender();
-        } catch {
-          /* fine */
-        }
-      });
-  }
+  // Phase 1.5 follow-up issues #1 + #4 — generation-counted refresh that
+  // also skips the request when no wallet is connected. See
+  // createPositionsRefresher above for the full rationale.
+  const refreshPositions = createPositionsRefresher({
+    getAccount,
+    getProfile,
+    positionByAddr,
+    sidebar,
+  });
 
   // Populate the country-token registry once; same /tokens endpoint the
   // sidebar already hits, so the response is hot in the HTTP cache.

@@ -525,6 +525,14 @@ export function mountChart(container, options = {}) {
   let avgPriceLine = null;
   let netPosPriceLine = null;
   let crosshairUnsub = null;
+  // Phase 1.5 follow-up: between ensureChartInstance() awaiting and the
+  // subsequent removeSeries call in rebuildSeries(), an SSE price tick can
+  // race in and call applyPrice() → renderNetPosLine() against the OLD
+  // series. createPriceLine on a removed series leaks a priceLine object
+  // (held by the now-detached series instance, no removePriceLine ever
+  // called against the live series). Skip applyPrice's side-effects while
+  // we're between series.
+  let rebuilding = false;
 
   // ── OHLC crosshair card (batch 4.5) ─────────────────────────────────────
   // Show the OHLCV + time of the candle under the cursor in a floating
@@ -747,21 +755,26 @@ export function mountChart(container, options = {}) {
   }
 
   async function rebuildSeries() {
-    await ensureChartInstance();
-    if (series && chartInstance && typeof chartInstance.removeSeries === 'function') {
-      try {
-        chartInstance.removeSeries(series);
-      } catch {
-        /* ignore */
+    rebuilding = true;
+    try {
+      await ensureChartInstance();
+      if (series && chartInstance && typeof chartInstance.removeSeries === 'function') {
+        try {
+          chartInstance.removeSeries(series);
+        } catch {
+          /* ignore */
+        }
       }
+      // Old series is gone — its priceLine handles are invalid.
+      avgPriceLine = null;
+      netPosPriceLine = null;
+      series = createSeries();
+      setSeriesData(series);
+      renderAvgLine();
+      renderNetPosLine();
+    } finally {
+      rebuilding = false;
     }
-    // Old series is gone — its priceLine handles are invalid.
-    avgPriceLine = null;
-    netPosPriceLine = null;
-    series = createSeries();
-    setSeriesData(series);
-    renderAvgLine();
-    renderNetPosLine();
   }
 
   // ── Stats / status rendering ────────────────────────────────────────────
@@ -973,6 +986,12 @@ export function mountChart(container, options = {}) {
     state.candles[state.candles.length - 1] = updated;
     renderStats();
     if (!series || !chartInstance) return;
+    // Phase 1.5 follow-up: don't touch the series (or its priceLines) while
+    // rebuildSeries is mid-flight — the current `series` is about to be
+    // removed and any createPriceLine on it would leak a detached object.
+    // The post-rebuild renderNetPosLine() in rebuildSeries() will rebind
+    // against the fresh series at the latest candle close.
+    if (rebuilding) return;
     if (state.type === 'candles') {
       if (typeof series.update === 'function') series.update(updated);
     } else if (typeof series.update === 'function') {
@@ -1044,16 +1063,45 @@ export function mountChart(container, options = {}) {
   }
 
   /**
-   * Set the current user's balance for a token (display units; not wei).
+   * Set the current user's balance for a token.
+   *
+   * ⚠️ CONTRACT: `balance` MUST be in **display units** (e.g. `12.5`), NOT in
+   * wei (`12500000000000000000`). Passing a wei amount would render a Net-pos
+   * line at an astronomical "balance × spot" — almost certainly off-axis.
+   * Current callers: `my-wallet-tab.js` emits `apiClient.getPosition(...)
+   * .position` which the backend already serialises in display units.
+   *
+   * If you wire this to a wei-source (Multicall3, raw ERC-20 balanceOf), you
+   * MUST divide by 10^18 (or token decimals) at the call site first. We
+   * defensively early-return + warn when the input looks like raw wei
+   * (>1e15 ≈ 10^-3 of a wei unit's worth of display-unit position; well above
+   * any plausible holding).
+   *
    * Pass 0 / negative / non-number to clear. Triggers a Net-pos line
-   * re-render when the token is the active one. Wired by main.js when
-   * batch 6 (My Wallet tab) ships real balances; until then the live app
-   * leaves Net pos as a controlled no-op.
+   * re-render when the token is the active one.
+   *
+   * @param {string} tokenAddress  Token contract address (any case).
+   * @param {number} balance       Display-unit balance; 0 to clear.
    */
   function setOwnBalance(tokenAddress, balance) {
     if (typeof tokenAddress !== 'string' || !tokenAddress) return;
     const key = tokenAddress.toLowerCase();
     const num = typeof balance === 'number' && Number.isFinite(balance) ? balance : 0;
+    // Plausibility guard — if a caller accidentally passes wei (~1e18 for 1
+    // PITCH) the chart would draw a horizontal line at a value beyond the
+    // candle price range. 1e15 in display units (= 1 quadrillion tokens) is
+    // a safe ceiling; any real holding is many orders of magnitude smaller.
+    if (num > 1e15) {
+      console.warn(
+        'chart.setOwnBalance: balance %s for %s looks like wei, not display units; ignoring',
+        num,
+        key,
+      );
+      state.ownBalances.delete(key);
+      const activeAddr = state.token?.address?.toLowerCase();
+      if (activeAddr === key) renderNetPosLine();
+      return;
+    }
     if (num > 0) {
       state.ownBalances.set(key, num);
     } else {

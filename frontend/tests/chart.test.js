@@ -836,4 +836,77 @@ describe('mountChart', () => {
       expect(c.crosshairHandlers.length).toBe(0);
     });
   });
+
+  // ── Phase 1.5 follow-up issues #5 + #6 ───────────────────────────────────
+
+  it('applyPrice is a no-op while rebuildSeries is in flight (issue #5)', async () => {
+    // Set up a chart with data + a non-zero own balance so renderNetPosLine
+    // would normally create a priceLine on every applyPrice tick.
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    await flush();
+    chart.setOwnBalance(player.address, 5);
+
+    // Now toggle type=candles — onTypeClick calls rebuildSeries() which
+    // awaits ensureChartInstance() (already resolved here, so the await is
+    // a single microtask). We squeeze an applyPrice tick BETWEEN the
+    // rebuildSeries kick-off and its microtask resolution. The guard must
+    // prevent the tick from creating a priceLine on the about-to-be-removed
+    // series.
+    const seriesBefore = created.charts[0].seriesList[0];
+    const priceLinesBeforeCount = seriesBefore.priceLines.length;
+
+    // Fire rebuild — synchronously calls into the async function; series
+    // removal happens on the next microtask.
+    container.querySelector('[data-test-id="chart-type-candles"]').click();
+
+    // SSE tick lands BEFORE the microtask. With the fix, applyPrice early-
+    // returns because rebuilding=true. Without the fix, it would call
+    // series.update + renderNetPosLine on the old series → leaked priceLine.
+    chart.applyPrice(player.address, 12.5);
+
+    // The old series should NOT have gained a new priceLine from the tick.
+    expect(seriesBefore.priceLines.length).toBe(priceLinesBeforeCount);
+    // Also no series.update should have been called on it.
+    expect(seriesBefore.update).not.toHaveBeenCalled();
+
+    // Drain microtasks → rebuild completes, new series is in place.
+    await flush();
+    const seriesAfter =
+      created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    expect(seriesAfter).not.toBe(seriesBefore);
+    // Post-rebuild renderNetPosLine ran against the FRESH series.
+    expect(
+      seriesAfter.priceLines.filter((l) => l.opts?.title === 'Pos').length,
+    ).toBe(1);
+  });
+
+  it('setOwnBalance ignores wei-magnitude inputs and warns (issue #6 guard)', async () => {
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    await flush();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // 1 PITCH in wei = 1e18 — far above the 1e15 ceiling. The guard must
+    // refuse the update so the Net pos line is never drawn at 1e18 × spot.
+    chart.setOwnBalance(player.address, 1e18);
+
+    const series = created.charts[0].seriesList[0];
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
