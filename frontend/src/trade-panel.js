@@ -340,12 +340,17 @@ export function disabledReason(ctx) {
 
 /**
  * Reason string for disabling the limit-order submit CTA, or null if enabled.
- * Limit mode has its own validators (no allowance/quote — the order is signed
- * off-chain; allowance only matters when the keeper later calls `execute()`),
- * so we keep this isolated from the market `disabledReason`.
+ * Limit mode shares the EIP-712 sign-and-POST flow with the keeper, which
+ * later calls `execute()` on the user's behalf. For that call to succeed the
+ * executor needs an ERC20 allowance on the *spending* token (different
+ * spender than the market router) — otherwise the keeper's pre-flight
+ * `eth_call` reverts and the order ends up in `failed`. Wave 3 hotfix added
+ * the `approvePending` / `allowanceLoading` branches so the CTA mirrors the
+ * market-mode F1.2 pattern.
  *
- * Order matters — first hit wins. `submitting` takes top priority so an
- * in-flight signature/network request always shows the in-flight label.
+ * Order matters — first hit wins. `submitting` / `approvePending` take top
+ * priority so an in-flight signature / approve always shows the in-flight
+ * label.
  *
  * @param {{
  *   walletConnected: boolean,
@@ -358,11 +363,14 @@ export function disabledReason(ctx) {
  *   slippageBps: number,
  *   premium: boolean,
  *   submitting?: boolean,
+ *   approvePending?: boolean,
+ *   allowanceLoading?: boolean,
  * }} ctx
  * @returns {string|null}
  */
 export function disabledReasonLimit(ctx) {
   if (ctx.submitting) return 'Signing limit order…';
+  if (ctx.approvePending) return 'Confirm approve in wallet…';
   if (!ctx.walletConnected) return 'Connect wallet';
   if (ctx.chainId !== BASE_CHAIN_ID) return 'Switch to Base';
   if (!ctx.premium) return 'Premium feature';
@@ -374,7 +382,40 @@ export function disabledReasonLimit(ctx) {
   if (typeof ctx.slippageBps === 'number' && (ctx.slippageBps < 0 || ctx.slippageBps > 1000)) {
     return 'Slippage must be ≤ 10%';
   }
+  // Wave 3 — keeper requires the executor allowance to be ≥ amountIn. Block
+  // the CTA while we're reading it (race with mode toggle / token switch);
+  // the actual `< amountIn` branch is handled by `renderLimitCta` directly
+  // since it needs to swap the label to "Approve" rather than disable.
+  if (ctx.allowanceLoading) return 'Checking allowance…';
   return null;
+}
+
+/**
+ * Wave 3 hotfix — resolve the ERC20 the user must approve and the spender
+ * that will pull the funds, for a limit order. Unlike the market flow, the
+ * spender is the LimitOrderExecutor contract (not the per-venue router):
+ *
+ *   - limit-buy (side=0): user spends the QUOTE token. Player venue →
+ *     country token; country venue → PITCH.
+ *   - take-profit (side=1): user spends the BASE token (the player or
+ *     country token they're selling).
+ *
+ * Returns null when the executor address or venue is missing so callers can
+ * gracefully no-op (CTA stays disabled via `executorReady`/`token` checks).
+ *
+ * @param {{
+ *   side: 'buy'|'sell',
+ *   venue: { baseToken: string, quoteToken: string }|null,
+ *   executor: string|null|undefined,
+ * }} ctx
+ * @returns {{ spendingToken: string, spender: string }|null}
+ */
+export function resolveLimitSpenderAndToken(ctx) {
+  if (!ctx || !ctx.venue || typeof ctx.executor !== 'string' || !ctx.executor) return null;
+  const spender = ctx.executor.toLowerCase();
+  const spendingToken = ctx.side === 'buy' ? ctx.venue.quoteToken : ctx.venue.baseToken;
+  if (typeof spendingToken !== 'string' || !spendingToken) return null;
+  return { spendingToken: spendingToken.toLowerCase(), spender };
 }
 
 // ─── Pro-cover (Batch 5) — pay-modal lazy import ────────────────────────────
@@ -680,6 +721,14 @@ export function mountTradePanel(container, options = {}) {
     limitTtlSec: DEFAULT_TTL_SECONDS,
     limitSubmitting: false,
     limitError: null,
+    // Wave 3 hotfix — limit-mode allowance against the EXECUTOR (not the
+    // market router). Kept parallel to the market `allowanceWei` / pending
+    // flags so a stale market value can never satisfy a limit submit (and
+    // vice-versa).
+    limitAllowanceWei: null,
+    limitAllowanceLoading: false,
+    limitApprovePending: false,
+    limitAllowanceGen: 0,
   };
 
   // ── Build skeleton (build-once) ────────────────────────────────────────
@@ -1410,6 +1459,12 @@ export function mountTradePanel(container, options = {}) {
   /**
    * F2.x — CTA wiring for limit mode. Distinct from `renderCta` so the market
    * approve/swap state machine doesn't bleed into the sign-and-POST flow.
+   *
+   * Wave 3 hotfix — adds the approve branch. The executor needs an ERC20
+   * allowance on the spending token before the keeper can call `execute()`;
+   * without it the keeper's pre-flight `eth_call` reverts and the order ends
+   * up `failed`. Mirrors the F1.2 market-mode pattern but against the
+   * executor address rather than the matching router.
    */
   function renderLimitCta() {
     const amountWei = parseAmountToWei(state.amountStr);
@@ -1427,13 +1482,32 @@ export function mountTradePanel(container, options = {}) {
       slippageBps,
       premium,
       submitting: state.limitSubmitting,
+      approvePending: state.limitApprovePending,
+      allowanceLoading: state.limitAllowanceLoading,
     });
-    cta.textContent = state.limitSubmitting
-      ? 'Signing…'
-      : state.side === 'buy'
-        ? 'Place limit-buy'
-        : 'Place take-profit';
-    cta.dataset.action = 'limit';
+
+    // Wave 3 — approve-vs-sign decision. We only swap the label to "Approve"
+    // when there's no other blocking reason AND the live allowance is known
+    // AND insufficient. While the allowance is still loading, `reason` above
+    // already returns "Checking allowance…" so we don't need to handle it
+    // here.
+    const needsApprove =
+      !reason &&
+      amountWei != null &&
+      amountWei > 0n &&
+      state.limitAllowanceWei != null &&
+      state.limitAllowanceWei < amountWei;
+
+    if (state.limitApprovePending) {
+      cta.textContent = 'Approve…';
+    } else if (state.limitSubmitting) {
+      cta.textContent = 'Signing…';
+    } else if (needsApprove) {
+      cta.textContent = 'Approve';
+    } else {
+      cta.textContent = state.side === 'buy' ? 'Place limit-buy' : 'Place take-profit';
+    }
+    cta.dataset.action = needsApprove && !state.limitApprovePending ? 'limit-approve' : 'limit';
     cta.disabled = reason != null;
     status.textContent = reason ?? '';
   }
@@ -1799,6 +1873,53 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
+  // ── Wave 3 — limit-mode allowance (executor spender) ─────────────────────
+  /**
+   * Resolve the spending-token + spender pair for the current side / venue.
+   * Returns null when we can't resolve (no token / no executor / no PITCH
+   * address). Used by both the allowance read and the approve click handler.
+   */
+  function resolveLimitApproval() {
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return null;
+    return resolveLimitSpenderAndToken({
+      side: state.side,
+      venue: v,
+      executor: state.contracts?.limitOrderExecutor,
+    });
+  }
+
+  async function refreshLimitAllowance() {
+    const approval = resolveLimitApproval();
+    if (!approval || !state.account.isConnected || !state.account.address) {
+      state.limitAllowanceWei = null;
+      if (state.mode === 'limit') renderCta();
+      return;
+    }
+    state.limitAllowanceGen += 1;
+    const myGen = state.limitAllowanceGen;
+    state.limitAllowanceLoading = true;
+    if (state.mode === 'limit') renderCta();
+    try {
+      const a = await readAllowanceFor({
+        token: approval.spendingToken,
+        owner: state.account.address,
+        spender: approval.spender,
+      });
+      if (myGen !== state.limitAllowanceGen) return; // stale
+      state.limitAllowanceWei = a;
+    } catch (err) {
+      if (myGen !== state.limitAllowanceGen) return;
+      state.limitAllowanceWei = null;
+      console.warn('trade-panel: limit allowance read failed', err);
+    } finally {
+      if (myGen === state.limitAllowanceGen) {
+        state.limitAllowanceLoading = false;
+        if (state.mode === 'limit') renderCta();
+      }
+    }
+  }
+
   function scheduleQuote() {
     if (state.quoteTimer != null) {
       clearTimeout(state.quoteTimer);
@@ -1821,9 +1942,15 @@ export function mountTradePanel(container, options = {}) {
     state.side = side;
     // Side change → input/output swap → balance/allowance/quote must refresh.
     state.allowanceWei = null;
+    // Wave 3 — limit-mode spending token also flips on side change
+    // (limit-buy spends quote, take-profit spends base) — invalidate the
+    // stale allowance so the CTA can't misread "approved" for the wrong
+    // token while the new read is in flight.
+    state.limitAllowanceWei = null;
     renderSideAria();
     refreshBalance();
     refreshAllowance();
+    refreshLimitAllowance();
     // Wave 2A — breakdown sense (Spending vs Selling, naive direction) flips
     // with the side; render synchronously without waiting for the quote.
     renderFeeBreakdown();
@@ -1847,6 +1974,11 @@ export function mountTradePanel(container, options = {}) {
     // `limitBlock`. Hide the live-quote area to avoid confusion ("You receive
     // ≈ X" against an unrelated `quoteBuy` quote).
     quoteBlock.hidden = state.mode === 'limit';
+    // Wave 3 — read the executor allowance the first time the user enters
+    // limit mode (and on every subsequent toggle in case the user external-
+    // approved / revoked between toggles). Fire-and-forget — render guards
+    // are in place.
+    if (state.mode === 'limit') refreshLimitAllowance();
     renderAll();
   }
 
@@ -2010,6 +2142,49 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
+  // Wave 3 — limit-mode approve. Calls `approve(executor, max-uint256)` on
+  // the spending token (quote for limit-buy, base for take-profit). Mirrors
+  // `onApproveClick` for the market path but targets the executor contract
+  // rather than the venue router. On success the allowance is re-read so the
+  // CTA flips to "Place limit-buy" / "Place take-profit" automatically.
+  async function onLimitApproveClick() {
+    if (state.limitApprovePending || state.limitSubmitting) return;
+    const approval = resolveLimitApproval();
+    if (!approval) return;
+    if (!state.account.isConnected || !state.account.address) return;
+
+    state.limitApprovePending = true;
+    renderCta();
+    let client;
+    try {
+      client = await getPayment();
+    } catch (err) {
+      state.limitApprovePending = false;
+      renderCta();
+      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
+      return;
+    }
+    try {
+      await client.approve({
+        token: approval.spendingToken,
+        spender: approval.spender,
+        amount: MAX_UINT256,
+        owner: state.account.address,
+      });
+      showToast('Approve confirmed', { kind: 'info' });
+      // Re-read allowance from chain — don't optimistically set MAX_UINT256
+      // (in case the wallet sub-allowance got truncated by some odd token).
+      await refreshLimitAllowance();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
+      }
+    } finally {
+      state.limitApprovePending = false;
+      renderCta();
+    }
+  }
+
   // F2.x — limit-order submit: build typedData → wallet signs → POST /orders.
   // The function is the limit-mode counterpart of `onSwapClick`; both share
   // the same disabled-state guards but live in separate code paths because
@@ -2125,6 +2300,10 @@ export function mountTradePanel(container, options = {}) {
     // Defensive — disabled CTA can still fire in some happy-dom paths.
     if (cta.disabled) return;
     const action = cta.dataset.action;
+    if (action === 'limit-approve') {
+      onLimitApproveClick();
+      return;
+    }
     if (action === 'limit') {
       onPlaceLimitClick();
       return;
@@ -2207,6 +2386,7 @@ export function mountTradePanel(container, options = {}) {
     ) {
       state.balanceWei = null;
       state.allowanceWei = null;
+      state.limitAllowanceWei = null;
       // F1.4 — drop the cached quote on account/chain change. The disabledReason
       // chainId guard already blocks the CTA when the user is off Base, but a
       // stale quote (taken against a previous address/chain) would resurface
@@ -2216,6 +2396,7 @@ export function mountTradePanel(container, options = {}) {
       state.quoteError = null;
       refreshBalance();
       refreshAllowance();
+      refreshLimitAllowance();
       // Quote isn't user-specific but disabled-state depends on chainId; re-render.
     }
     renderAll();
@@ -2248,6 +2429,7 @@ export function mountTradePanel(container, options = {}) {
     configLoaded = true;
     refreshBalance();
     refreshAllowance();
+    refreshLimitAllowance();
     if (state.amountStr) scheduleQuote();
     renderAll();
   }
@@ -2345,8 +2527,10 @@ export function mountTradePanel(container, options = {}) {
       state.quoteError = null;
       state.balanceWei = null;
       state.allowanceWei = null;
+      state.limitAllowanceWei = null;
       refreshBalance();
       refreshAllowance();
+      refreshLimitAllowance();
       if (state.amountStr) scheduleQuote();
     }
     renderAll();
@@ -2374,6 +2558,10 @@ export function mountTradePanel(container, options = {}) {
       limitTtlSec: state.limitTtlSec,
       limitSubmitting: state.limitSubmitting,
       limitError: state.limitError,
+      // Wave 3 hotfix — executor-spender allowance state.
+      limitAllowanceWei: state.limitAllowanceWei,
+      limitAllowanceLoading: state.limitAllowanceLoading,
+      limitApprovePending: state.limitApprovePending,
     };
   }
 
