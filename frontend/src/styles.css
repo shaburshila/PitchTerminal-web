@@ -208,23 +208,26 @@ button {
    visual focal point of the cluster (the "earn money" CTA stands out
    from the neutral Profile chip). The is-locked overlay still wins on
    opacity/lock-badge, so locked-state behaviour is preserved.
-   See `components/header-actions.js` — applied as `pt-header__action--gold`. */
-.pt-header__action--gold {
-  border-color: rgba(224, 169, 58, 0.55);
+   See `components/header-actions.js` — applied as `pt-header__action--gold`.
+   Selectors stacked with `.pt-btn` to win specificity over the base
+   `.pt-btn { background: var(--bg-elev-2) }` rule defined later in the
+   file. */
+.pt-btn.pt-header__action--gold {
+  border-color: var(--warn, #e0a93a);
   color: var(--warn, #e0a93a);
-  background: rgba(224, 169, 58, 0.08);
+  background: rgba(224, 169, 58, 0.22);
 }
-.pt-header__action--gold:hover {
-  background: rgba(224, 169, 58, 0.18);
+.pt-btn.pt-header__action--gold:hover {
+  background: rgba(224, 169, 58, 0.4);
   border-color: var(--warn, #e0a93a);
   color: var(--warn, #e0a93a);
 }
-.pt-header__action--gold:focus-visible {
+.pt-btn.pt-header__action--gold:focus-visible {
   outline-color: var(--warn, #e0a93a);
 }
 /* Locked state already dims via opacity — the gold paint underneath is
    still visible, which intentionally previews the unlocked appearance. */
-.pt-header__action--gold.is-locked:hover {
+.pt-btn.pt-header__action--gold.is-locked:hover {
   border-color: var(--warn, #e0a93a);
 }
 
