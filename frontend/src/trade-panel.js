@@ -870,7 +870,18 @@ export function mountTradePanel(container, options = {}) {
   });
   limitBlock.hidden = true;
   const limitPriceWrap = el('label', { className: 'pt-trade__limit-price' });
-  limitPriceWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Trigger price' }));
+  // B3 — F2.x #9: dynamic label so the quote-currency is explicit. Filled in
+  // by renderLimit() based on the resolved venue:
+  //   country venue → "Trigger price (PITCH per 1 {ticker})"
+  //   player venue  → "Trigger price ({countryTicker} per 1 {playerTicker})"
+  // Default text matches the legacy label so SSR / pre-token-render output
+  // never reads blank.
+  const limitPriceLabel = el('span', {
+    className: 'pt-trade__label',
+    dataset: { testId: 'trade-limit-price-label' },
+    text: 'Trigger price',
+  });
+  limitPriceWrap.appendChild(limitPriceLabel);
   const limitPriceInput = el('input', {
     className: 'pt-trade__input',
     dataset: { testId: 'trade-limit-price' },
@@ -1217,9 +1228,38 @@ export function mountTradePanel(container, options = {}) {
     quoteFeeLine.textContent = `pitchwc fee: ${(PITCHWC_FEE_BPS / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
   }
 
+  /**
+   * B3 — F2.x #9: build the "Trigger price (… per 1 …)" label for the
+   * currently-resolved venue. Trigger price denomination depends on venue
+   * (per docs/eip712.md §1), NOT on side: a limit-sell of a player token
+   * still triggers on a country-unit threshold. Falls back to the bare
+   * legacy label when token or contracts haven't loaded.
+   *
+   * - country venue → "Trigger price (PITCH per 1 BRA)"
+   * - player venue  → "Trigger price (BRA per 1 PLR)"
+   */
+  function computeLimitPriceLabel() {
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return 'Trigger price';
+    const baseSym = state.token?.symbol;
+    if (v.venue === 'country') {
+      return baseSym ? `Trigger price (PITCH per 1 ${baseSym})` : 'Trigger price (PITCH)';
+    }
+    // player venue — quote = country
+    const quoteSym = symbolForCountry(state.token?.countryAddress);
+    if (baseSym && quoteSym) return `Trigger price (${quoteSym} per 1 ${baseSym})`;
+    if (quoteSym) return `Trigger price (${quoteSym})`;
+    return 'Trigger price';
+  }
+
   // F2.x — limit-mode render: trigger-price hint + error line. Visible only
   // when `state.mode === 'limit'`. Reads from state and the live input.
+  // B3 also keeps the label updated whenever venue / token / symbols change.
   function renderLimit() {
+    // B3 — label text is venue-aware. We refresh it even when limit mode is
+    // hidden so a token-switch made in market mode primes the correct text
+    // before the user toggles into limit mode.
+    limitPriceLabel.textContent = computeLimitPriceLabel();
     if (state.mode !== 'limit') {
       limitError.hidden = true;
       limitHint.textContent = '';
