@@ -28,7 +28,7 @@ vi.mock('../src/api.js', () => {
     getConfig: vi.fn(),
     getTokens: vi.fn(),
     getAccess: vi.fn(),
-    getProfile: vi.fn(),
+    getPortfolio: vi.fn(),
     logout: vi.fn(),
   };
 });
@@ -207,26 +207,30 @@ describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', ()
     return { rerender: vi.fn() };
   }
 
-  function makeProfileResp(addrs) {
+  function makePortfolioResp(tokens, { kind = 'country' } = {}) {
     return {
-      balances: {
-        countries: addrs.map((a) => ({ address: a, wei: '1000000000000000000' })),
-      },
+      items: tokens.map((t) => ({
+        token: t,
+        symbol: 'X',
+        kind,
+        balance: '1000000000000000000',
+        balanceDisplay: 1,
+      })),
     };
   }
 
   it('skips the request entirely when wallet is disconnected (issue #4)', () => {
-    const getProfile = vi.fn();
+    const getPortfolio = vi.fn();
     const sidebar = makeSidebar();
     const positionByAddr = new Map([['0xstale', 42]]);
     const refresh = createPositionsRefresher({
       getAccount: () => ({ isConnected: false }),
-      getProfile,
+      getPortfolio,
       positionByAddr,
       sidebar,
     });
     refresh();
-    expect(getProfile).not.toHaveBeenCalled();
+    expect(getPortfolio).not.toHaveBeenCalled();
     // stale dots are still cleared synchronously so a disconnect wipes UI.
     expect(positionByAddr.size).toBe(0);
     expect(sidebar.rerender).toHaveBeenCalledTimes(1);
@@ -234,20 +238,20 @@ describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', ()
 
   it('discards a stale slow response when a newer refresh completed first (issue #1)', async () => {
     // First call hangs; second call resolves fast with the NEW wallet's
-    // countries. The first must NOT later overwrite positionByAddr.
+    // tokens. The first must NOT later overwrite positionByAddr.
     let resolveSlow;
     const slow = new Promise((r) => {
       resolveSlow = r;
     });
-    const getProfile = vi
+    const getPortfolio = vi
       .fn()
       .mockImplementationOnce(() => slow)
-      .mockImplementationOnce(() => Promise.resolve(makeProfileResp(['0xNEW'])));
+      .mockImplementationOnce(() => Promise.resolve(makePortfolioResp(['0xNEW'])));
     const sidebar = makeSidebar();
     const positionByAddr = new Map();
     const refresh = createPositionsRefresher({
       getAccount: () => ({ isConnected: true }),
-      getProfile,
+      getPortfolio,
       positionByAddr,
       sidebar,
     });
@@ -261,10 +265,68 @@ describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', ()
     expect(positionByAddr.size).toBe(1);
 
     // Now let the stale wallet-A call land. It must NOT overwrite.
-    resolveSlow(makeProfileResp(['0xOLD']));
+    resolveSlow(makePortfolioResp(['0xOLD']));
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(positionByAddr.has('0xnew')).toBe(true);
     expect(positionByAddr.has('0xold')).toBe(false);
+  });
+
+  it('records player-kind tokens (Wave 2B)', async () => {
+    const getPortfolio = vi
+      .fn()
+      .mockResolvedValueOnce(makePortfolioResp(['0xPLAYER'], { kind: 'player' }));
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map();
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: true }),
+      getPortfolio,
+      positionByAddr,
+      sidebar,
+    });
+    refresh();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(positionByAddr.has('0xplayer')).toBe(true);
+    expect(positionByAddr.get('0xplayer')).toBe(1);
+  });
+
+  it('silently degrades to no dots on 401/402 (free user, not premium)', async () => {
+    const getPortfolio = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error('payment required'), { status: 402 }),
+    );
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map([['0xstale', 5]]);
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: true }),
+      getPortfolio,
+      positionByAddr,
+      sidebar,
+    });
+    refresh();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(positionByAddr.size).toBe(0);
+  });
+
+  it('skips items with zero or missing balance', async () => {
+    const getPortfolio = vi.fn().mockResolvedValueOnce({
+      items: [
+        { token: '0xA', balanceDisplay: 0 },
+        { token: '0xB', balanceDisplay: 2.5 },
+        { token: '0xC' /* no balance at all */ },
+      ],
+    });
+    const sidebar = makeSidebar();
+    const positionByAddr = new Map();
+    const refresh = createPositionsRefresher({
+      getAccount: () => ({ isConnected: true }),
+      getPortfolio,
+      positionByAddr,
+      sidebar,
+    });
+    refresh();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(positionByAddr.has('0xa')).toBe(false);
+    expect(positionByAddr.has('0xb')).toBe(true);
+    expect(positionByAddr.has('0xc')).toBe(false);
   });
 
   it('createSparkRerender.cleanup clears the pending timer (issue #2 leak)', () => {
@@ -303,15 +365,15 @@ describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', ()
     const slow = new Promise((_, reject) => {
       rejectSlow = reject;
     });
-    const getProfile = vi
+    const getPortfolio = vi
       .fn()
       .mockImplementationOnce(() => slow)
-      .mockImplementationOnce(() => Promise.resolve(makeProfileResp(['0xNEW'])));
+      .mockImplementationOnce(() => Promise.resolve(makePortfolioResp(['0xNEW'])));
     const sidebar = makeSidebar();
     const positionByAddr = new Map();
     const refresh = createPositionsRefresher({
       getAccount: () => ({ isConnected: true }),
-      getProfile,
+      getPortfolio,
       positionByAddr,
       sidebar,
     });

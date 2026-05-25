@@ -34,7 +34,7 @@ import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
 import { onAccountChange, getAccount } from './wallet.js';
-import { getConfig, getTokens, getProfile, ApiError, getAccess, logout } from './api.js';
+import { getConfig, getTokens, getPortfolio, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
 import { set as setAccessState } from './access-store.js';
@@ -122,26 +122,33 @@ export function createSparkRerender(sidebar, delayMs, timers = {}) {
 
 /**
  * Build a `refreshPositions(): void` function with a built-in generation
- * counter so concurrent calls discard stale responses. The fix for review
- * follow-up issue #1: prior to this, two refreshPositions() calls in flight
- * could resolve in reverse order under slow-network + rapid wallet-switch,
- * leaving the sidebar painted with the OLD wallet's country dots.
+ * counter so concurrent calls discard stale responses.
  *
- * Also issue #4: when the wallet isn't connected we skip the `/profile` call
- * entirely (it would 401 — bloats the network log and creates anonymous-boot
- * noise in DevTools). The sidebar is still cleared so a logout immediately
- * wipes the previous wallet's dots.
+ * Wave 2B: switched source from `/profile.balances.countries` (country-only)
+ * to `/api/v1/portfolio.items[]` (multi-token — countries + players). The
+ * sidebar consumes the same `positionByAddr` Map (keyed by lowercased token
+ * address), so a player token now gets a dot whenever the wallet holds a
+ * positive position. Edge cases:
+ *
+ *   - Anonymous-boot guard kept (issue #4): no point hitting an auth-only
+ *     endpoint while disconnected; sidebar is still cleared synchronously
+ *     so logout immediately wipes dots.
+ *   - Generation counter (issue #1) kept: concurrent calls from rapid
+ *     wallet-switch resolve in arbitrary order; only the newest wins.
+ *   - 401 / 402 (not premium yet, or session expired) → silently degrade
+ *     to no dots. Free users see the country/player lists without any
+ *     position markers. We don't surface an error.
  *
  * @param {object} deps
  * @param {() => { isConnected: boolean }} deps.getAccount
- * @param {() => Promise<{ balances?: { countries?: Array<{address:string, wei:string}> } }>} deps.getProfile
+ * @param {() => Promise<{ items?: Array<{token:string, balance?:string, balanceDisplay?:number}> }>} deps.getPortfolio
  * @param {Map<string, number>} deps.positionByAddr  Mutated in place.
  * @param {{ rerender: () => void }} deps.sidebar
  * @param {(weiStr: string) => number} [deps.weiToWhole]  Override for tests.
  */
 export function createPositionsRefresher({
   getAccount: _getAccount,
-  getProfile: _getProfile,
+  getPortfolio: _getPortfolio,
   positionByAddr,
   sidebar,
   weiToWhole: _weiToWhole = weiToWhole,
@@ -162,20 +169,32 @@ export function createPositionsRefresher({
       return;
     }
     const myGen = ++gen;
-    _getProfile()
+    _getPortfolio()
       .then((resp) => {
         if (myGen !== gen) return;
         positionByAddr.clear();
-        const countries = Array.isArray(resp?.balances?.countries) ? resp.balances.countries : [];
-        for (const c of countries) {
-          if (c && typeof c.address === 'string' && c.address) {
-            positionByAddr.set(c.address.toLowerCase(), _weiToWhole(c.wei));
+        const items = Array.isArray(resp?.items) ? resp.items : [];
+        for (const it of items) {
+          if (!it || typeof it.token !== 'string' || !it.token) continue;
+          // Prefer the backend-rounded *Display float; fall back to BigInt
+          // path on the wei string for forward-compat with a future shape
+          // change. Skip entries we can't make sense of (no balance at all).
+          let bal;
+          if (typeof it.balanceDisplay === 'number' && Number.isFinite(it.balanceDisplay)) {
+            bal = it.balanceDisplay;
+          } else if (typeof it.balance === 'string' && it.balance) {
+            bal = _weiToWhole(it.balance);
+          } else {
+            continue;
           }
+          if (!(bal > 0)) continue;
+          positionByAddr.set(it.token.toLowerCase(), bal);
         }
         sidebar.rerender();
       })
       .catch(() => {
         if (myGen !== gen) return;
+        // 401 / 402 / any other failure → no dots, no error surface.
         positionByAddr.clear();
         safeRerender();
       });
@@ -426,13 +445,11 @@ function bootstrap() {
   // thrashing `list.replaceChildren()` on every tick (the worker batches
   // prices, but several ticks per minute is normal).
   //
-  // Position source — `/profile.balances` resolves country tokens only
-  // (backend does not return per-player balances). Loaded lazily on first
-  // wallet-connect (so anonymous + free users don't pay the request) and
-  // refreshed when the account changes. Missing data → no dot (graceful).
-  // For per-player markers a future extension would need either a multi-
-  // balance endpoint or a Multicall3 client-side path — out of scope for
-  // batch 3.
+  // Position source — `/api/v1/portfolio` (Wave 2B) returns ALL owned tokens
+  // (country + player), so both sidebar tabs get position dots when the
+  // wallet holds the token. Loaded lazily on first wallet-connect (so
+  // anonymous users don't pay the request) and refreshed when the account
+  // changes. 401/402 (not premium) → no dots, no error surface.
   const SPARK_MAX = 16;
   const SPARK_RERENDER_MS = 5000;
   /** @type {Map<string, number[]>} address (lc) → recent prices, oldest first. */
@@ -492,11 +509,13 @@ function bootstrap() {
   };
 
   // Phase 1.5 follow-up issues #1 + #4 — generation-counted refresh that
-  // also skips the request when no wallet is connected. See
+  // also skips the request when no wallet is connected. Wave 2B: source is
+  // now `/api/v1/portfolio` (multi-token) instead of `/profile.balances`
+  // (country-only), so player tokens get dots too. See
   // createPositionsRefresher above for the full rationale.
   const refreshPositions = createPositionsRefresher({
     getAccount,
-    getProfile,
+    getPortfolio,
     positionByAddr,
     sidebar,
   });
@@ -639,9 +658,9 @@ function bootstrap() {
   // user retry via wallet menu when backend recovers. See
   // `createAccountChangeHandler` above for the full state-machine docs.
   onAccountChange(createAccountChangeHandler({ accessBanner }));
-  // Phase 1.5 batch 3: refresh position dots whenever the wallet flips.
-  // Disconnect → /profile 401 → positionByAddr cleared, dots vanish.
-  // Connect → /profile resolves with the new wallet's country balances.
+  // Phase 1.5 batch 3 + Wave 2B: refresh position dots whenever the wallet
+  // flips. Disconnect → /portfolio 401 → positionByAddr cleared, dots vanish.
+  // Connect → /portfolio resolves with the new wallet's country + player holdings.
   // Runs as a separate listener so it stays independent of the SIWE/access
   // state machine in createAccountChangeHandler (which has its own race
   // semantics we don't want to entangle with).
