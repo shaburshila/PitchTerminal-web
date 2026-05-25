@@ -394,15 +394,11 @@ class TestChartUnit:
         assert resp_default.get_json()["candles"] == resp_pitch.get_json()["candles"]
         assert resp_default.get_json()["points"] == resp_pitch.get_json()["points"]
 
-    def test_unit_country_for_country_token_is_passthrough(
-        self, app, seeded_tokens
-    ) -> None:
+    def test_unit_country_for_country_token_is_passthrough(self, app, seeded_tokens) -> None:
         # For country tokens unit=country has no work to do → equivalent to pitch.
         addr = seeded_tokens["country"]
         resp_pitch = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=pitch")
-        resp_country = app.test_client().get(
-            f"/api/v1/tokens/{addr}/chart?tf=5m&unit=country"
-        )
+        resp_country = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=country")
         assert resp_pitch.status_code == 200
         assert resp_country.status_code == 200
         assert resp_pitch.get_json()["candles"] == resp_country.get_json()["candles"]

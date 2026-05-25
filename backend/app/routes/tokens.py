@@ -246,9 +246,7 @@ def _build_country_pitch_timeline(
     return [(ts, price) for ts, _b, _li, price in pairs]
 
 
-def _pitch_per_country_at(
-    timeline: list[tuple[int, float]], ts: int | float
-) -> float | None:
+def _pitch_per_country_at(timeline: list[tuple[int, float]], ts: int | float) -> float | None:
     """Return the country→PITCH price at ``ts`` (last sample with ``sample_ts <= ts``).
 
     Returns ``None`` if ``timeline`` is empty or every sample is strictly newer

@@ -49,6 +49,12 @@ contract DeployExecutor is Script {
         address countryRouter = vm.envAddress("COUNTRY_ROUTER");
         address owner = vm.envAddress("OWNER");
 
+        // Pre-broadcast guard — the C2.5 audit fix (H-1) reverts on
+        // `owner == address(0)` inside the constructor, but only AFTER
+        // `vm.startBroadcast()` spent gas. Fail here so a misconfigured
+        // `.env` doesn't burn ETH on a tx that's already doomed.
+        require(owner != address(0), "deploy: OWNER is zero");
+
         // --- 2. Log the parameters --------------------------------------------------
         console2.log("Deploying LimitOrderExecutor with:");
         console2.log("  pitch token   :", pitch);
