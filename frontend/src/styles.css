@@ -862,6 +862,76 @@ body.mode-dashboard .pt-profile {
   position: relative;
 }
 
+/* OHLC crosshair floating card (Batch 4.5) — mirrors a-main.html
+   .chart-overlay: top-left of the chart area, blurred backdrop, mono
+   font, O/H/L/C cells with bold values. Hidden by default; the chart
+   module unhides it via subscribeCrosshairMove when a candle is under
+   the cursor. Tokens (tokens.css) own the colour values — we never
+   hardcode hex here. */
+
+.pt-chart__ohlc {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--bg-2, var(--bg-elev-2)) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2, var(--text-muted));
+  pointer-events: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-popover, 0 4px 12px rgba(0, 0, 0, 0.3));
+}
+
+.pt-chart__ohlc[hidden] {
+  display: none;
+}
+
+.pt-chart__ohlc-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.pt-chart__ohlc-label {
+  color: var(--text-3, var(--text-muted));
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.pt-chart__ohlc-value {
+  color: var(--text, var(--text));
+  font-weight: 600;
+}
+
+.pt-chart__ohlc-value.is-up {
+  color: var(--up, var(--success));
+}
+
+.pt-chart__ohlc-value.is-down {
+  color: var(--down, var(--danger));
+}
+
+.pt-chart__ohlc-time {
+  color: var(--text-3, var(--text-muted));
+  font-size: 10px;
+  padding-left: 4px;
+  border-left: 1px solid var(--line, var(--border));
+}
+
+.pt-chart__ohlc-time:empty {
+  display: none;
+}
+
 .pt-chart__status {
   padding: 16px 12px;
   color: var(--text-muted);

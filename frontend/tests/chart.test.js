@@ -50,6 +50,7 @@ function makeChartLib() {
         seriesList: [],
         removed: false,
         resizes: [],
+        crosshairHandlers: [],
         addCandlestickSeries: vi.fn(function () {
           const s = makeSeries('candle');
           this.seriesList.push(s);
@@ -66,6 +67,18 @@ function makeChartLib() {
         resize: vi.fn(function (w, h) {
           this.resizes.push([w, h]);
         }),
+        // Batch 4.5 — emulate lightweight-charts v4: returns an unsubscribe
+        // fn the chart module is expected to call on destroy.
+        subscribeCrosshairMove: vi.fn(function (handler) {
+          this.crosshairHandlers.push(handler);
+          return () => {
+            this.crosshairHandlers = this.crosshairHandlers.filter((h) => h !== handler);
+          };
+        }),
+        // Helper used by tests to simulate a crosshair move.
+        _emitCrosshair(param) {
+          for (const h of this.crosshairHandlers) h(param);
+        },
         remove: vi.fn(function () {
           this.removed = true;
         }),
@@ -706,5 +719,121 @@ describe('mountChart', () => {
     await flush();
     // Price should be the fresh response's last close = 1, not 11.8 from stale.
     expect(container.querySelector('[data-test-id="chart-stat-price"]').textContent).toBe('1.00');
+  });
+
+  // ── Batch 4.5 — OHLC crosshair floating-card overlay ─────────────────
+  // Sits absolutely inside the canvas host; populated by
+  // subscribeCrosshairMove when the cursor hovers a candle; hidden when
+  // the cursor leaves the chart or no data is under the crosshair.
+
+  describe('OHLC crosshair card (batch 4.5)', () => {
+    it('mounts the OHLC card inside the canvas host, hidden by default', async () => {
+      const { lib } = makeChartLib();
+      mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+      const card = container.querySelector('[data-test-id="chart-ohlc"]');
+      expect(card).not.toBeNull();
+      expect(canvas.contains(card)).toBe(true);
+      expect(card.hidden).toBe(true);
+    });
+
+    it('subscribes to crosshair move once the chart instance is created', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      expect(created.charts.length).toBe(1);
+      expect(created.charts[0].subscribeCrosshairMove).toHaveBeenCalledTimes(1);
+      expect(created.charts[0].crosshairHandlers.length).toBe(1);
+    });
+
+    it('crosshair on a candle fills O/H/L/C/Vol values and shows the card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      // Emit a move over the second candle (close 11.8).
+      c._emitCrosshair({ time: 1709000300, point: { x: 100, y: 50 } });
+      const card = container.querySelector('[data-test-id="chart-ohlc"]');
+      expect(card.hidden).toBe(false);
+      expect(container.querySelector('[data-test-id="chart-ohlc-open"]').textContent).toBe('10.50');
+      expect(container.querySelector('[data-test-id="chart-ohlc-high"]').textContent).toBe('12.00');
+      expect(container.querySelector('[data-test-id="chart-ohlc-low"]').textContent).toBe('10.40');
+      expect(container.querySelector('[data-test-id="chart-ohlc-close"]').textContent).toBe('11.80');
+      // close (11.8) > open (10.5) → close cell flagged as up.
+      const closeEl = container.querySelector('[data-test-id="chart-ohlc-close"]');
+      expect(closeEl.classList.contains('is-up')).toBe(true);
+      expect(closeEl.classList.contains('is-down')).toBe(false);
+      // Time label present and non-empty.
+      expect(container.querySelector('[data-test-id="chart-ohlc-time"]').textContent).not.toBe('');
+    });
+
+    it('crosshair leaving the chart area (no point) hides the card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c._emitCrosshair({ time: 1709000300, point: { x: 100, y: 50 } });
+      const card = container.querySelector('[data-test-id="chart-ohlc"]');
+      expect(card.hidden).toBe(false);
+      // point=null → cursor left chart area; card must hide.
+      c._emitCrosshair({ time: 1709000300, point: null });
+      expect(card.hidden).toBe(true);
+    });
+
+    it('crosshair on a timestamp not in candles keeps the card hidden', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c._emitCrosshair({ time: 9999999999, point: { x: 1, y: 1 } });
+      expect(container.querySelector('[data-test-id="chart-ohlc"]').hidden).toBe(true);
+    });
+
+    it('down-candle marks close cell with is-down', async () => {
+      const { lib, created } = makeChartLib();
+      const api = makeApi(
+        makeChartPayload({
+          candles: [
+            { time: 1709000000, open: 11, high: 11.2, low: 9.5, close: 9.6, volume: 100 },
+          ],
+        }),
+      );
+      const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c._emitCrosshair({ time: 1709000000, point: { x: 10, y: 10 } });
+      const closeEl = container.querySelector('[data-test-id="chart-ohlc-close"]');
+      expect(closeEl.classList.contains('is-down')).toBe(true);
+      expect(closeEl.classList.contains('is-up')).toBe(false);
+    });
+
+    it('setToken hides any stale OHLC card before new data loads', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      created.charts[0]._emitCrosshair({ time: 1709000300, point: { x: 1, y: 1 } });
+      const card = container.querySelector('[data-test-id="chart-ohlc"]');
+      expect(card.hidden).toBe(false);
+      chart.setToken(makeCountry());
+      // Card is hidden synchronously on setToken; new candles arrive async.
+      expect(card.hidden).toBe(true);
+    });
+
+    it('destroy() unsubscribes the crosshair handler', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      expect(c.crosshairHandlers.length).toBe(1);
+      chart.destroy();
+      expect(c.crosshairHandlers.length).toBe(0);
+    });
   });
 });

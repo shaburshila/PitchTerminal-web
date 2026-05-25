@@ -115,6 +115,18 @@ function formatCompact(value) {
   return value.toFixed(2);
 }
 
+/** Format unix-second timestamp as "YYYY-MM-DD HH:mm" UTC for the OHLC card. */
+function formatCrosshairTime(time) {
+  if (typeof time !== 'number' || !Number.isFinite(time)) return '';
+  const d = new Date(time * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+  );
+}
+
 /** Convert wei-string supply to a plain number (assumes 18 decimals). */
 function supplyToNumber(supplyWei) {
   if (typeof supplyWei !== 'string' && typeof supplyWei !== 'number') return NaN;
@@ -360,12 +372,52 @@ export function mountChart(container, options = {}) {
   statsBar.appendChild(holdersStat.cell);
 
   // Chart canvas host. position:relative is set in styles.css so the
-  // future OHLC crosshair overlay (batch 4.5) can absolutely-position
-  // itself inside this slot.
+  // OHLC crosshair overlay (batch 4.5) can absolutely-position itself
+  // inside this slot.
   const canvasHost = el('div', {
     className: 'pt-chart__canvas',
     dataset: { testId: 'chart-canvas' },
   });
+
+  // OHLC crosshair floating-card (batch 4.5). Sits absolutely inside the
+  // canvas host, top-left by default; populated by subscribeCrosshairMove
+  // when the cursor scrubs over a data point. Hidden when the cursor
+  // leaves the chart area or no data is under the crosshair. Mockup
+  // parity: a-main.html .chart-overlay (O/H/L/C cells, mono font, blurred
+  // backdrop).
+  const ohlcCard = el('div', {
+    className: 'pt-chart__ohlc',
+    dataset: { testId: 'chart-ohlc' },
+    attrs: { 'aria-hidden': 'true', hidden: '' },
+  });
+  function ohlcCell(label, key) {
+    const cell = el('span', { className: 'pt-chart__ohlc-cell' });
+    cell.appendChild(el('span', { className: 'pt-chart__ohlc-label', text: label }));
+    const v = el('span', {
+      className: 'pt-chart__ohlc-value',
+      dataset: { testId: `chart-ohlc-${key}` },
+      text: '—',
+    });
+    cell.appendChild(v);
+    return { cell, value: v };
+  }
+  const ohlcO = ohlcCell('O', 'open');
+  const ohlcH = ohlcCell('H', 'high');
+  const ohlcL = ohlcCell('L', 'low');
+  const ohlcC = ohlcCell('C', 'close');
+  const ohlcV = ohlcCell('Vol', 'volume');
+  const ohlcTime = el('span', {
+    className: 'pt-chart__ohlc-time',
+    dataset: { testId: 'chart-ohlc-time' },
+    text: '',
+  });
+  ohlcCard.appendChild(ohlcO.cell);
+  ohlcCard.appendChild(ohlcH.cell);
+  ohlcCard.appendChild(ohlcL.cell);
+  ohlcCard.appendChild(ohlcC.cell);
+  ohlcCard.appendChild(ohlcV.cell);
+  ohlcCard.appendChild(ohlcTime);
+  canvasHost.appendChild(ohlcCard);
 
   // Status line (empty/loading/error). Sibling, hidden by default.
   const status = el('div', {
@@ -398,6 +450,14 @@ export function mountChart(container, options = {}) {
       resizeObserver.disconnect();
       resizeObserver = null;
     }
+    if (crosshairUnsub) {
+      try {
+        crosshairUnsub();
+      } catch {
+        /* ignore */
+      }
+      crosshairUnsub = null;
+    }
     if (chartInstance && typeof chartInstance.remove === 'function') {
       try {
         chartInstance.remove();
@@ -407,6 +467,7 @@ export function mountChart(container, options = {}) {
     }
     chartInstance = null;
     series = null;
+    hideOhlcCard();
   }
 
   function createSeries() {
@@ -463,6 +524,74 @@ export function mountChart(container, options = {}) {
 
   let avgPriceLine = null;
   let netPosPriceLine = null;
+  let crosshairUnsub = null;
+
+  // ── OHLC crosshair card (batch 4.5) ─────────────────────────────────────
+  // Show the OHLCV + time of the candle under the cursor in a floating
+  // card pinned to the canvas top-left. Hide the card when the cursor
+  // leaves the chart area or no candle is under the crosshair.
+  function hideOhlcCard() {
+    if (!ohlcCard.hidden) ohlcCard.hidden = true;
+  }
+
+  function findCandleByTime(time) {
+    if (typeof time !== 'number') return null;
+    // Candles are time-ascending; binary-search keeps this O(log n) for
+    // large series without allocating intermediate arrays.
+    const arr = state.candles;
+    let lo = 0;
+    let hi = arr.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const t = arr[mid]?.time;
+      if (t === time) return arr[mid];
+      if (typeof t !== 'number' || t < time) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return null;
+  }
+
+  function showOhlcCardForCandle(candle) {
+    if (!candle) {
+      hideOhlcCard();
+      return;
+    }
+    ohlcO.value.textContent = formatPrice(candle.open);
+    ohlcH.value.textContent = formatPrice(candle.high);
+    ohlcL.value.textContent = formatPrice(candle.low);
+    ohlcC.value.textContent = formatPrice(candle.close);
+    // Close colour tracks candle direction — green up / red down vs open.
+    const dir =
+      typeof candle.close === 'number' && typeof candle.open === 'number'
+        ? candle.close >= candle.open
+          ? 'up'
+          : 'down'
+        : null;
+    ohlcC.value.classList.toggle('is-up', dir === 'up');
+    ohlcC.value.classList.toggle('is-down', dir === 'down');
+    ohlcV.value.textContent = formatCompact(Number(candle.volume));
+    ohlcTime.textContent = formatCrosshairTime(candle.time);
+    ohlcCard.hidden = false;
+  }
+
+  /**
+   * lightweight-charts crosshair handler. `param.time` is the bucket
+   * timestamp of the hovered candle (matches state.candles[i].time);
+   * `param.point` is the pixel coordinate or null when the cursor is
+   * outside the chart area. We hide the card if either is missing.
+   */
+  function onCrosshairMove(param) {
+    if (!param || !param.time || !param.point) {
+      hideOhlcCard();
+      return;
+    }
+    const candle = findCandleByTime(param.time);
+    if (!candle) {
+      hideOhlcCard();
+      return;
+    }
+    showOhlcCardForCandle(candle);
+  }
 
   function renderAvgLine() {
     if (!series) return;
@@ -572,6 +701,29 @@ export function mountChart(container, options = {}) {
       timeScale: { timeVisible: true, secondsVisible: false },
       autoSize: true,
     });
+
+    // Batch 4.5 — wire crosshair handler for the OHLC floating card.
+    // lightweight-charts returns an unsubscribe callback from v4; older
+    // builds expect unsubscribeCrosshairMove(handler) instead. Capture
+    // both shapes so destroyChart can clean up reliably.
+    if (chartInstance && typeof chartInstance.subscribeCrosshairMove === 'function') {
+      try {
+        const ret = chartInstance.subscribeCrosshairMove(onCrosshairMove);
+        if (typeof ret === 'function') {
+          crosshairUnsub = ret;
+        } else if (typeof chartInstance.unsubscribeCrosshairMove === 'function') {
+          crosshairUnsub = () => {
+            try {
+              chartInstance.unsubscribeCrosshairMove(onCrosshairMove);
+            } catch {
+              /* ignore */
+            }
+          };
+        }
+      } catch {
+        crosshairUnsub = null;
+      }
+    }
 
     // Fallback resize if autoSize isn't supported (older builds, or test env).
     if (
@@ -787,6 +939,9 @@ export function mountChart(container, options = {}) {
   function setToken(token) {
     state.token = token || null;
     applyUnitVisibility();
+    // Previous candles are about to be replaced — drop stale OHLC text so
+    // the floating card doesn't flash old data before the next hover.
+    hideOhlcCard();
     renderStats();
     loadChart();
   }
