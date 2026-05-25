@@ -49,6 +49,7 @@ COPY --chown=app:app app/       /app/app/
 COPY --chown=app:app worker/    /app/worker/
 COPY --chown=app:app scripts/   /app/scripts/
 COPY --chown=app:app data/      /app/data/
+COPY --chown=app:app abis/      /app/abis/
 COPY --chown=app:app migrations/ /app/migrations/
 COPY --chown=app:app alembic.ini run_api.py run_worker.py /app/
 

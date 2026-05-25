@@ -3,7 +3,7 @@
 Public surface:
 * :func:`get_w3` — primary RPC w/ fallback (per architecture §12).
 * :func:`lc`, :func:`chk`, :func:`is_address` — address normalization.
-* :func:`load_abi` — loads ``abis/<name>.json`` from repo root, ``lru_cache``-d.
+* :func:`load_abi` — loads ``abis/<name>.json`` from the backend root, ``lru_cache``-d.
 * :func:`multicall3_aggregate` — batches eth_calls via Multicall3 ``aggregate3``.
 * :func:`wallet_balances` — batched ETH + ERC20 ``balanceOf`` reads for one wallet.
 """
@@ -89,13 +89,14 @@ def is_address(s: str) -> bool:
 
 @cache
 def load_abi(name: str) -> list[dict[str, Any]]:
-    """Load ``abis/<name>.json`` from repo root.
+    """Load ``abis/<name>.json`` from the backend root.
 
-    The path is resolved relative to this file: ``parents[2]`` walks
-    backend/shared → backend → repo-root.
+    The path is resolved relative to this file: ``parents[1]`` walks
+    backend/shared → backend. In the runtime image the same layout is
+    preserved at ``/app/abis/`` (see backend/Dockerfile).
     """
 
-    abi_path = Path(__file__).resolve().parents[2] / "abis" / f"{name}.json"
+    abi_path = Path(__file__).resolve().parents[1] / "abis" / f"{name}.json"
     with abi_path.open(encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, list):
