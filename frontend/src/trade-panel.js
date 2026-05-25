@@ -1345,7 +1345,11 @@ export function mountTradePanel(container, options = {}) {
     const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
     if (triggerWei && triggerWei > 0n) {
       const op = state.side === 'buy' ? '≤' : '≥';
-      const price = formatWei(triggerWei, 6);
+      // Render the per-1-token trigger price with a fixed 4-decimal shape
+      // (`0.0000`) — matches the visual contract for spot/current price
+      // displays across the trade panel.
+      const triggerNumForFmt = Number(formatWei(triggerWei, 18));
+      const price = formatSpotPrice(triggerNumForFmt);
       const quoteSym = isPlayerBuy() ? symbolForCountry(state.token?.countryAddress) : 'PITCH';
       const side = state.side === 'buy' ? 'limit-buy' : 'take-profit';
       // Wave 2A — pre-check "target already met": warn the user when the
@@ -1580,6 +1584,19 @@ export function mountTradePanel(container, options = {}) {
     if (n >= 1) return Number(n.toFixed(digits)).toString();
     // Use 6 fractional digits then trim.
     return Number(n.toFixed(digits)).toString();
+  }
+
+  /**
+   * Format the current/spot/MID price of a token for display in the trade
+   * panel UI (e.g. "0.0000"). Always 4 fractional digits, fixed shape — keeps
+   * the visual locked to `0.0000` regardless of magnitude. Used for
+   * per-1-token price renderings (e.g. trigger-price echo in the limit hint).
+   * Distinct from `formatNumber` which formats amounts (typed input quantities)
+   * with trimmed trailing zeros.
+   */
+  function formatSpotPrice(n) {
+    if (!Number.isFinite(n) || n <= 0) return '0.0000';
+    return n.toFixed(4);
   }
 
   /**

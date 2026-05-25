@@ -443,9 +443,9 @@ describe('mountSidebar', () => {
 
     const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
     // Mbappé sorted first: priceCountry=2.0, countryAddress=0xccc2 → "FRA".
-    expect(rows[0].querySelector('.price').textContent).toBe('2.00 FRA');
+    expect(rows[0].querySelector('.price').textContent).toBe('2.000 FRA');
     // Pulisic: priceCountry=1.5, countryAddress=0xccc1 → "USA".
-    expect(rows[1].querySelector('.price').textContent).toBe('1.50 USA');
+    expect(rows[1].querySelector('.price').textContent).toBe('1.500 USA');
     // No row should display PITCH suffix in the players tab.
     for (const row of rows) {
       expect(row.querySelector('.price').textContent).not.toContain('PITCH');

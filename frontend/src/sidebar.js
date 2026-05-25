@@ -60,14 +60,13 @@ function el(tag, { className, dataset, attrs, text } = {}) {
 function formatPrice(value) {
   // `Number.isNaN(stringValue)` is false — guard the type too so a stray
   // non-number (e.g. backend returning a wei-string) doesn't blow up the
-  // `.toFixed`/`.toPrecision` calls below (review J, M6).
+  // `.toFixed` call below (review J, M6).
   if (typeof value !== 'number' || Number.isNaN(value)) return '?';
-  // Use up to 6 significant digits — prices range from ~0.000001 to ~1000.
   if (value === 0) return '0';
-  const abs = Math.abs(value);
-  if (abs >= 1) return value.toFixed(2);
-  if (abs >= 0.01) return value.toFixed(4);
-  return value.toPrecision(3);
+  // Unified 3-decimal format for visual consistency across the sidebar.
+  // Sub-0.001 values collapse to '0.000' (acceptable sentinel — sidebar is
+  // a glance-view, not a precision tool).
+  return value.toFixed(3);
 }
 
 /** Format changePct for display: signed with one decimal place. */
