@@ -24,13 +24,6 @@
  */
 
 import * as defaultApi from './api.js';
-import {
-  getWatchlist,
-  toggle as toggleWatchlist,
-  onChange as onWatchlistChange,
-  WATCHLIST_LIMIT,
-} from './watchlist.js';
-import { showToast } from './ui/toast.js';
 import { flagSrc, hasFlag } from './flags.js';
 import { renderSparkline } from './utils/sparkline.js';
 
@@ -107,10 +100,6 @@ function selectTokens(state, source) {
     if (state.tab === 'players' && state.role !== 'all') {
       if (t.role !== state.role) return false;
     }
-    if (state.favoritesOnly && state.watchlist) {
-      const addr = typeof t.address === 'string' ? t.address.toLowerCase() : '';
-      if (!state.watchlist.has(addr)) return false;
-    }
     return true;
   });
 
@@ -183,10 +172,6 @@ export function mountSidebar(container, options = {}) {
     selectedAddress: null,
     // Index of the row that owns the roving tabindex (review J H-1).
     focusedIndex: 0,
-    // F0.8: when true, sidebar shows only addresses in the watchlist.
-    favoritesOnly: false,
-    // Snapshot of watchlist addresses (lowercase); kept in sync via subscription.
-    watchlist: new Set(getWatchlist()),
   };
 
   // ── Build skeleton ──────────────────────────────────────────────────────
@@ -241,24 +226,9 @@ export function mountSidebar(container, options = {}) {
     opt.value = p;
     periodSelect.appendChild(opt);
   }
-  // F0.8: "only favorites" toggle. Rendered as a pressable button so it
-  // doubles as keyboard target + visual on/off without an extra checkbox row.
-  const favBtn = el('button', {
-    className: 'pt-sidebar__fav-toggle',
-    dataset: { testId: 'sidebar-fav-toggle' },
-    attrs: {
-      type: 'button',
-      'aria-pressed': 'false',
-      'aria-label': 'Favorites only',
-      title: 'Favorites only',
-    },
-    text: '☆ Favorites',
-  });
-
   filters.appendChild(search);
   filters.appendChild(roleSelect);
   filters.appendChild(periodSelect);
-  filters.appendChild(favBtn);
 
   // List
   const list = el('ul', {
@@ -326,30 +296,6 @@ export function mountSidebar(container, options = {}) {
           tokenAddress: token.address || '',
         },
         attrs,
-      });
-
-      const addrLc = typeof token.address === 'string' ? token.address.toLowerCase() : '';
-      const watched = addrLc && state.watchlist.has(addrLc);
-      // F0.8: star toggle. Use UTF-8 star glyphs (not emoji) per plan.
-      const star = el('button', {
-        className: `pt-sidebar__star${watched ? ' is-on' : ''}`,
-        dataset: { testId: 'sidebar-star' },
-        attrs: {
-          type: 'button',
-          'aria-label': watched ? 'Remove from favorites' : 'Add to favorites',
-          'aria-pressed': watched ? 'true' : 'false',
-          // Star is a control inside an option — keep it out of the roving
-          // tabindex; users reach it via Shift+Tab from a focused row if
-          // needed. Click is the primary interaction.
-          tabindex: '-1',
-          title: watched ? 'Remove from favorites' : 'Add to favorites',
-        },
-        text: watched ? '★' : '☆',
-      });
-      star.addEventListener('click', (ev) => {
-        // Don't bubble — row click would otherwise select the token.
-        ev.stopPropagation();
-        onStarClick(token);
       });
 
       // Phase 1.5 batch 1: prefix country tokens with a flag SVG, and prefix
@@ -436,7 +382,6 @@ export function mountSidebar(container, options = {}) {
         if (sparkSvg) sparkCell.appendChild(sparkSvg);
       }
 
-      li.appendChild(star);
       li.appendChild(symbol);
       li.appendChild(meta);
       li.appendChild(sparkCell);
@@ -544,38 +489,6 @@ export function mountSidebar(container, options = {}) {
     }
   }
 
-  // ── Watchlist handlers (F0.8) ────────────────────────────────────────────
-  function onStarClick(token) {
-    if (!token || typeof token.address !== 'string') return;
-    const result = toggleWatchlist(token.address);
-    if (result.full && !result.added) {
-      // Rejected because at capacity; user attempted to add a new entry.
-      showToast(`Favorites list is full (max ${WATCHLIST_LIMIT})`, {
-        kind: 'warn',
-      });
-      return;
-    }
-    // Local state catches up via the onWatchlistChange subscription, but
-    // call render() directly so the star flips in the same tick (avoids a
-    // visible flicker between click and the listener tick).
-    state.watchlist = new Set(getWatchlist());
-    render();
-  }
-
-  function onFavToggle() {
-    state.favoritesOnly = !state.favoritesOnly;
-    favBtn.setAttribute('aria-pressed', state.favoritesOnly ? 'true' : 'false');
-    favBtn.classList.toggle('is-on', state.favoritesOnly);
-    favBtn.textContent = state.favoritesOnly ? '★ Favorites' : '☆ Favorites';
-    state.focusedIndex = 0;
-    render();
-  }
-
-  const unsubscribeWatchlist = onWatchlistChange((list) => {
-    state.watchlist = new Set(list);
-    render();
-  });
-
   // ── Event handlers ──────────────────────────────────────────────────────
   function onTabClick(ev) {
     // Review J M5: `ev.target` can be a nested icon/span once we add chrome
@@ -618,7 +531,6 @@ export function mountSidebar(container, options = {}) {
   search.addEventListener('input', onSearchInput);
   roleSelect.addEventListener('change', onRoleChange);
   periodSelect.addEventListener('change', onPeriodChange);
-  favBtn.addEventListener('click', onFavToggle);
 
   // ── Public API ──────────────────────────────────────────────────────────
   async function refresh() {
@@ -642,8 +554,6 @@ export function mountSidebar(container, options = {}) {
     search.removeEventListener('input', onSearchInput);
     roleSelect.removeEventListener('change', onRoleChange);
     periodSelect.removeEventListener('change', onPeriodChange);
-    favBtn.removeEventListener('click', onFavToggle);
-    unsubscribeWatchlist();
     container.replaceChildren();
   }
 

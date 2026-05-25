@@ -491,9 +491,17 @@ export function mountChart(container, options = {}) {
   function computeMarkers() {
     // Filter points by overlay state, then map to lightweight-charts markers.
     // lightweight-charts v4 requires markers sorted ascending by time.
+    //
+    // Anonymous-user behavior (state.ownAddress === null): there's no way to
+    // classify trades as "mine" vs "others" without a wallet, so we collapse
+    // the two toggles into an OR — either one being on shows every marker.
+    // Otherwise the default (my=on, others=off) renders nothing for anon
+    // users (issue from user report: "клики на My/Others не показывают").
+    const anon = !state.ownAddress;
     return state.points
       .filter((p) => {
         if (!p || (p.type !== 'buy' && p.type !== 'sell')) return false;
+        if (anon) return state.show.my || state.show.others;
         const mine = isOwnTrade(p.trader, state.ownAddress);
         if (mine && !state.show.my) return false;
         if (!mine && !state.show.others) return false;
@@ -665,9 +673,10 @@ export function mountChart(container, options = {}) {
     try {
       netPosPriceLine = series.createPriceLine({
         price,
-        // Use the design-system accent with an inline fallback — tokens.css
-        // owns the canonical value; we don't introduce new tokens here.
-        color: 'var(--accent, #3ddb8e)',
+        // lightweight-charts doesn't parse CSS variables — pass the canonical
+        // green from tokens.css as a literal hex. Keep in sync with --accent
+        // / --up in styles/tokens.css.
+        color: '#3ddb8e',
         lineWidth: 1,
         lineStyle: 2, // dashed
         axisLabelVisible: true,
@@ -754,10 +763,20 @@ export function mountChart(container, options = {}) {
     return chartInstance;
   }
 
-  async function rebuildSeries() {
+  /**
+   * Rebuild the chart series from current `state.candles` / `state.points`.
+   *
+   * `seq` (optional) is the request-sequence stamp from `loadChart()`. When a
+   * concurrent token switch increments `state.reqSeq`, the older rebuildSeries
+   * call early-returns so its setSeriesData → markers don't race against the
+   * newer load's setSeriesData. Direct callers (overlay toggles, SSE applyPrice)
+   * pass no `seq` and always rebuild against the current state.
+   */
+  async function rebuildSeries(seq) {
     rebuilding = true;
     try {
       await ensureChartInstance();
+      if (typeof seq === 'number' && seq !== state.reqSeq) return;
       if (series && chartInstance && typeof chartInstance.removeSeries === 'function') {
         try {
           chartInstance.removeSeries(series);
@@ -886,7 +905,9 @@ export function mountChart(container, options = {}) {
     renderStatus();
 
     // Build/refresh series — async, fire-and-forget; errors bubble to console.
-    rebuildSeries().catch((err) => {
+    // Pass `seq` so a stale load's rebuild bails out if the user clicked a
+    // newer token while this one was loading.
+    rebuildSeries(seq).catch((err) => {
       console.error('mountChart: rebuildSeries failed', err);
     });
   }

@@ -604,12 +604,15 @@ describe('mountChart', () => {
     await flush();
     expect(api.getChart).toHaveBeenCalledTimes(1);
 
-    // Mockup default: others=off. With no own address, both points are
-    // "others", and others=off, so nothing is shown.
+    // Anonymous fallback (Phase 1.5 batch 11): with ownAddress=null the
+    // My/Others toggles collapse to OR — default state.show.my=true alone is
+    // enough to render every marker. This fixes the user-visible bug where
+    // anonymous viewers saw zero markers and the toggles "did nothing".
     const series = created.charts[0].seriesList[0];
-    expect(series.markers.length).toBe(0);
+    expect(series.markers.length).toBe(2);
 
-    // Now identify ourselves → 0xMe's marker should appear (my still on).
+    // Now identify ourselves → only 0xMe's marker should appear (my=on,
+    // others=off — the regular two-bucket classifier kicks in).
     chart.setOwnAddress('0xme');
     expect(api.getChart).toHaveBeenCalledTimes(1); // no refetch
     expect(series.markers.length).toBe(1);
