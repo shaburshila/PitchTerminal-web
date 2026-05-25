@@ -365,9 +365,12 @@ def _same_order(existing: dict[str, Any], new: OrderIn, new_sig: bytes) -> bool:
         return False
     if existing_display is not None and new_display is None:
         return False
-    if existing_display is not None and new_display is not None:
-        if int(existing_display) != int(new_display):
-            return False
+    if (
+        existing_display is not None
+        and new_display is not None
+        and int(existing_display) != int(new_display)
+    ):
+        return False
     if int(existing["amount_in"]) != int(new.amountIn):
         return False
     if int(existing["slippage_bps"]) != int(new.slippageBps):

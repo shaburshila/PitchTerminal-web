@@ -34,7 +34,7 @@ class TestConstants:
         assert FEE_BPS == 500
 
     def test_fee_factor_matches_bps(self) -> None:
-        assert FEE_FACTOR == Decimal(9_500) / Decimal(10_000)
+        assert Decimal(9_500) / Decimal(10_000) == FEE_FACTOR
 
 
 class TestExecutionToMidWei:

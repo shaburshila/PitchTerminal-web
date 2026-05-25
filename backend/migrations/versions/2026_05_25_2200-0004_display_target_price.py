@@ -1,7 +1,7 @@
 """limit_orders: add display_target_price (MID-space) column
 
 The on-chain contract verifies the actual swap rate against
-``target_price × (1 ± slippageBps/10000)`` — i.e. ``target_price`` is in
+``target_price * (1 ± slippageBps/10000)`` — i.e. ``target_price`` is in
 **execution space** (fee-included ASK for buys, fee-included BID for sells).
 The user's mental model, however, is the fee-free **MID** the chart shows:
 "fire when chart hits N".

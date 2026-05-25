@@ -128,10 +128,7 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
     # ─── Cost basis (avg entry per token, in *base* currency, wei) ──────────
     # spent / bought, integer-divided to stay in wei units. Used for both
     # display and PnL so the two numbers always agree.
-    if bought_wei > 0:
-        avg_entry_base_wei = spent_wei * 10**18 // bought_wei  # base-wei per 1.0 token
-    else:
-        avg_entry_base_wei = 0
+    avg_entry_base_wei = spent_wei * 10**18 // bought_wei if bought_wei > 0 else 0
 
     # ─── Convert base→PITCH for player tokens ───────────────────────────────
     # For players: base = country token; price in PITCH = (base price * country→PITCH).

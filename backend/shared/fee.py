@@ -7,8 +7,8 @@ swap (currently 5% / 500 bps). At any instant a token has THREE prices:
   this is what the chart shows.
 * ``ASK`` — what a buyer effectively pays = ``MID / (1 - fee)``; in display
   units, ``ASK = MID / 0.95`` for the default 5% fee.
-* ``BID`` — what a seller effectively receives = ``MID × (1 - fee)``;
-  ``BID = MID × 0.95`` for the default 5% fee.
+* ``BID`` — what a seller effectively receives = ``MID * (1 - fee)``;
+  ``BID = MID * 0.95`` for the default 5% fee.
 
 Two conversions are needed:
 
@@ -55,8 +55,8 @@ def execution_to_mid_wei(execution_price_wei: int, side: str) -> int:
 
     Returns:
         Wei-denominated MID. Computed with integer arithmetic
-        (``execution × (10000 - FEE_BPS) // 10000`` for buys,
-        ``execution × 10000 // (10000 - FEE_BPS)`` for sells) so the
+        (``execution * (10000 - FEE_BPS) // 10000`` for buys,
+        ``execution * 10000 // (10000 - FEE_BPS)`` for sells) so the
         keeper's trigger comparison stays exact.
 
     A 5% fee gives the following round-trip:
@@ -77,10 +77,10 @@ def execution_to_mid_wei(execution_price_wei: int, side: str) -> int:
     factor_den = 10_000
 
     if s in ("limit-buy", "buy"):
-        # Buy: execution = MID / (1 - fee) ⇒ MID = execution × (1 - fee).
+        # Buy: execution = MID / (1 - fee) ⇒ MID = execution * (1 - fee).
         return (execution_price_wei * factor_num) // factor_den
     if s in ("take-profit", "sell"):
-        # Sell: execution = MID × (1 - fee) ⇒ MID = execution / (1 - fee).
+        # Sell: execution = MID * (1 - fee) ⇒ MID = execution / (1 - fee).
         return (execution_price_wei * factor_den) // factor_num
     raise ValueError(f"unknown side: {side!r}")
 
@@ -101,10 +101,10 @@ def mid_to_execution_wei(mid_price_wei: int, side: str) -> int:
     factor_den = 10_000
 
     if s in ("limit-buy", "buy"):
-        # MID = execution × (1 - fee) ⇒ execution = MID / (1 - fee).
+        # MID = execution * (1 - fee) ⇒ execution = MID / (1 - fee).
         return (mid_price_wei * factor_den) // factor_num
     if s in ("take-profit", "sell"):
-        # MID = execution / (1 - fee) ⇒ execution = MID × (1 - fee).
+        # MID = execution / (1 - fee) ⇒ execution = MID * (1 - fee).
         return (mid_price_wei * factor_num) // factor_den
     raise ValueError(f"unknown side: {side!r}")
 
