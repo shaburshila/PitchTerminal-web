@@ -25,9 +25,10 @@
 import * as defaultApi from './api.js';
 
 const TIMEFRAMES = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d']);
-const DEFAULT_TF = '5m';
+const DEFAULT_TF = '1h';
 const TYPES = Object.freeze(['candles', 'line']);
-const UNITS = Object.freeze(['pitch', 'country']);
+// Order is the on-screen toggle order: Country first, PITCH second.
+const UNITS = Object.freeze(['country', 'pitch']);
 
 const TYPE_LABEL = { candles: 'Candles', line: 'Line' };
 const UNIT_LABEL = { pitch: 'PITCH', country: 'Country' };
@@ -180,6 +181,36 @@ function readCandleColors() {
   };
 }
 
+/**
+ * Decide whether a token row represents a player (vs a country). The
+ * canonical signal is ``token.kind === 'player'``, but ``/api/v1/tokens``
+ * (api-spec §4.1) does NOT include a ``kind`` field on its response rows —
+ * it only splits them into ``players[]`` / ``countries[]`` arrays. The
+ * sidebar passes rows straight through to ``setToken`` without tagging
+ * kind (it knows which array each row came from but doesn't annotate),
+ * so chart code relying solely on ``kind === 'player'`` silently
+ * mis-classifies sidebar selections.
+ *
+ * Bug surfaced: a player token viewed in country denomination received a
+ * live SSE prices tick, and ``applyPrice`` chose ``pricePitch`` (because
+ * ``state.token.kind`` was undefined) — the country-unit chart spiked up
+ * to the PITCH value (~11.8) on top of a series oscillating around the
+ * country price (~1.5). Marker / price-line paths don't trigger this,
+ * but the candle update in ``applyPrice`` does.
+ *
+ * Fallback: per api-spec §4.1 ``countryAddress`` is present **only** on
+ * player rows ("У стран поля role, country, countryAddress отсутствуют");
+ * its presence is a reliable kind=player proxy. Profile.js + my-wallet
+ * paths that DO pass ``kind`` keep working unchanged.
+ */
+function isPlayerToken(token) {
+  if (!token) return false;
+  if (token.kind === 'player') return true;
+  if (token.kind === 'country') return false;
+  // Kind missing — sidebar path. Fall back to api-spec invariant.
+  return typeof token.countryAddress === 'string' && token.countryAddress.length > 0;
+}
+
 /** Map a chart trade-point or events-channel trade to a series marker. */
 function pointToMarker(point, colors) {
   if (!point || point.type === 'spot') return null;
@@ -239,7 +270,9 @@ export function mountChart(container, options = {}) {
     // and lose the trend signal. Users can still switch to candles via the
     // toolbar toggle. See docs/known-issues.md #1.
     type: 'line',
-    unit: 'pitch',
+    // Default unit is set per-token in setToken: player → country (native
+    // venue currency), country → pitch (only meaningful denomination).
+    unit: 'country',
     period: 'all',
     candles: [],
     points: [],
@@ -904,8 +937,11 @@ export function mountChart(container, options = {}) {
 
   function applyUnitVisibility() {
     // Countries are denominated only in PITCH — hide the toggle entirely.
-    const isCountry = state.token?.kind === 'country';
-    unitGroup.hidden = isCountry;
+    // Same kind-detection caveat as applyPrice: sidebar selections lack the
+    // ``kind`` field (api-spec §4.1 doesn't include it), so we treat
+    // "no kind, no countryAddress" as a country.
+    const isPlayer = isPlayerToken(state.token);
+    unitGroup.hidden = state.token != null && !isPlayer;
   }
 
   function lastCandleClose() {
@@ -1017,6 +1053,15 @@ export function mountChart(container, options = {}) {
   // ── Public API ──────────────────────────────────────────────────────────
   function setToken(token) {
     state.token = token || null;
+    // Reset unit to the per-kind default: player tokens trade natively
+    // against their country token (so Country is the meaningful default),
+    // country tokens only have a PITCH denomination. User can still toggle
+    // for player tokens; the override is per-session, reset on next switch.
+    if (state.token?.kind === 'country') {
+      state.unit = 'pitch';
+    } else if (state.token?.kind === 'player') {
+      state.unit = 'country';
+    }
     applyUnitVisibility();
     // Previous candles are about to be replaced — drop stale OHLC text so
     // the floating card doesn't flash old data before the next hover.
@@ -1058,7 +1103,7 @@ export function mountChart(container, options = {}) {
     if (typeof price === 'number') {
       scalar = price;
     } else if (price && typeof price === 'object') {
-      const wantCountry = state.token?.kind === 'player' && state.unit === 'country';
+      const wantCountry = isPlayerToken(state.token) && state.unit === 'country';
       const candidate = wantCountry ? price.priceCountry : price.pricePitch;
       scalar = typeof candidate === 'number' ? candidate : NaN;
     } else {

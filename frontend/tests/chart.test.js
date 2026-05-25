@@ -204,12 +204,12 @@ describe('mountChart', () => {
     expect(container.querySelector('[data-test-id="chart-canvas"]')).not.toBeNull();
   });
 
-  it('default timeframe is 5m (aria-pressed=true)', () => {
+  it('default timeframe is 1h (aria-pressed=true)', () => {
     const { lib } = makeChartLib();
     mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
-    const five = container.querySelector('[data-test-id="chart-tf-5m"]');
+    const oneHour = container.querySelector('[data-test-id="chart-tf-1h"]');
     const one = container.querySelector('[data-test-id="chart-tf-1m"]');
-    expect(five.getAttribute('aria-pressed')).toBe('true');
+    expect(oneHour.getAttribute('aria-pressed')).toBe('true');
     expect(one.getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -232,7 +232,7 @@ describe('mountChart', () => {
     chart.setToken(makePlayer());
     await flush();
 
-    expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '5m', 'pitch');
+    expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '1h', 'country');
     expect(created.charts.length).toBe(1);
     const series = created.charts[0].seriesList[0];
     // Default type is `line` (see docs/known-issues.md #1 — candles look empty
@@ -266,15 +266,15 @@ describe('mountChart', () => {
     await flush();
     expect(api.getChart).toHaveBeenCalledTimes(1);
 
-    const oneHour = container.querySelector('[data-test-id="chart-tf-1h"]');
-    oneHour.click();
+    const fiveM = container.querySelector('[data-test-id="chart-tf-5m"]');
+    fiveM.click();
     await flush();
 
     expect(api.getChart).toHaveBeenCalledTimes(2);
-    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '1h', 'pitch');
-    expect(oneHour.getAttribute('aria-pressed')).toBe('true');
-    const fiveM = container.querySelector('[data-test-id="chart-tf-5m"]');
-    expect(fiveM.getAttribute('aria-pressed')).toBe('false');
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '5m', 'country');
+    expect(fiveM.getAttribute('aria-pressed')).toBe('true');
+    const oneHour = container.querySelector('[data-test-id="chart-tf-1h"]');
+    expect(oneHour.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('clicking the same tf does NOT trigger a refetch', async () => {
@@ -285,7 +285,7 @@ describe('mountChart', () => {
     await flush();
     api.getChart.mockClear();
 
-    container.querySelector('[data-test-id="chart-tf-5m"]').click();
+    container.querySelector('[data-test-id="chart-tf-1h"]').click();
     await flush();
     expect(api.getChart).not.toHaveBeenCalled();
   });
@@ -384,22 +384,24 @@ describe('mountChart', () => {
     expect(unitGroup.hidden).toBe(true);
   });
 
-  it('switching unit (pitch → country) refetches candles with unit=country', async () => {
+  it('switching unit (country → pitch) refetches candles with unit=pitch', async () => {
     const { lib } = makeChartLib();
     const api = makeApi();
     const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
     chart.setToken(makePlayer());
     await flush();
     expect(api.getChart).toHaveBeenCalledTimes(1);
-    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '5m', 'pitch');
+    // Player default unit is `country` (native venue currency) — see setToken
+    // in chart.js. Toggle switches the chart to PITCH denomination.
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '1h', 'country');
 
-    const countryBtn = container.querySelector('[data-test-id="chart-unit-country"]');
-    countryBtn.click();
+    const pitchBtn = container.querySelector('[data-test-id="chart-unit-pitch"]');
+    pitchBtn.click();
     await flush();
 
     expect(api.getChart).toHaveBeenCalledTimes(2);
-    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '5m', 'country');
-    expect(countryBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '1h', 'pitch');
+    expect(pitchBtn.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('clicking the same unit does NOT trigger a refetch', async () => {
@@ -410,7 +412,8 @@ describe('mountChart', () => {
     await flush();
     api.getChart.mockClear();
 
-    container.querySelector('[data-test-id="chart-unit-pitch"]').click();
+    // Player default unit is `country` — clicking it must be a no-op.
+    container.querySelector('[data-test-id="chart-unit-country"]').click();
     await flush();
     expect(api.getChart).not.toHaveBeenCalled();
   });
@@ -505,11 +508,16 @@ describe('mountChart', () => {
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
     chart.setToken(makePlayer());
     await flush();
+    // Player default unit is `country`; flip to pitch for this test so the
+    // pitch-selection branch runs. The toggle refetches and rebuilds the
+    // active series — grab the rebuilt one below.
+    container.querySelector('[data-test-id="chart-unit-pitch"]').click();
+    await flush();
 
-    const series = created.charts[0].seriesList[0];
+    const series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
     series.update.mockClear();
-    // Default unit is `pitch`, default token kind is `player`. Backend SSE
-    // ships both denominations — chart MUST pick pricePitch here.
+    // Backend SSE ships both denominations — chart MUST pick pricePitch
+    // because state.unit === 'pitch'.
     chart.applyPrice('0xAAA1', { pricePitch: 13.5, priceCountry: 1.7 });
     expect(series.update).toHaveBeenCalledTimes(1);
     expect(series.update.mock.calls[0][0].value).toBe(13.5);
@@ -588,6 +596,47 @@ describe('mountChart', () => {
     series.update.mockClear();
     chart.applyPrice('0xAAA1', { pricePitch: 11.8 }); // no priceCountry
     expect(series.update).not.toHaveBeenCalled();
+  });
+
+  it('applyPrice picks priceCountry for sidebar-supplied player rows (no kind field)', async () => {
+    // Regression: ``/api/v1/tokens`` (api-spec §4.1) does NOT include a
+    // ``kind`` field on per-token rows — only the response splits them
+    // into ``players[]`` / ``countries[]``. The sidebar passes rows
+    // straight through to ``chart.setToken`` without tagging
+    // ``kind: 'player'``, so the previous
+    // ``state.token?.kind === 'player'`` check silently failed and
+    // applyPrice fell back to ``pricePitch`` even when the user had
+    // toggled the chart to country units. Result: the country-unit
+    // chart (values ~1.5) got a candle close pushed to the PITCH value
+    // (~11.8) on every live tick — a sharp vertical wick up to the
+    // PITCH price. Detect player rows via ``countryAddress`` presence
+    // when ``kind`` is absent.
+    const { lib, created } = makeChartLib();
+    const apiClient = makeApi(
+      makeChartPayload({
+        candles: [
+          { time: 1709000000, open: 1.0, high: 1.1, low: 0.95, close: 1.05, volume: 10 },
+          { time: 1709000300, open: 1.05, high: 1.2, low: 1.04, close: 1.18, volume: 8 },
+        ],
+      }),
+    );
+    const chart = mountChart(container, { apiClient, chartLibFactory: () => lib });
+    // Simulate sidebar payload: ``countryAddress`` present, ``kind`` absent.
+    const sidebarRow = makePlayer();
+    delete sidebarRow.kind;
+    sidebarRow.countryAddress = '0xccc1';
+    chart.setToken(sidebarRow);
+    await flush();
+    container.querySelector('[data-test-id="chart-unit-country"]').click();
+    await flush();
+
+    const series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    series.update.mockClear();
+    chart.applyPrice('0xAAA1', { pricePitch: 11.8, priceCountry: 1.5 });
+    expect(series.update).toHaveBeenCalledTimes(1);
+    // MUST be the country value (1.5), not the PITCH value (11.8). With the
+    // bug present the second arg here would be 11.8.
+    expect(series.update.mock.calls[0][0].value).toBe(1.5);
   });
 
   it('applyTrade appends a marker for the active token', async () => {
@@ -901,8 +950,9 @@ describe('mountChart', () => {
     };
     const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
     chart.setToken(makePlayer());
-    // Trigger second fetch (tf change) before first resolves.
-    container.querySelector('[data-test-id="chart-tf-1h"]').click();
+    // Trigger second fetch (tf change) before first resolves. Default tf is
+    // 1h, so click a different button to actually flip the timeframe.
+    container.querySelector('[data-test-id="chart-tf-5m"]').click();
     await flush();
     // Now resolve the stale one.
     resolveSlow(makeChartPayload());
