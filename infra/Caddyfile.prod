@@ -23,6 +23,15 @@
 	order rate_limit before basicauth
 }
 
+# Канонический домен — bare. www-вариант редиректим, чтобы у юзеров,
+# набравших www.<domain>, не падал TLS handshake (Caddy выдавал cert
+# только на bare-блок, для www.* сертификата не было → «небезопасное
+# соединение» в браузере). Auto-https сам выпишет cert на www.* при
+# первом запросе.
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}
+
 {$DOMAIN} {
 	# ── Базовые security-headers ──────────────────────────────────────────
 	header {
