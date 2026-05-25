@@ -181,7 +181,7 @@ async function defaultChartLibFactory() {
  *
  * @param {HTMLElement} container
  * @param {{
- *   apiClient?: { getChart: (token: string, tf: string) => Promise<object> },
+ *   apiClient?: { getChart: (token: string, tf: string, unit: string) => Promise<object> },
  *   chartLibFactory?: () => Promise<{ createChart: Function }> | { createChart: Function },
  * }} [options]
  */
@@ -888,7 +888,7 @@ export function mountChart(container, options = {}) {
 
     let resp;
     try {
-      resp = await apiClient.getChart(token.address, state.tf);
+      resp = await apiClient.getChart(token.address, state.tf, state.unit);
     } catch (err) {
       if (seq !== state.reqSeq) return;
       state.loading = false;
@@ -942,9 +942,11 @@ export function mountChart(container, options = {}) {
     if (!UNITS.includes(u) || u === state.unit) return;
     state.unit = u;
     applyToolbarAria();
-    // Unit toggle is visual-only for now: /chart endpoint returns PITCH-denominated
-    // candles. Switching units would require a separate priceCountry feed.
-    // F0.6 ships the control; backend extension is out of scope.
+    // Reload candles in the new denomination. For country tokens the toggle is
+    // hidden (applyUnitVisibility), so unit always stays 'pitch' there; for
+    // player tokens backend returns priceCountry-denominated candles when
+    // unit=country.
+    loadChart();
   }
 
   function onOverlayClick(e) {

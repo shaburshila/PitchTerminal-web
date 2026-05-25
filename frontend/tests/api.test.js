@@ -186,14 +186,18 @@ describe('endpoint wrappers — URLs', () => {
     expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/tokens`);
   });
 
-  it('getChart includes tf query param (defaults to 5m)', async () => {
+  it('getChart includes tf + unit query params (defaults tf=5m, unit=pitch)', async () => {
     fetch.mockResolvedValueOnce(makeResponse({ body: { candles: [], points: [] } }));
     await getChart('0xabc');
-    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/tokens/0xabc/chart?tf=5m`);
+    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/tokens/0xabc/chart?tf=5m&unit=pitch`);
 
     fetch.mockResolvedValueOnce(makeResponse({ body: { candles: [], points: [] } }));
     await getChart('0xabc', '1h');
-    expect(fetch.mock.calls[1][0]).toBe(`${API_BASE}/tokens/0xabc/chart?tf=1h`);
+    expect(fetch.mock.calls[1][0]).toBe(`${API_BASE}/tokens/0xabc/chart?tf=1h&unit=pitch`);
+
+    fetch.mockResolvedValueOnce(makeResponse({ body: { candles: [], points: [] } }));
+    await getChart('0xabc', '1h', 'country');
+    expect(fetch.mock.calls[2][0]).toBe(`${API_BASE}/tokens/0xabc/chart?tf=1h&unit=country`);
   });
 
   it('getTrades encodes limit and cursor', async () => {

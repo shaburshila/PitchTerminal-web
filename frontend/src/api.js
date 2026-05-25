@@ -147,11 +147,12 @@ export function getTokens() {
 
 /**
  * GET /tokens/:token/chart — candles + trade points.
- * @param {string} token  Lowercase token address.
- * @param {string} [tf]   Timeframe: 1m|5m|15m|1h|4h|1d. Default '5m'.
+ * @param {string} token   Lowercase token address.
+ * @param {string} [tf]    Timeframe: 1m|5m|15m|1h|4h|1d. Default '5m'.
+ * @param {string} [unit]  Denomination: 'pitch' | 'country'. Default 'pitch'.
  */
-export function getChart(token, tf = '5m') {
-  return apiFetch(`/tokens/${token}/chart${buildQuery({ tf })}`);
+export function getChart(token, tf = '5m', unit = 'pitch') {
+  return apiFetch(`/tokens/${token}/chart${buildQuery({ tf, unit })}`);
 }
 
 /**

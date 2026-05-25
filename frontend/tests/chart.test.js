@@ -232,7 +232,7 @@ describe('mountChart', () => {
     chart.setToken(makePlayer());
     await flush();
 
-    expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '5m');
+    expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '5m', 'pitch');
     expect(created.charts.length).toBe(1);
     const series = created.charts[0].seriesList[0];
     // Default type is `line` (see docs/known-issues.md #1 — candles look empty
@@ -271,7 +271,7 @@ describe('mountChart', () => {
     await flush();
 
     expect(api.getChart).toHaveBeenCalledTimes(2);
-    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '1h');
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '1h', 'pitch');
     expect(oneHour.getAttribute('aria-pressed')).toBe('true');
     const fiveM = container.querySelector('[data-test-id="chart-tf-5m"]');
     expect(fiveM.getAttribute('aria-pressed')).toBe('false');
@@ -316,6 +316,37 @@ describe('mountChart', () => {
 
     chart.setToken(makeCountry());
     expect(unitGroup.hidden).toBe(true);
+  });
+
+  it('switching unit (pitch → country) refetches candles with unit=country', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    expect(api.getChart).toHaveBeenCalledTimes(1);
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '5m', 'pitch');
+
+    const countryBtn = container.querySelector('[data-test-id="chart-unit-country"]');
+    countryBtn.click();
+    await flush();
+
+    expect(api.getChart).toHaveBeenCalledTimes(2);
+    expect(api.getChart).toHaveBeenLastCalledWith('0xaaa1', '5m', 'country');
+    expect(countryBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('clicking the same unit does NOT trigger a refetch', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    api.getChart.mockClear();
+
+    container.querySelector('[data-test-id="chart-unit-pitch"]').click();
+    await flush();
+    expect(api.getChart).not.toHaveBeenCalled();
   });
 
   it('stats bar populates price, change, supply, mcap, holders', async () => {
