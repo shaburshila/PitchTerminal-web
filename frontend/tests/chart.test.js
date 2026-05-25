@@ -384,6 +384,38 @@ describe('mountChart', () => {
     expect(unitGroup.hidden).toBe(true);
   });
 
+  it('unit toggle hides for sidebar-style country rows (no kind field)', () => {
+    // Regression: /api/v1/tokens (api-spec §4.1) does NOT serialize `kind`
+    // on per-row objects — the sidebar passes country rows straight through
+    // to `setToken` without it. `isPlayerToken` correctly returns false
+    // (no `countryAddress` either), so `applyUnitVisibility()` sets
+    // `unitGroup.hidden = true`. The CSS-level half of this fix
+    // (`.pt-chart__unit[hidden] { display: none }`) is locked in by the
+    // next test — without it the toggle stayed visible on country charts
+    // in prod despite the attribute being set, because
+    // `.pt-chart__unit { display: inline-flex }` beat the UA default.
+    const { lib } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    const sidebarCountry = makeCountry();
+    delete sidebarCountry.kind;
+    chart.setToken(sidebarCountry);
+    const unitGroup = container.querySelector('[data-test-id="chart-unit"]');
+    expect(unitGroup.hidden).toBe(true);
+  });
+
+  it('styles.css defines [hidden] override for chart-unit toggle', async () => {
+    // CSS-level guard for the prod bug above. Reading the stylesheet
+    // directly (not via getComputedStyle, which happy-dom doesn't fully
+    // honour for cascaded declarations) catches accidental regressions
+    // if someone strips the rule.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const css = fs.readFileSync(path.join(here, '..', 'src', 'styles.css'), 'utf8');
+    expect(css).toMatch(/\.pt-chart__unit\[hidden\]\s*\{[^}]*display:\s*none/);
+  });
+
   it('switching unit (country → pitch) refetches candles with unit=pitch', async () => {
     const { lib } = makeChartLib();
     const api = makeApi();

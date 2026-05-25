@@ -960,6 +960,15 @@ body.mode-dashboard .pt-profile {
   outline-offset: 1px;
 }
 
+/* `.pt-chart__unit` is `display: inline-flex` above — that beats the
+   user-agent `[hidden] { display: none }` on specificity, so the toggle
+   stays visible for country charts when JS sets `unitGroup.hidden = true`.
+   Explicit override mirrors the same pattern used by `.pt-chart__status[hidden]`,
+   `.pt-trade__hint[hidden]`, etc. in this file. */
+.pt-chart__unit[hidden] {
+  display: none;
+}
+
 /* Overlay-checkboxes (My / Others / Avg buy / Net pos) — Batch 4, closes
    known-issues #3. Inline in the toolbar row, right-aligned via margin-left
    auto, with a separator on the left edge — mirrors a-main.html .tb-check
