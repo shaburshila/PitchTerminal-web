@@ -281,9 +281,7 @@ export function mountHeaderActions(opts) {
       className: 'pt-ref-modal__benefit pt-ref-modal__benefit--you',
       dataset: { testId: 'referral-modal-you' },
     });
-    youCard.appendChild(
-      el('div', { className: 'pt-ref-modal__benefit-label', text: 'You get' }),
-    );
+    youCard.appendChild(el('div', { className: 'pt-ref-modal__benefit-label', text: 'You get' }));
     youCard.appendChild(
       el('div', { className: 'pt-ref-modal__benefit-headline', text: '25% rebate' }),
     );
@@ -299,9 +297,7 @@ export function mountHeaderActions(opts) {
       className: 'pt-ref-modal__benefit pt-ref-modal__benefit--them',
       dataset: { testId: 'referral-modal-them' },
     });
-    themCard.appendChild(
-      el('div', { className: 'pt-ref-modal__benefit-label', text: 'They get' }),
-    );
+    themCard.appendChild(el('div', { className: 'pt-ref-modal__benefit-label', text: 'They get' }));
     themCard.appendChild(
       el('div', { className: 'pt-ref-modal__benefit-headline', text: '25% discount' }),
     );
