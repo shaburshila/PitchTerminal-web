@@ -22,7 +22,13 @@
  *   - buildOrderTypedData    assemble { domain, types, primaryType, message }
  *   - randomNonce            cryptographic 32-byte hex nonce (0x-prefixed)
  *   - validateOrderShape     throw-on-invalid sanity check (UI-side guard)
+ *   - buildSignableOrder     Wave 2A — convert display-space order →
+ *                            { signOrder, displayTargetPriceWei }; the keeper
+ *                            uses displayTargetPrice (MID) for trigger, the
+ *                            contract verifies the signed (ASK/BID) target.
  */
+
+import { displayToExecution } from './lib/fee.js';
 
 /** EIP-712 domain name — see docs/eip712.md §2. */
 export const EIP712_DOMAIN_NAME = 'PitchTerminal LimitOrders';
@@ -203,6 +209,51 @@ export function buildOrderTypedData(order, executor, chainId = 8453) {
     types: ORDER_TYPES,
     primaryType: 'Order',
     message,
+  };
+}
+
+/**
+ * Wave 2A — bridge between MID-space user input and execution-space signed
+ * target price. Given an order whose `targetPrice` field is a MID-space value
+ * (what the user typed, what the chart shows, what the keeper compares
+ * against), returns:
+ *   - `signOrder`: a shallow copy with `targetPrice` rewritten to the
+ *     execution-space (ASK for limit-buy, BID for take-profit) value the
+ *     contract verifies under the EIP-712 signature.
+ *   - `displayTargetPriceWei`: the original MID-space value as BigInt (echoed
+ *     for the POST payload's `displayTargetPrice` field).
+ *   - `signedTargetPriceWei`: same as `signOrder.targetPrice`, as BigInt.
+ *
+ * The function does NOT mutate the input order. Side mapping:
+ *   side: 0 → 'limit-buy'   (Buy tab)
+ *   side: 1 → 'take-profit' (Sell tab)
+ *
+ * @param {object} displayOrder  order with MID-space `targetPrice`
+ * @returns {{ signOrder: object, displayTargetPriceWei: bigint, signedTargetPriceWei: bigint }}
+ */
+export function buildSignableOrder(displayOrder) {
+  if (!displayOrder || typeof displayOrder !== 'object') {
+    throw new TypeError('displayOrder must be an object');
+  }
+  if (displayOrder.side !== 0 && displayOrder.side !== 1) {
+    throw new RangeError('side must be 0 (limit-buy) or 1 (take-profit)');
+  }
+  let displayWei;
+  try {
+    displayWei = BigInt(displayOrder.targetPrice);
+  } catch {
+    throw new TypeError('targetPrice must be a bigint-coercible value');
+  }
+  if (displayWei <= 0n) {
+    throw new RangeError('targetPrice must be > 0');
+  }
+  const sideName = displayOrder.side === 0 ? 'limit-buy' : 'take-profit';
+  const signedWei = displayToExecution(displayWei, sideName);
+  const signOrder = { ...displayOrder, targetPrice: signedWei };
+  return {
+    signOrder,
+    displayTargetPriceWei: displayWei,
+    signedTargetPriceWei: signedWei,
   };
 }
 
