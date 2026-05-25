@@ -370,7 +370,18 @@ export function mountSidebar(container, options = {}) {
         });
         symbol.appendChild(dot);
       }
-      symbol.appendChild(document.createTextNode(token.symbol || ''));
+      // Country rows show the full name (e.g. "France") — the ticker
+      // ("FRA") is reserved for the flag/symbol lookup and quote-suffix.
+      // Player rows continue to display their ticker as the primary label.
+      // The empty-string check is explicit (not `||`) so a backend-supplied
+      // `name: ""` correctly falls back to the symbol.
+      const labelText =
+        state.tab === 'countries'
+          ? typeof token.name === 'string' && token.name
+            ? token.name
+            : token.symbol || ''
+          : token.symbol || '';
+      symbol.appendChild(document.createTextNode(labelText));
       const metaParts = [];
       if (state.tab === 'players') {
         // Show country symbol + role for player rows. countryAddress is not

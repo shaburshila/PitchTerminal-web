@@ -465,6 +465,30 @@ describe('mountSidebar', () => {
     expect(rows[1].querySelector('.price').textContent).toContain('PITCH');
   });
 
+  it('country row shows full name, not symbol', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    container.querySelector('[data-test-id="sidebar-tab-countries"]').click();
+
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // Fixture: countries[1] = { name: 'France', symbol: 'FRA' }, sorted
+    // first by pricePitch=0.01. The visible label must be the full name.
+    const firstLabel = rows[0].querySelector('.symbol').textContent;
+    expect(firstLabel).toContain('France');
+    expect(firstLabel).not.toContain('FRA');
+  });
+
+  it('player row still shows symbol (ticker), not full name', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    // Players tab is default. Mbappé sorted first: name='Mbappé', symbol='MBAPPE'.
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    const firstLabel = rows[0].querySelector('.symbol').textContent;
+    expect(firstLabel).toContain('MBAPPE');
+  });
+
   it('change cell has positive/negative class', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
