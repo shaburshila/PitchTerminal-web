@@ -462,20 +462,21 @@ describe('mountOrdersTab', () => {
 
       const filters = c.querySelector('[data-test-id="orders-filters"]');
       expect(filters).toBeTruthy();
-      // Counts inside the chips
+      // Counts inside the chips. Wave 2A — `pending` rolls into the `open`
+      // chip (legacy alias) until backend backfill renames the column.
       const allChip = c.querySelector('[data-test-id="orders-filter-all"]');
-      const pendingChip = c.querySelector('[data-test-id="orders-filter-pending"]');
+      const openChip = c.querySelector('[data-test-id="orders-filter-open"]');
       expect(allChip.textContent).toContain('4');
-      expect(pendingChip.textContent).toContain('2');
+      expect(openChip.textContent).toContain('2');
       expect(allChip.className).toContain('is-active');
-      expect(pendingChip.className).not.toContain('is-active');
+      expect(openChip.className).not.toContain('is-active');
 
-      // Click pending → only pending rows visible.
-      pendingChip.click();
+      // Click open → only pending (legacy) rows visible.
+      openChip.click();
       const rows = c.querySelectorAll('[data-test-id="order-row"]');
       expect(rows.length).toBe(2);
       for (const r of rows) expect(r.dataset.status).toBe('pending');
-      expect(c.querySelector('[data-test-id="orders-filter-pending"]').className).toContain(
+      expect(c.querySelector('[data-test-id="orders-filter-open"]').className).toContain(
         'is-active',
       );
     });
@@ -566,6 +567,78 @@ describe('mountOrdersTab', () => {
       accessStore.set('free');
       await flush();
       expect(counts[counts.length - 1]).toBeNull();
+    });
+  });
+
+  // Wave 2A — Target column shows DISPLAY (MID) value, not signed; status
+  // labels render `open` (legacy `pending` rolls into the same label).
+  describe('Wave 2A — display target + open status', () => {
+    it('renders displayTargetPrice in the Target column when present', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      // 10.0 PITCH display, signed = 10 × 10000 / 9500 ≈ 10.5263
+      const api = makeApi({
+        items: [
+          makeOrder({
+            targetPrice: '10526315789473684210',
+            displayTargetPrice: '10000000000000000000',
+          }),
+        ],
+      });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const targetCell = c.querySelector('[data-test-id="order-row"] td.num');
+      // display = 10 PITCH → renders "10" (trailing zeros stripped).
+      expect(targetCell.textContent).toBe('10');
+    });
+
+    it('falls back to targetPrice when displayTargetPrice missing (legacy rows)', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ items: [makeOrder({ targetPrice: '1234500000000000000' })] });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const targetCell = c.querySelector('[data-test-id="order-row"] td.num');
+      // 1.2345 → "1.2345" after trailing-zero strip.
+      expect(targetCell.textContent).toBe('1.2345');
+    });
+
+    it('legacy `pending` status renders as "Open" + tooltip', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ items: [makeOrder({ status: 'pending' })] });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const pill = c.querySelector('[data-test-id="orders-status"]');
+      expect(pill.textContent).toContain('Open');
+      expect(pill.className).toContain('status--open');
+      expect(pill.getAttribute('title')).toMatch(/waiting/i);
+    });
+
+    it('new `open` status renders the Open label too', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({ items: [makeOrder({ status: 'open' })] });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const pill = c.querySelector('[data-test-id="orders-status"]');
+      expect(pill.textContent).toContain('Open');
+      expect(pill.className).toContain('status--open');
+    });
+
+    it('cancel button shows for both `pending` (legacy) and `open` statuses', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const api = makeApi({
+        items: [
+          makeOrder({ id: 'a', status: 'pending' }),
+          makeOrder({ id: 'b', status: 'open' }),
+        ],
+      });
+      mountOrdersTab(c, { apiClient: api, token: TOKEN });
+      await flush();
+      const buttons = c.querySelectorAll('[data-test-id="orders-cancel"]');
+      expect(buttons.length).toBe(2);
     });
   });
 });

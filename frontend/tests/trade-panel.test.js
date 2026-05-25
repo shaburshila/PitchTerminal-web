@@ -2524,7 +2524,10 @@ describe('mountTradePanel — F2.x limit mode', () => {
     expect(signArg.typedData.domain.verifyingContract).toBe(
       '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5',
     );
-    expect(signArg.typedData.message.targetPrice).toBe(12500000000000000000n);
+    // Wave 2A — user types DISPLAY-space (12.5 = MID). The signed targetPrice
+    // is the execution-space ASK = display × 10000 / 9500 (limit-buy).
+    const expectedSignedBuy = (12500000000000000000n * 10000n) / 9500n;
+    expect(signArg.typedData.message.targetPrice).toBe(expectedSignedBuy);
     expect(signArg.typedData.message.amountIn).toBe(1000000000000000000n);
     // Player venue + Buy side → venue 0, side 0.
     expect(signArg.typedData.message.venue).toBe(0);
@@ -2533,7 +2536,9 @@ describe('mountTradePanel — F2.x limit mode', () => {
     expect(createOrder).toHaveBeenCalledTimes(1);
     const [orderPayload, signature] = createOrder.mock.calls[0];
     expect(signature).toMatch(/^0xab/);
-    expect(orderPayload.targetPrice).toBe('12500000000000000000');
+    // Wire payload carries BOTH: signed (execution) and display (MID).
+    expect(orderPayload.targetPrice).toBe(expectedSignedBuy.toString());
+    expect(orderPayload.displayTargetPrice).toBe('12500000000000000000');
     expect(orderPayload.amountIn).toBe('1000000000000000000');
     expect(orderPayload.token).toBe(VALID_PLAYER_TOKEN.address.toLowerCase());
     expect(orderPayload.quoteToken).toBe(VALID_PLAYER_TOKEN.countryAddress.toLowerCase());
@@ -2699,6 +2704,192 @@ describe('mountTradePanel — B3 venue-aware trigger-price label', () => {
     await flush();
     const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
     expect(label.textContent).toBe('Trigger price');
+    handle.destroy();
+  });
+});
+
+// Wave 2A — fee-breakdown UI under the amount input. Visible in BOTH market
+// and limit modes once amount > 0 + token meta (pricePitch / priceCountry) is
+// available.
+describe('mountTradePanel — Wave 2A fee breakdown', () => {
+  const COUNTRY_TOKEN_WITH_PRICE = {
+    address: '0xaaaa000000000000000000000000000000000001',
+    symbol: 'BRA',
+    pricePitch: 0.5, // MID = 0.5 PITCH per 1 BRA
+  };
+  const PLAYER_TOKEN_WITH_PRICE = {
+    address: '0xbbbb000000000000000000000000000000000001',
+    symbol: 'PLR',
+    countryAddress: '0xcccc000000000000000000000000000000000001',
+    countrySymbol: 'BRA',
+    priceCountry: 2, // MID = 2 BRA per 1 PLR
+  };
+
+  it('Buy on country venue: shows "Spending X PITCH → ≈ net BRA" with naive + fee', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN_WITH_PRICE,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const block = container.querySelector('[data-test-id="fee-breakdown"]');
+    expect(block.hidden).toBe(false);
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    const math = container.querySelector('[data-test-id="fee-breakdown-math"]');
+    // amount = 1 PITCH, MID = 0.5 → naive base = 2 BRA, fee 5% = 0.1, net 1.9
+    expect(headline.textContent).toContain('Spending');
+    expect(headline.textContent).toContain('1 PITCH');
+    expect(headline.textContent).toContain('1.9 BRA');
+    expect(math.textContent).toContain('naive 2 BRA');
+    expect(math.textContent).toContain('5.0% fee');
+    expect(math.textContent).toContain('0.1 BRA');
+    handle.destroy();
+  });
+
+  it('Sell on country venue: "Selling X BRA → ≈ net PITCH"', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN_WITH_PRICE,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="side-sell"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '2';
+    amount.dispatchEvent(new Event('input'));
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    // amount = 2 BRA, MID = 0.5 → naive quote = 1 PITCH, fee 5% = 0.05, net 0.95
+    expect(headline.textContent).toContain('Selling');
+    expect(headline.textContent).toContain('2 BRA');
+    expect(headline.textContent).toContain('0.95 PITCH');
+    handle.destroy();
+  });
+
+  it('hides when no amount entered', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN_WITH_PRICE,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const block = container.querySelector('[data-test-id="fee-breakdown"]');
+    expect(block.hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('hides when token has no price meta', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: { ...COUNTRY_TOKEN_WITH_PRICE, pricePitch: null },
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const block = container.querySelector('[data-test-id="fee-breakdown"]');
+    expect(block.hidden).toBe(true);
+    handle.destroy();
+  });
+
+  it('player venue uses priceCountry MID + country symbol in breakdown', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: PLAYER_TOKEN_WITH_PRICE,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '4'; // Buy: spending 4 BRA, MID = 2 → naive 2 PLR, net 1.9 PLR
+    amount.dispatchEvent(new Event('input'));
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    expect(headline.textContent).toContain('4 BRA');
+    expect(headline.textContent).toContain('1.9 PLR');
+    handle.destroy();
+  });
+});
+
+// Wave 2A — limit-mode "target already met" pre-check warning. Compares
+// current MID (chart price) against the user-typed display target.
+describe('mountTradePanel — Wave 2A target-already-met warning', () => {
+  const COUNTRY_TOKEN = {
+    address: '0xdddd000000000000000000000000000000000001',
+    symbol: 'BRA',
+    pricePitch: 1, // MID = 1 PITCH per BRA
+  };
+
+  it('limit-buy warns when target ≥ MID', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    // target = 2 PITCH ≥ current MID (1) → warning
+    trigger.value = '2';
+    trigger.dispatchEvent(new Event('input'));
+    const hint = container.querySelector('[data-test-id="trade-limit-hint"]');
+    expect(hint.textContent.toLowerCase()).toContain('immediately');
+    handle.destroy();
+  });
+
+  it('limit-buy does NOT warn when target < MID', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '0.5'; // < MID 1 → no warning
+    trigger.dispatchEvent(new Event('input'));
+    const hint = container.querySelector('[data-test-id="trade-limit-hint"]');
+    expect(hint.textContent.toLowerCase()).not.toContain('immediately');
+    handle.destroy();
+  });
+
+  it('take-profit warns when target ≤ MID', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="side-sell"]').click();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '0.5'; // ≤ MID 1 → warning for sell
+    trigger.dispatchEvent(new Event('input'));
+    const hint = container.querySelector('[data-test-id="trade-limit-hint"]');
+    expect(hint.textContent.toLowerCase()).toContain('immediately');
     handle.destroy();
   });
 });

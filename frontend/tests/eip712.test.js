@@ -8,10 +8,12 @@ import {
   ORDER_TYPES,
   DEFAULT_TTL_PRESETS,
   buildOrderTypedData,
+  buildSignableOrder,
   randomNonce,
   validateOrderShape,
   serializeOrder,
 } from '../src/eip712.js';
+import { displayToExecution } from '../src/lib/fee.js';
 
 const EXECUTOR = '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5';
 const OWNER = '0x71ecd1a09380ca46cca741bc48d04c556674756f';
@@ -179,6 +181,64 @@ describe('validateOrderShape', () => {
   it('rejects malformed nonce', () => {
     expect(() => validateOrderShape(makeValidOrder({ nonce: '0xbeef' }))).toThrow(/nonce/);
     expect(() => validateOrderShape(makeValidOrder({ nonce: 123 }))).toThrow(/nonce/);
+  });
+});
+
+describe('buildSignableOrder', () => {
+  const WEI = 10n ** 18n;
+
+  it('limit-buy (side=0): signed target = display × 10000 / 9500 (ASK)', () => {
+    const order = makeValidOrder({ side: 0, targetPrice: 10n * WEI });
+    const { signOrder, displayTargetPriceWei, signedTargetPriceWei } = buildSignableOrder(order);
+    expect(displayTargetPriceWei).toBe(10n * WEI);
+    expect(signedTargetPriceWei).toBe(displayToExecution(10n * WEI, 'limit-buy'));
+    expect(signOrder.targetPrice).toBe(signedTargetPriceWei);
+    // Sanity: signed > display for buys.
+    expect(signedTargetPriceWei > displayTargetPriceWei).toBe(true);
+  });
+
+  it('take-profit (side=1): signed target = display × 9500 / 10000 (BID)', () => {
+    const order = makeValidOrder({ side: 1, targetPrice: 10n * WEI });
+    const { signOrder, displayTargetPriceWei, signedTargetPriceWei } = buildSignableOrder(order);
+    expect(displayTargetPriceWei).toBe(10n * WEI);
+    expect(signedTargetPriceWei).toBe(displayToExecution(10n * WEI, 'take-profit'));
+    expect(signOrder.targetPrice).toBe(signedTargetPriceWei);
+    // Sanity: signed < display for sells.
+    expect(signedTargetPriceWei < displayTargetPriceWei).toBe(true);
+  });
+
+  it('does not mutate the input order', () => {
+    const order = makeValidOrder({ side: 0, targetPrice: 10n * WEI });
+    const before = { ...order };
+    buildSignableOrder(order);
+    expect(order).toEqual(before);
+  });
+
+  it('preserves all non-target fields verbatim', () => {
+    const order = makeValidOrder({ side: 0, targetPrice: 10n * WEI, slippageBps: 200 });
+    const { signOrder } = buildSignableOrder(order);
+    expect(signOrder.owner).toBe(order.owner);
+    expect(signOrder.token).toBe(order.token);
+    expect(signOrder.quoteToken).toBe(order.quoteToken);
+    expect(signOrder.venue).toBe(order.venue);
+    expect(signOrder.side).toBe(order.side);
+    expect(signOrder.amountIn).toBe(order.amountIn);
+    expect(signOrder.slippageBps).toBe(200);
+    expect(signOrder.expiry).toBe(order.expiry);
+    expect(signOrder.nonce).toBe(order.nonce);
+  });
+
+  it('rejects invalid side', () => {
+    expect(() => buildSignableOrder(makeValidOrder({ side: 2 }))).toThrow(/side/);
+  });
+
+  it('rejects non-positive targetPrice', () => {
+    expect(() => buildSignableOrder(makeValidOrder({ targetPrice: 0 }))).toThrow(/targetPrice/);
+    expect(() => buildSignableOrder(makeValidOrder({ targetPrice: '-1' }))).toThrow(/targetPrice/);
+  });
+
+  it('rejects non-object input', () => {
+    expect(() => buildSignableOrder(null)).toThrow(/displayOrder/);
   });
 });
 
