@@ -235,6 +235,11 @@ export function mountLayout(root) {
     right,
     profile,
     footer,
+    // Phase 1.5 batch 8: expose the inner <main> grid container so
+    // mountResizable can insert drag-handle siblings between sidebar/center
+    // and center/right. Kept at the end of the handle so existing call-sites
+    // (which destructure named zones) aren't affected.
+    main,
     setMode,
     destroy,
   };

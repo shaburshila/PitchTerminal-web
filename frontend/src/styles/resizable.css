@@ -1,0 +1,137 @@
+/*
+ * Phase 1.5 batch 8: resizable panels — drag-handle visuals.
+ *
+ * Layout integration:
+ *   - .pt-main becomes a 5-column grid: [sidebar][handle-V][center][handle-V][right]
+ *   - .pt-center becomes a 3-row flex/grid: [chart][handle-H][bottom]
+ *   The actual column / row sizing is driven by inline CSS-var overrides on
+ *   .pt-main / .pt-center (see resizable.js — sets --sidebar-w, --right-w,
+ *   --chart-h after a drag or on init from localStorage). When the JS hasn't
+ *   mounted yet, CSS falls back to the tokens.css / styles.css defaults so a
+ *   FOUC-free first paint is preserved.
+ *
+ * Hit-area is wider than the visible line (8px wide vs. 1px line) so coarse
+ * pointers can grab the handle without pixel-hunting. Visible feedback comes
+ * from `:hover` and `[data-dragging="true"]`.
+ */
+
+.pt-handle {
+  position: relative;
+  background: transparent;
+  /* tokens.css line color — fall back to legacy var, then hard color. */
+  --pt-handle-line: var(--line, var(--border, #2a3140));
+  --pt-handle-hover: var(--accent, #3ddb8e);
+  z-index: 1;
+  flex: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.pt-handle--v {
+  width: 6px;
+  cursor: col-resize;
+  align-self: stretch;
+}
+
+.pt-handle--h {
+  height: 6px;
+  cursor: row-resize;
+  justify-self: stretch;
+}
+
+/* Thin visible line centered inside the hit-area. */
+.pt-handle::after {
+  content: '';
+  position: absolute;
+  background: var(--pt-handle-line);
+  transition: background 120ms ease;
+}
+
+.pt-handle--v::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.pt-handle--h::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.pt-handle:hover::after,
+.pt-handle[data-dragging='true']::after {
+  background: var(--pt-handle-hover);
+}
+
+.pt-handle--v:hover::after,
+.pt-handle--v[data-dragging='true']::after {
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+.pt-handle--h:hover::after,
+.pt-handle--h[data-dragging='true']::after {
+  height: 2px;
+  transform: translateY(-1px);
+}
+
+.pt-handle:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent, #3a7bff));
+  outline-offset: -2px;
+}
+
+/* Override the legacy .pt-main grid (styles.css line ~162) so the inserted
+   handle columns get explicit tracks. The variables --sidebar-w / --right-w
+   are already declared on :root; resizable.js sets them as inline styles on
+   .pt-main when the user drags or on init from localStorage.
+
+   The `body.mode-profile` rule in styles.css uses `1fr` which we leave intact
+   — when in profile mode the handles are hidden anyway (display:none below).
+*/
+.pt-main.pt-main--resizable {
+  grid-template-columns:
+    var(--sidebar-w)
+    auto
+    1fr
+    auto
+    var(--right-w);
+}
+
+body.mode-profile .pt-main.pt-main--resizable {
+  grid-template-columns: 1fr;
+}
+
+body.mode-profile .pt-handle {
+  display: none;
+}
+
+/* .pt-center already flex-column; the horizontal handle just sits between
+   .pt-center__chart (flex: 1) and .pt-center__bottom (flex: 0 0 320px).
+   We toggle to a row-based grid only when resizable mode is on so chart
+   height becomes user-controlled.
+
+   Default --chart-h is "1fr" (chart takes remaining space), which mirrors
+   the legacy `flex: 1 1 auto` behavior. After the first drag the JS swaps
+   --chart-h to a px value and --bottom-h becomes 1fr (chart wins fixed,
+   bottom fills) — see resizable.js.
+*/
+.pt-center.pt-center--resizable {
+  display: grid;
+  grid-template-rows: var(--chart-h, 1fr) auto var(--bottom-h, 320px);
+}
+
+.pt-center.pt-center--resizable > .pt-center__chart {
+  min-height: 0;
+}
+
+.pt-center.pt-center--resizable > .pt-center__bottom {
+  /* flex constraints from styles.css are inert here (grid context), but the
+     border-top + overflow:auto still apply. Drop the fixed flex-basis so the
+     grid track wins. */
+  flex: initial;
+}

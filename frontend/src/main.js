@@ -10,7 +10,10 @@ import './styles.css';
 // styles.css so the extended row grid (4 columns instead of 3) overrides
 // the base layout cleanly without touching the global stylesheet.
 import './styles/sidebar-batch3.css';
+// Phase 1.5 batch 8: resizable panel drag-handles.
+import './styles/resizable.css';
 import { mountLayout } from './layout.js';
+import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
 import { mountChart } from './chart.js';
 import { mountBottomTabs } from './components/bottom/index.js';
@@ -159,6 +162,25 @@ function bootstrap() {
   bottomZone.dataset.testId = 'center-bottom';
   layout.center.appendChild(chartZone);
   layout.center.appendChild(bottomZone);
+
+  // Phase 1.5 batch 8: insert resizable drag-handles between sidebar/center
+  // and chart/bottom. Mounted BEFORE mountChart so the CSS-var driven track
+  // sizes are already in place when lightweight-charts measures its host.
+  // Storage hydration happens inside mountResizable — when `pt.layout.v1` is
+  // present in localStorage, --sidebar-w/--right-w/--chart-h are set on the
+  // grid containers and chart.js's ResizeObserver picks up the new dimensions
+  // on first paint. Stored under `window.__pt_resizable` for debug + teardown.
+  const resizable = mountResizable({
+    main: layout.main,
+    sidebar: layout.sidebar,
+    center: layout.center,
+    right: layout.right,
+    chart: chartZone,
+    bottom: bottomZone,
+  });
+  if (typeof window !== 'undefined') {
+    window.__pt_resizable = resizable;
+  }
 
   const chart = mountChart(chartZone);
   // Phase 1.5 batch 4 wiring — when my-wallet-tab fetches a fresh position,
