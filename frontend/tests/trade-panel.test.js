@@ -64,6 +64,7 @@ const {
   percentOfBalance,
   applySlippage,
   resolveVenue,
+  resolveLimitSpenderAndToken,
   disabledReason,
   disabledReasonLimit,
   MAX_UINT256,
@@ -2501,10 +2502,13 @@ describe('mountTradePanel — F2.x limit mode', () => {
       getAccessState: () => 'premium',
       subscribeAccess: () => () => {},
       signTypedData,
+      // Wave 3 — pre-approved executor allowance so CTA goes straight to sign.
+      readAllowance: vi.fn().mockResolvedValue(MAX_UINT256),
     });
     await wallet.connectWallet('injected');
     await flush();
     container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush(); // Wave 3 — let the executor-allowance read settle.
     const amount = container.querySelector('[data-test-id="trade-amount"]');
     amount.value = '1';
     amount.dispatchEvent(new Event('input'));
@@ -2558,10 +2562,12 @@ describe('mountTradePanel — F2.x limit mode', () => {
       getAccessState: () => 'premium',
       subscribeAccess: () => () => {},
       signTypedData,
+      readAllowance: vi.fn().mockResolvedValue(MAX_UINT256),
     });
     await wallet.connectWallet('injected');
     await flush();
     container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
     const amount = container.querySelector('[data-test-id="trade-amount"]');
     amount.value = '1';
     amount.dispatchEvent(new Event('input'));
@@ -2590,10 +2596,12 @@ describe('mountTradePanel — F2.x limit mode', () => {
       getAccessState: () => 'premium',
       subscribeAccess: () => () => {},
       signTypedData,
+      readAllowance: vi.fn().mockResolvedValue(MAX_UINT256),
     });
     await wallet.connectWallet('injected');
     await flush();
     container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
     const amount = container.querySelector('[data-test-id="trade-amount"]');
     amount.value = '1';
     amount.dispatchEvent(new Event('input'));
@@ -3025,6 +3033,435 @@ describe('mountTradePanel — Wave 2A target-already-met warning', () => {
     trigger.dispatchEvent(new Event('input'));
     const hint = container.querySelector('[data-test-id="trade-limit-hint"]');
     expect(hint.textContent.toLowerCase()).toContain('immediately');
+    handle.destroy();
+  });
+});
+
+// ─── Wave 3 — limit-mode executor allowance + approve flow ─────────────────
+//
+// Bug fixed: keeper pre-flight `eth_call` reverted with ERC20 insufficient
+// allowance because users never approved the executor. Mirrors the F1.2
+// market-mode pattern but against the LimitOrderExecutor address rather than
+// the venue router. See `resolveLimitSpenderAndToken` in src/trade-panel.js.
+
+describe('resolveLimitSpenderAndToken', () => {
+  const executor = '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5';
+  const playerVenue = {
+    venue: 'player',
+    baseToken: '0x3333333333333333333333333333333333333333',
+    quoteToken: '0x4444444444444444444444444444444444444444',
+  };
+  const countryVenue = {
+    venue: 'country',
+    baseToken: '0x5555555555555555555555555555555555555555',
+    quoteToken: '0xeae13ea73bec936664a51734c8c01ec7c3b0699c',
+  };
+
+  it('limit-buy on player venue spends the country (quote) token', () => {
+    const out = resolveLimitSpenderAndToken({ side: 'buy', venue: playerVenue, executor });
+    expect(out).toEqual({ spendingToken: playerVenue.quoteToken, spender: executor });
+  });
+
+  it('take-profit on player venue spends the player (base) token', () => {
+    const out = resolveLimitSpenderAndToken({ side: 'sell', venue: playerVenue, executor });
+    expect(out).toEqual({ spendingToken: playerVenue.baseToken, spender: executor });
+  });
+
+  it('limit-buy on country venue spends PITCH (quote)', () => {
+    const out = resolveLimitSpenderAndToken({ side: 'buy', venue: countryVenue, executor });
+    expect(out).toEqual({ spendingToken: countryVenue.quoteToken, spender: executor });
+  });
+
+  it('take-profit on country venue spends the country (base) token', () => {
+    const out = resolveLimitSpenderAndToken({ side: 'sell', venue: countryVenue, executor });
+    expect(out).toEqual({ spendingToken: countryVenue.baseToken, spender: executor });
+  });
+
+  it('returns null without an executor address', () => {
+    expect(
+      resolveLimitSpenderAndToken({ side: 'buy', venue: playerVenue, executor: null }),
+    ).toBeNull();
+    expect(
+      resolveLimitSpenderAndToken({ side: 'buy', venue: playerVenue, executor: '' }),
+    ).toBeNull();
+  });
+
+  it('returns null without a venue', () => {
+    expect(resolveLimitSpenderAndToken({ side: 'buy', venue: null, executor })).toBeNull();
+  });
+
+  it('lowercases the spender + spending token', () => {
+    const upper = '0xB22F38A0C133A32AB9582ACE9E2DA41D1738B9D5';
+    const out = resolveLimitSpenderAndToken({
+      side: 'buy',
+      venue: {
+        venue: 'player',
+        baseToken: '0xAA' + 'A'.repeat(38),
+        quoteToken: '0xBB' + 'B'.repeat(38),
+      },
+      executor: upper,
+    });
+    expect(out.spender).toBe(upper.toLowerCase());
+    expect(out.spendingToken).toBe(('0xBB' + 'B'.repeat(38)).toLowerCase());
+  });
+});
+
+describe('disabledReasonLimit — Wave 3 allowance branches', () => {
+  const base = {
+    walletConnected: true,
+    chainId: 8453,
+    token: { address: '0x3333333333333333333333333333333333333333' },
+    contractsReady: true,
+    executorReady: true,
+    amountWei: 10n ** 18n,
+    triggerPriceWei: 10n ** 18n,
+    slippageBps: 100,
+    premium: true,
+  };
+
+  it('approvePending beats everything except submitting', () => {
+    expect(disabledReasonLimit({ ...base, approvePending: true })).toMatch(/approve/i);
+    expect(disabledReasonLimit({ ...base, approvePending: true, walletConnected: false })).toMatch(
+      /approve/i,
+    );
+  });
+
+  it('submitting still beats approvePending', () => {
+    expect(
+      disabledReasonLimit({ ...base, submitting: true, approvePending: true }),
+    ).toMatch(/sign/i);
+  });
+
+  it('allowanceLoading blocks the CTA when no other reason fires', () => {
+    expect(disabledReasonLimit({ ...base, allowanceLoading: true })).toMatch(
+      /Checking allowance/i,
+    );
+  });
+
+  it('allowanceLoading is not a blocker once a prior reason hits', () => {
+    expect(
+      disabledReasonLimit({ ...base, allowanceLoading: true, amountWei: null }),
+    ).toMatch(/amount/i);
+  });
+});
+
+describe('mountTradePanel — Wave 3 limit-mode allowance read', () => {
+  it('reads executor allowance against the QUOTE token on player+Buy (limit-buy)', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    // The most recent allowance read targets the executor + the country
+    // (quote) token of the player venue.
+    const execCalls = readAllowance.mock.calls.filter(
+      ([arg]) => arg.spender === CONFIG.contracts.limitOrderExecutor,
+    );
+    expect(execCalls.length).toBeGreaterThan(0);
+    expect(execCalls.at(-1)[0].token).toBe(VALID_PLAYER_TOKEN.countryAddress.toLowerCase());
+    handle.destroy();
+  });
+
+  it('reads executor allowance against the BASE token on take-profit (sell)', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      readQuote: vi.fn().mockResolvedValue(50n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="side-sell"]').click();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const execCalls = readAllowance.mock.calls.filter(
+      ([arg]) => arg.spender === CONFIG.contracts.limitOrderExecutor,
+    );
+    expect(execCalls.length).toBeGreaterThan(0);
+    expect(execCalls.at(-1)[0].token).toBe(VALID_PLAYER_TOKEN.address.toLowerCase());
+    handle.destroy();
+  });
+});
+
+describe('mountTradePanel — Wave 3 limit-mode CTA mode (approve vs sign)', () => {
+  it('CTA label flips to "Approve" when executor allowance < amount', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.textContent).toBe('Approve');
+    expect(cta.dataset.action).toBe('limit-approve');
+    expect(cta.disabled).toBe(false);
+    handle.destroy();
+  });
+
+  it('CTA stays "Place limit-buy" when allowance ≥ amount', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(MAX_UINT256);
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.textContent).toMatch(/Place limit-buy/i);
+    expect(cta.dataset.action).toBe('limit');
+    expect(cta.disabled).toBe(false);
+    handle.destroy();
+  });
+
+  it('take-profit shows "Place take-profit" CTA when allowance suffices', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(MAX_UINT256);
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="side-sell"]').click();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.textContent).toMatch(/Place take-profit/i);
+    expect(cta.dataset.action).toBe('limit');
+    handle.destroy();
+  });
+});
+
+describe('mountTradePanel — Wave 3 limit-mode approve trigger', () => {
+  it('clicking Approve calls payment.approve with MAX_UINT256 + executor spender', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const approve = vi.fn().mockResolvedValue('0xapprovehash');
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+    const arg = approve.mock.calls[0][0];
+    expect(arg.spender).toBe(CONFIG.contracts.limitOrderExecutor);
+    // Player+Buy → spending = country (quote) token.
+    expect(arg.token).toBe(VALID_PLAYER_TOKEN.countryAddress.toLowerCase());
+    expect(arg.amount).toBe(MAX_UINT256);
+    expect(typeof arg.owner).toBe('string');
+    handle.destroy();
+  });
+
+  it('approve success: re-reads allowance and CTA flips to "Place limit-buy"', async () => {
+    const readAllowance = vi
+      .fn()
+      .mockResolvedValueOnce(0n) // initial mount
+      .mockResolvedValueOnce(0n) // mode toggle
+      .mockResolvedValue(MAX_UINT256); // after approve
+    const approve = vi.fn().mockResolvedValue('0xhash');
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(approve).toHaveBeenCalledTimes(1);
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.textContent).toMatch(/Place limit-buy/i);
+    expect(cta.dataset.action).toBe('limit');
+    expect(handle.getState().limitApprovePending).toBe(false);
+    handle.destroy();
+  });
+
+  it('approve in-flight → CTA shows "Approve…" + disabled', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    let resolveApprove;
+    const approveProm = new Promise((r) => {
+      resolveApprove = r;
+    });
+    const approve = vi.fn().mockReturnValue(approveProm);
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.textContent).toBe('Approve…');
+    expect(cta.disabled).toBe(true);
+    expect(handle.getState().limitApprovePending).toBe(true);
+    resolveApprove('0xhash');
+    await flush();
+    handle.destroy();
+  });
+
+  it('user-rejected approve does NOT surface an error toast and clears pending', async () => {
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const rejection = Object.assign(new Error('User rejected'), { code: 4001 });
+    const approve = vi.fn().mockRejectedValue(rejection);
+    const payment = makePayment({ readAllowance, approve });
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(document.querySelector('[data-test-id="toast"]')).toBeNull();
+    expect(handle.getState().limitApprovePending).toBe(false);
+    handle.destroy();
+  });
+
+  it('insufficient allowance blocks the sign-and-POST path (no signTypedData call)', async () => {
+    // Regression: pre-Wave-3, the CTA went straight to sign+POST even when the
+    // executor had zero allowance, causing the keeper's pre-flight `eth_call`
+    // to revert later. The CTA must surface Approve first.
+    const readAllowance = vi.fn().mockResolvedValue(0n);
+    const signTypedData = vi.fn();
+    const createOrder = vi.fn();
+    const payment = makePayment({ readAllowance });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      readBalance: vi.fn().mockResolvedValue(100n * 10n ** 18n),
+      payment,
+      signTypedData,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    // CTA should be Approve, not "Place limit-buy".
+    expect(cta.dataset.action).toBe('limit-approve');
+    expect(signTypedData).not.toHaveBeenCalled();
+    expect(createOrder).not.toHaveBeenCalled();
     handle.destroy();
   });
 });
