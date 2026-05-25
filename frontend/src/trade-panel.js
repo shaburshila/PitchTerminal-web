@@ -50,6 +50,13 @@ import * as defaultApi from './api.js';
 import { getAccount, onAccountChange, BASE_CHAIN_ID } from './wallet.js';
 import { showToast } from './ui/toast.js';
 import { get as getAccessState, subscribe as subscribeAccessState } from './access-store.js';
+import {
+  DEFAULT_TTL_PRESETS as TTL_PRESETS,
+  buildOrderTypedData,
+  randomNonce,
+  serializeOrder,
+  validateOrderShape,
+} from './eip712.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -57,6 +64,11 @@ const QUOTE_DEBOUNCE_MS = 400;
 const DEFAULT_SLIPPAGE_PCT = 1.0;
 const MAX_SLIPPAGE_PCT = 10.0; // matches LimitOrderExecutor MAX_SLIPPAGE_BPS = 1000
 const PITCHWC_FEE_BPS = 500; // pitchwc 5% — informational, the Hook quote already nets it out
+
+// F2.x — limit-order defaults. The TTL preset list lives in `eip712.js` so the
+// unit tests can verify the canonical shape; we only re-export the default
+// selection (1h, conservative for first-time users).
+const DEFAULT_TTL_SECONDS = 3600;
 
 const TABS = Object.freeze(['buy', 'sell']);
 
@@ -318,6 +330,47 @@ export function disabledReason(ctx) {
   return null;
 }
 
+// ─── F2.x — limit-order CTA disabled reason ─────────────────────────────────
+
+/**
+ * Reason string for disabling the limit-order submit CTA, or null if enabled.
+ * Limit mode has its own validators (no allowance/quote — the order is signed
+ * off-chain; allowance only matters when the keeper later calls `execute()`),
+ * so we keep this isolated from the market `disabledReason`.
+ *
+ * Order matters — first hit wins. `submitting` takes top priority so an
+ * in-flight signature/network request always shows the in-flight label.
+ *
+ * @param {{
+ *   walletConnected: boolean,
+ *   chainId: number|null,
+ *   token: object|null,
+ *   contractsReady: boolean,
+ *   executorReady: boolean,
+ *   amountWei: bigint|null,
+ *   triggerPriceWei: bigint|null,
+ *   slippageBps: number,
+ *   premium: boolean,
+ *   submitting?: boolean,
+ * }} ctx
+ * @returns {string|null}
+ */
+export function disabledReasonLimit(ctx) {
+  if (ctx.submitting) return 'Signing limit order…';
+  if (!ctx.walletConnected) return 'Connect wallet';
+  if (ctx.chainId !== BASE_CHAIN_ID) return 'Switch to Base';
+  if (!ctx.premium) return 'Premium feature';
+  if (!ctx.token) return 'Select a token';
+  if (!ctx.contractsReady) return 'Loading config…';
+  if (!ctx.executorReady) return 'Limit-order contract unavailable';
+  if (!ctx.amountWei || ctx.amountWei <= 0n) return 'Enter amount';
+  if (!ctx.triggerPriceWei || ctx.triggerPriceWei <= 0n) return 'Enter trigger price';
+  if (typeof ctx.slippageBps === 'number' && (ctx.slippageBps < 0 || ctx.slippageBps > 1000)) {
+    return 'Slippage must be ≤ 10%';
+  }
+  return null;
+}
+
 // ─── Pro-cover (Batch 5) — pay-modal lazy import ────────────────────────────
 
 /**
@@ -416,6 +469,24 @@ async function getDefaultPaymentClient() {
   if (_defaultPaymentClient) return _defaultPaymentClient;
   _defaultPaymentClient = await buildDefaultPaymentClient();
   return _defaultPaymentClient;
+}
+
+// F2.x — lazy wagmi-backed signTypedData. Returns a 0x-prefixed hex signature
+// for the given typedData (Order). Tests inject `options.signTypedData` to
+// skip the wagmi import.
+async function defaultSignTypedData({ account, typedData }) {
+  const [{ getWagmiConfig }, wagmi] = await Promise.all([
+    import('./wallet.js'),
+    import('@wagmi/core'),
+  ]);
+  const config = getWagmiConfig();
+  return wagmi.signTypedData(config, {
+    account,
+    domain: typedData.domain,
+    types: typedData.types,
+    primaryType: typedData.primaryType,
+    message: typedData.message,
+  });
 }
 
 /**
@@ -544,6 +615,10 @@ export function mountTradePanel(container, options = {}) {
   // viem/wagmi client on first use.
   const paymentOverride = options.payment ?? null;
 
+  // F2.x — signing seam. Tests inject `options.signTypedData` to bypass wagmi.
+  const signTypedDataOverride =
+    typeof options.signTypedData === 'function' ? options.signTypedData : null;
+
   // F1.3 — callback to ask the host to switch to the country token row.
   // Optional — if absent the "Купить country" CTA is hidden entirely so the
   // standalone panel still degrades gracefully.
@@ -593,6 +668,12 @@ export function mountTradePanel(container, options = {}) {
     // (e.g. "BRA") instead of the `shortenAddress` fallback in the country
     // balance line, hint block, and disabledReason text.
     countrySymbolMap: new Map(),
+    // F2.x — limit-order form state.
+    chainId: BASE_CHAIN_ID,
+    limitTriggerPriceStr: '',
+    limitTtlSec: DEFAULT_TTL_SECONDS,
+    limitSubmitting: false,
+    limitError: null,
   };
 
   // ── Build skeleton (build-once) ────────────────────────────────────────
@@ -645,8 +726,7 @@ export function mountTradePanel(container, options = {}) {
     attrs: {
       type: 'button',
       'aria-pressed': 'false',
-      disabled: 'disabled',
-      title: 'Limit orders — phase 2',
+      title: 'Place a limit order (signed off-chain, executed when price hits target)',
     },
     text: 'Limit',
   });
@@ -776,6 +856,66 @@ export function mountTradePanel(container, options = {}) {
   hintBlock.appendChild(hintRequiredLine);
   hintBlock.appendChild(hintBalanceLine);
 
+  // F2.x — Limit order fields. Only visible when `state.mode === 'limit'`.
+  // Contains:
+  //   - target price input (number, in country/PITCH per docs/eip712.md §1)
+  //   - TTL preset select (1h / 24h / 7d / no expiry — see DEFAULT_TTL_PRESETS)
+  //   - inline preview "Trigger when price ≤ X" / "≥ X" depending on side
+  //   - error line for last submit failure
+  // The amount + slippage inputs are reused from market mode — they share
+  // the same signed-message fields (`amountIn`, `slippageBps`).
+  const limitBlock = el('div', {
+    className: 'pt-trade__limit',
+    dataset: { testId: 'trade-limit' },
+  });
+  limitBlock.hidden = true;
+  const limitPriceWrap = el('label', { className: 'pt-trade__limit-price' });
+  limitPriceWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Trigger price' }));
+  const limitPriceInput = el('input', {
+    className: 'pt-trade__input',
+    dataset: { testId: 'trade-limit-price' },
+    attrs: {
+      type: 'text',
+      inputmode: 'decimal',
+      placeholder: '0.0',
+      'aria-label': 'Limit-order trigger price',
+      autocomplete: 'off',
+    },
+  });
+  limitPriceWrap.appendChild(limitPriceInput);
+  limitBlock.appendChild(limitPriceWrap);
+
+  const limitTtlWrap = el('label', { className: 'pt-trade__limit-ttl' });
+  limitTtlWrap.appendChild(el('span', { className: 'pt-trade__label', text: 'Expires in' }));
+  const limitTtlSelect = el('select', {
+    className: 'pt-trade__input pt-trade__input--ttl',
+    dataset: { testId: 'trade-limit-ttl' },
+    attrs: { 'aria-label': 'Limit-order expiry' },
+  });
+  for (const preset of TTL_PRESETS) {
+    const opt = el('option', {
+      attrs: { value: String(preset.seconds) },
+      text: preset.label,
+    });
+    limitTtlSelect.appendChild(opt);
+  }
+  limitTtlSelect.value = String(DEFAULT_TTL_SECONDS);
+  limitTtlWrap.appendChild(limitTtlSelect);
+  limitBlock.appendChild(limitTtlWrap);
+
+  const limitHint = el('div', {
+    className: 'pt-trade__limit-hint',
+    dataset: { testId: 'trade-limit-hint' },
+  });
+  limitBlock.appendChild(limitHint);
+
+  const limitError = el('div', {
+    className: 'pt-trade__limit-error',
+    dataset: { testId: 'trade-limit-error' },
+  });
+  limitError.hidden = true;
+  limitBlock.appendChild(limitError);
+
   // CTA button (disabled in F1.1 — wired in F1.2).
   const cta = el('button', {
     className: 'pt-btn pt-btn--primary pt-trade__cta',
@@ -814,6 +954,7 @@ export function mountTradePanel(container, options = {}) {
   body.appendChild(slipWrap);
   body.appendChild(quoteBlock);
   body.appendChild(hintBlock);
+  body.appendChild(limitBlock);
   body.appendChild(cta);
   body.appendChild(countryCta);
   body.appendChild(status);
@@ -1076,7 +1217,40 @@ export function mountTradePanel(container, options = {}) {
     quoteFeeLine.textContent = `pitchwc fee: ${(PITCHWC_FEE_BPS / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
   }
 
+  // F2.x — limit-mode render: trigger-price hint + error line. Visible only
+  // when `state.mode === 'limit'`. Reads from state and the live input.
+  function renderLimit() {
+    if (state.mode !== 'limit') {
+      limitError.hidden = true;
+      limitHint.textContent = '';
+      return;
+    }
+    const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
+    if (triggerWei && triggerWei > 0n) {
+      const op = state.side === 'buy' ? '≤' : '≥';
+      const price = formatWei(triggerWei, 6);
+      const quoteSym = isPlayerBuy() ? symbolForCountry(state.token?.countryAddress) : 'PITCH';
+      const side = state.side === 'buy' ? 'limit-buy' : 'take-profit';
+      limitHint.textContent = `${side}: trigger when price ${op} ${price} ${quoteSym}`;
+    } else {
+      limitHint.textContent = state.token
+        ? 'Enter a trigger price in the quote currency.'
+        : 'Select a token first.';
+    }
+    if (state.limitError) {
+      limitError.hidden = false;
+      limitError.textContent = state.limitError;
+    } else {
+      limitError.hidden = true;
+      limitError.textContent = '';
+    }
+  }
+
   function renderCta() {
+    if (state.mode === 'limit') {
+      renderLimitCta();
+      return;
+    }
     const amountWei = parseAmountToWei(state.amountStr);
     const playerBuy = isPlayerBuy();
     const countrySymbol = playerBuy ? symbolForCountry(state.token?.countryAddress) : null;
@@ -1087,7 +1261,7 @@ export function mountTradePanel(container, options = {}) {
       contractsReady: !!state.contracts,
       amountWei,
       balanceWei: state.balanceWei,
-      limitMode: state.mode === 'limit',
+      limitMode: false,
       approvePending: state.approvePending,
       swapPending: state.swapPending,
       allowanceLoading: state.allowanceLoading,
@@ -1147,6 +1321,37 @@ export function mountTradePanel(container, options = {}) {
     status.textContent = reason ?? '';
   }
 
+  /**
+   * F2.x — CTA wiring for limit mode. Distinct from `renderCta` so the market
+   * approve/swap state machine doesn't bleed into the sign-and-POST flow.
+   */
+  function renderLimitCta() {
+    const amountWei = parseAmountToWei(state.amountStr);
+    const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
+    const slippageBps = Math.round((state.slippagePct || 0) * 100);
+    const premium = _getAccessState() === 'premium';
+    const reason = disabledReasonLimit({
+      walletConnected: state.account.isConnected,
+      chainId: state.account.chainId,
+      token: state.token,
+      contractsReady: !!state.contracts,
+      executorReady: !!state.contracts?.limitOrderExecutor,
+      amountWei,
+      triggerPriceWei: triggerWei,
+      slippageBps,
+      premium,
+      submitting: state.limitSubmitting,
+    });
+    cta.textContent = state.limitSubmitting
+      ? 'Signing…'
+      : state.side === 'buy'
+        ? 'Place limit-buy'
+        : 'Place take-profit';
+    cta.dataset.action = 'limit';
+    cta.disabled = reason != null;
+    status.textContent = reason ?? '';
+  }
+
   // Batch 5 — sticky-header label tracks the currently selected token's
   // symbol. Falls back to "Trade" when no token is picked (e.g. first paint
   // before sidebar has resolved a row).
@@ -1179,6 +1384,7 @@ export function mountTradePanel(container, options = {}) {
     renderBalance();
     renderQuote();
     renderHint();
+    renderLimit();
     renderCta();
     renderCover();
   }
@@ -1391,13 +1597,20 @@ export function mountTradePanel(container, options = {}) {
     const target = ev.target instanceof Element ? ev.target.closest('[data-mode]') : null;
     if (!(target instanceof HTMLElement)) return;
     const mode = target.dataset.mode;
-    if (mode === 'limit') {
-      // Disabled — phase 2.
-      return;
-    }
-    if (mode !== 'market' || state.mode === mode) return;
+    if (mode !== 'market' && mode !== 'limit') return;
+    if (state.mode === mode) return;
     state.mode = mode;
-    renderCta();
+    // F2.x — reflect mode toggle on buttons + show/hide limit-only fields.
+    marketBtn.classList.toggle('is-active', state.mode === 'market');
+    marketBtn.setAttribute('aria-pressed', state.mode === 'market' ? 'true' : 'false');
+    limitBtn.classList.toggle('is-active', state.mode === 'limit');
+    limitBtn.setAttribute('aria-pressed', state.mode === 'limit' ? 'true' : 'false');
+    limitBlock.hidden = state.mode !== 'limit';
+    // Quote block is market-only — limit mode has its own preview line inside
+    // `limitBlock`. Hide the live-quote area to avoid confusion ("You receive
+    // ≈ X" against an unrelated `quoteBuy` quote).
+    quoteBlock.hidden = state.mode === 'limit';
+    renderAll();
   }
 
   function onAmountInput() {
@@ -1557,15 +1770,110 @@ export function mountTradePanel(container, options = {}) {
     }
   }
 
+  // F2.x — limit-order submit: build typedData → wallet signs → POST /orders.
+  // The function is the limit-mode counterpart of `onSwapClick`; both share
+  // the same disabled-state guards but live in separate code paths because
+  // their dependencies (quote vs signature) are disjoint.
+  async function onPlaceLimitClick() {
+    if (state.limitSubmitting) return;
+    const amountWei = parseAmountToWei(state.amountStr);
+    const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
+    if (!amountWei || amountWei <= 0n) return;
+    if (!triggerWei || triggerWei <= 0n) return;
+    if (!state.account.isConnected || !state.account.address) return;
+    if (!state.contracts?.limitOrderExecutor) return;
+    const v = resolveVenue(state.token, state.contracts?.pitch);
+    if (!v) return;
+
+    // Per docs/eip712.md §3.3 — venue 0=player, 1=country; side 0=limit-buy,
+    // 1=take-profit. Frontend maps Buy → limit-buy, Sell → take-profit.
+    const order = {
+      owner: state.account.address.toLowerCase(),
+      token: v.baseToken,
+      quoteToken: v.quoteToken,
+      venue: v.venue === 'player' ? 0 : 1,
+      side: state.side === 'buy' ? 0 : 1,
+      targetPrice: triggerWei,
+      amountIn: amountWei,
+      slippageBps: Math.round((state.slippagePct || 0) * 100),
+      expiry: state.limitTtlSec > 0 ? Math.floor(Date.now() / 1000) + state.limitTtlSec : 0,
+      nonce: randomNonce(),
+    };
+
+    // UI-side sanity check — keeps us from popping the wallet signer for an
+    // obviously-malformed payload. Server still re-validates.
+    try {
+      validateOrderShape(order);
+    } catch (err) {
+      state.limitError = errorMessage(err, 'Invalid order');
+      renderLimit();
+      return;
+    }
+
+    state.limitError = null;
+    state.limitSubmitting = true;
+    renderLimit();
+    renderCta();
+
+    const typedData = buildOrderTypedData(order, state.contracts.limitOrderExecutor, state.chainId);
+    const signer = signTypedDataOverride ?? defaultSignTypedData;
+
+    try {
+      const signature = await signer({ account: state.account.address, typedData });
+      if (typeof signature !== 'string' || !signature.startsWith('0x')) {
+        throw new Error('Wallet returned an invalid signature');
+      }
+      const payload = serializeOrder(order);
+      await apiClient.createOrder(payload, signature);
+      showToast(state.side === 'buy' ? 'Limit-buy order placed' : 'Take-profit order placed', {
+        kind: 'info',
+      });
+      // Clear the form so a follow-up order doesn't accidentally reuse the
+      // previous trigger. Amount + slippage stay so the user can tweak +
+      // resubmit without retyping.
+      state.limitTriggerPriceStr = '';
+      limitPriceInput.value = '';
+    } catch (err) {
+      if (isUserRejection(err)) {
+        // User declined in the wallet — surface a soft notice + clear the
+        // submitting flag, no toast (matches access.js pay-flow UX).
+        state.limitError = null;
+      } else {
+        state.limitError = errorMessage(err, 'Failed to place order');
+        showToast(state.limitError, { kind: 'error' });
+      }
+    } finally {
+      state.limitSubmitting = false;
+      renderLimit();
+      renderCta();
+    }
+  }
+
   function onCtaClick() {
     // Defensive — disabled CTA can still fire in some happy-dom paths.
     if (cta.disabled) return;
     const action = cta.dataset.action;
+    if (action === 'limit') {
+      onPlaceLimitClick();
+      return;
+    }
     if (action === 'approve') {
       onApproveClick();
     } else {
       onSwapClick();
     }
+  }
+
+  // F2.x — limit-form input wiring.
+  function onLimitPriceInput() {
+    state.limitTriggerPriceStr = limitPriceInput.value;
+    renderLimit();
+    renderCta();
+  }
+
+  function onLimitTtlChange() {
+    const v = Number(limitTtlSelect.value);
+    state.limitTtlSec = Number.isFinite(v) && v >= 0 ? v : DEFAULT_TTL_SECONDS;
   }
 
   // F1.3 — country shortcut: fires only when the button is visible (gated by
@@ -1601,6 +1909,8 @@ export function mountTradePanel(container, options = {}) {
   cta.addEventListener('click', onCtaClick);
   countryCta.addEventListener('click', onCountryCtaClick);
   coverCta.addEventListener('click', onCoverCtaClick);
+  limitPriceInput.addEventListener('input', onLimitPriceInput);
+  limitTtlSelect.addEventListener('change', onLimitTtlChange);
 
   // Batch 5 — subscribe to access-store transitions so the cover flips off
   // (premium grant) or back on (account switch → unknown/free) without the
@@ -1642,13 +1952,23 @@ export function mountTradePanel(container, options = {}) {
   function applyContracts(cfg) {
     if (!cfg || typeof cfg !== 'object') return;
     const c = cfg.contracts || {};
+    // F2.x — also stash the LimitOrderExecutor address (verifyingContract in
+    // the EIP-712 domain). Treat the well-known "all-zeros placeholder" as
+    // unset so the limit-CTA stays disabled before the contract is deployed.
+    const exec =
+      typeof c.limitOrderExecutor === 'string' ? c.limitOrderExecutor.toLowerCase() : null;
+    const execValid = exec && exec !== '0x0000000000000000000000000000000000000000' ? exec : null;
     state.contracts = {
       pitch: typeof c.pitch === 'string' ? c.pitch.toLowerCase() : null,
       playerHook: typeof c.playerHook === 'string' ? c.playerHook.toLowerCase() : null,
       countryHook: typeof c.countryHook === 'string' ? c.countryHook.toLowerCase() : null,
       playerRouter: typeof c.playerRouter === 'string' ? c.playerRouter.toLowerCase() : null,
       countryRouter: typeof c.countryRouter === 'string' ? c.countryRouter.toLowerCase() : null,
+      limitOrderExecutor: execValid,
     };
+    // F2.x — `chainId` from the config response wins over the hardcoded
+    // BASE_CHAIN_ID for typedData signing. Falls back to Base (8453).
+    state.chainId = typeof cfg.chainId === 'number' && cfg.chainId > 0 ? cfg.chainId : 8453;
     configLoaded = true;
     refreshBalance();
     refreshAllowance();
@@ -1773,6 +2093,11 @@ export function mountTradePanel(container, options = {}) {
       token: state.token,
       account: state.account,
       contracts: state.contracts,
+      // F2.x — limit-mode state surfaced for tests + debug overlay.
+      limitTriggerPriceStr: state.limitTriggerPriceStr,
+      limitTtlSec: state.limitTtlSec,
+      limitSubmitting: state.limitSubmitting,
+      limitError: state.limitError,
     };
   }
 
@@ -1797,6 +2122,8 @@ export function mountTradePanel(container, options = {}) {
     cta.removeEventListener('click', onCtaClick);
     countryCta.removeEventListener('click', onCountryCtaClick);
     coverCta.removeEventListener('click', onCoverCtaClick);
+    limitPriceInput.removeEventListener('input', onLimitPriceInput);
+    limitTtlSelect.removeEventListener('change', onLimitTtlChange);
     unsubscribeAccount();
     try {
       unsubscribeAccess();

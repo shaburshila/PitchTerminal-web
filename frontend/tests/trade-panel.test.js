@@ -65,6 +65,7 @@ const {
   applySlippage,
   resolveVenue,
   disabledReason,
+  disabledReasonLimit,
   MAX_UINT256,
   _resetClientForTests,
 } = await import('../src/trade-panel.js');
@@ -81,6 +82,7 @@ const CONFIG = {
     countryHook: '0x1111111111111111111111111111111111111111',
     multicall3: '0xca11bde05977b3631167028862be2a173976ca11',
     access: '0x2222222222222222222222222222222222222222',
+    limitOrderExecutor: '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5',
   },
 };
 
@@ -270,7 +272,10 @@ describe('disabledReason', () => {
     expect(disabledReason(baseCtx)).toBeNull();
   });
 
-  it('flags limit mode', () => {
+  it('flags limit mode (legacy market-mode helper)', () => {
+    // F2.x — the market `disabledReason` helper retains its legacy short-circuit
+    // for `limitMode: true` so any caller still passing the old flag falls back
+    // to a disabled CTA. The new limit-mode flow uses `disabledReasonLimit`.
     expect(disabledReason({ ...baseCtx, limitMode: true })).toMatch(/phase 2/i);
   });
 
@@ -311,7 +316,8 @@ describe('mountTradePanel — DOM', () => {
     expect(container.querySelector('[data-test-id="mode-market"]')).toBeTruthy();
     const limit = container.querySelector('[data-test-id="mode-limit"]');
     expect(limit).toBeTruthy();
-    expect(limit.disabled).toBe(true);
+    // F2.x — Limit toggle is now enabled (phase 2 shipped).
+    expect(limit.disabled).toBe(false);
     expect(container.querySelector('[data-test-id="side-buy"]')).toBeTruthy();
     expect(container.querySelector('[data-test-id="side-sell"]')).toBeTruthy();
     expect(container.querySelector('[data-test-id="trade-amount"]')).toBeTruthy();
@@ -342,13 +348,18 @@ describe('mountTradePanel — DOM', () => {
     handle.destroy();
   });
 
-  it('clicking the disabled Limit toggle does nothing', async () => {
+  it('clicking the Limit toggle switches mode + reveals the limit form', async () => {
     const handle = mountTradePanel(container, { apiClient: makeApi() });
     await flush();
     const limitBtn = container.querySelector('[data-test-id="mode-limit"]');
     limitBtn.click();
-    // marketBtn still active
-    expect(container.querySelector('[data-test-id="mode-market"]').getAttribute('aria-pressed')).toBe('true');
+    expect(limitBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(
+      container.querySelector('[data-test-id="mode-market"]').getAttribute('aria-pressed'),
+    ).toBe('false');
+    expect(container.querySelector('[data-test-id="trade-limit"]')).toBeTruthy();
+    expect(container.querySelector('[data-test-id="trade-limit-price"]')).toBeTruthy();
+    expect(container.querySelector('[data-test-id="trade-limit-ttl"]')).toBeTruthy();
     handle.destroy();
   });
 
@@ -2350,5 +2361,246 @@ describe('mountTradePanel — batch 5 pro-cover', () => {
     await flush();
     expect(premiumHandle.isLocked()).toBe(false);
     premiumHandle.destroy();
+  });
+});
+
+// ─── F2.x — Limit-order mode + EIP-712 sign + POST /orders ─────────────────
+
+// Use a valid hex token for limit-mode tests so `validateOrderShape` accepts
+// the address. The shared `PLAYER_TOKEN` fixture uses an unrelated placeholder
+// (`0xpppp…`) — fine for market-mode tests that never validate address shape,
+// but rejected by the limit-mode pre-sign guard.
+const VALID_PLAYER_TOKEN = {
+  address: '0x3333333333333333333333333333333333333333',
+  symbol: 'PLR',
+  countryAddress: '0x4444444444444444444444444444444444444444',
+};
+
+describe('disabledReasonLimit', () => {
+  const base = {
+    walletConnected: true,
+    chainId: 8453,
+    token: VALID_PLAYER_TOKEN,
+    contractsReady: true,
+    executorReady: true,
+    amountWei: 10n ** 18n,
+    triggerPriceWei: 10n ** 18n,
+    slippageBps: 100,
+    premium: true,
+  };
+
+  it('returns null when everything is ready', () => {
+    expect(disabledReasonLimit(base)).toBeNull();
+  });
+
+  it('submitting beats all other reasons', () => {
+    expect(disabledReasonLimit({ ...base, submitting: true, walletConnected: false })).toMatch(
+      /sign/i,
+    );
+  });
+
+  it('flags non-premium', () => {
+    expect(disabledReasonLimit({ ...base, premium: false })).toMatch(/Premium/i);
+  });
+
+  it('flags missing executor address', () => {
+    expect(disabledReasonLimit({ ...base, executorReady: false })).toMatch(/contract/i);
+  });
+
+  it('flags missing trigger price', () => {
+    expect(disabledReasonLimit({ ...base, triggerPriceWei: null })).toMatch(/trigger/i);
+    expect(disabledReasonLimit({ ...base, triggerPriceWei: 0n })).toMatch(/trigger/i);
+  });
+
+  it('flags missing amount', () => {
+    expect(disabledReasonLimit({ ...base, amountWei: null })).toMatch(/amount/i);
+  });
+
+  it('flags out-of-range slippage', () => {
+    expect(disabledReasonLimit({ ...base, slippageBps: 1500 })).toMatch(/Slippage/);
+  });
+
+  it('flags wrong chain', () => {
+    expect(disabledReasonLimit({ ...base, chainId: 1 })).toMatch(/Base/);
+  });
+});
+
+describe('mountTradePanel — F2.x limit mode', () => {
+  it('toggling limit mode hides the market quote block', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    expect(container.querySelector('[data-test-id="trade-limit"]').hidden).toBe(false);
+    expect(container.querySelector('[data-test-id="trade-quote"]').hidden).toBe(true);
+    expect(container.querySelector('[data-test-id="trade-cta"]').textContent).toMatch(/limit-buy/i);
+    handle.destroy();
+  });
+
+  it('limit CTA stays disabled until amount + trigger price are entered', async () => {
+    const createOrder = vi.fn().mockResolvedValue({ id: '1' });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const cta = container.querySelector('[data-test-id="trade-cta"]');
+    expect(cta.disabled).toBe(true);
+
+    // Enter amount only — still disabled (no trigger price).
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    expect(cta.disabled).toBe(true);
+
+    // Enter trigger price — now enabled.
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    expect(cta.disabled).toBe(false);
+    handle.destroy();
+  });
+
+  it('non-premium user sees Premium reason on limit CTA', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN,
+      proCoverEnabled: false, // skip cover so DOM is queryable
+      getAccessState: () => 'free',
+      subscribeAccess: () => () => {},
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    const status = container.querySelector('[data-test-id="trade-status"]');
+    expect(status.textContent).toMatch(/Premium/i);
+    handle.destroy();
+  });
+
+  it('submitting signs typedData then POSTs /orders', async () => {
+    const signTypedData = vi.fn().mockResolvedValue('0x' + 'ab'.repeat(65));
+    const createOrder = vi.fn().mockResolvedValue({ id: '1', status: 'pending' });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+      signTypedData,
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    // Let the async chain resolve (sign → post).
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    const signArg = signTypedData.mock.calls[0][0];
+    expect(signArg.account).toBeDefined();
+    expect(signArg.typedData.primaryType).toBe('Order');
+    expect(signArg.typedData.domain.name).toBe('PitchTerminal LimitOrders');
+    expect(signArg.typedData.domain.verifyingContract).toBe(
+      '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5',
+    );
+    expect(signArg.typedData.message.targetPrice).toBe(12500000000000000000n);
+    expect(signArg.typedData.message.amountIn).toBe(1000000000000000000n);
+    // Player venue + Buy side → venue 0, side 0.
+    expect(signArg.typedData.message.venue).toBe(0);
+    expect(signArg.typedData.message.side).toBe(0);
+
+    expect(createOrder).toHaveBeenCalledTimes(1);
+    const [orderPayload, signature] = createOrder.mock.calls[0];
+    expect(signature).toMatch(/^0xab/);
+    expect(orderPayload.targetPrice).toBe('12500000000000000000');
+    expect(orderPayload.amountIn).toBe('1000000000000000000');
+    expect(orderPayload.token).toBe(VALID_PLAYER_TOKEN.address.toLowerCase());
+    expect(orderPayload.quoteToken).toBe(VALID_PLAYER_TOKEN.countryAddress.toLowerCase());
+
+    // Trigger price input cleared on success.
+    expect(handle.getState().limitTriggerPriceStr).toBe('');
+    handle.destroy();
+  });
+
+  it('user-rejected signature does NOT surface an error', async () => {
+    const rejection = Object.assign(new Error('User rejected'), { code: 4001 });
+    const signTypedData = vi.fn().mockRejectedValue(rejection);
+    const createOrder = vi.fn();
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+      signTypedData,
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(createOrder).not.toHaveBeenCalled();
+    expect(handle.getState().limitError).toBeNull();
+    handle.destroy();
+  });
+
+  it('server error sets limitError and keeps form intact', async () => {
+    const signTypedData = vi.fn().mockResolvedValue('0x' + 'ab'.repeat(65));
+    const apiErr = Object.assign(new Error('bad target'), {
+      status: 422,
+      detail: 'target already in range',
+    });
+    const createOrder = vi.fn().mockRejectedValue(apiErr);
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_PLAYER_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+      signTypedData,
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    expect(handle.getState().limitError).toBeTruthy();
+    // Trigger price NOT cleared — user can fix and resubmit.
+    expect(handle.getState().limitTriggerPriceStr).toBe('12.5');
+    handle.destroy();
   });
 });
