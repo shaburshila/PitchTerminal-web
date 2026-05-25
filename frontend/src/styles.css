@@ -2687,6 +2687,42 @@ body.mode-dashboard .pt-profile {
   cursor: pointer;
 }
 
+/* Wave 2A + 3 — fee breakdown helper text under the amount input. Subdued
+   "monospace numbers" treatment so it reads as a passive estimate, not a
+   primary UI element. Thin top divider visually detaches it from the % row. */
+.pt-trade__fee-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 2px 2px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border, #1f2a26);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted, #9caea6);
+}
+
+.pt-trade__fee-breakdown[hidden] {
+  display: none;
+}
+
+.pt-trade__fee-headline {
+  color: var(--text, #eee);
+  font-weight: 500;
+}
+
+.pt-trade__fee-math {
+  font-size: 11px;
+  color: var(--text-muted, #9caea6);
+}
+
+.pt-trade__fee-breakdown.is-placeholder .pt-trade__fee-headline {
+  color: var(--text-muted, #9caea6);
+  font-weight: 400;
+  font-style: italic;
+}
+
 .pt-trade__country-cta[hidden] {
   display: none;
 }
