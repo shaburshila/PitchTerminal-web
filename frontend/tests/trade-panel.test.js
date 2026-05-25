@@ -2604,3 +2604,101 @@ describe('mountTradePanel — F2.x limit mode', () => {
     handle.destroy();
   });
 });
+
+// B3 — F2.x #9: trigger-price label spells out the quote currency so users
+// don't enter PITCH-denominated values into a country-unit field (player
+// venue) or vice-versa. Denomination depends on venue, NOT on side.
+describe('mountTradePanel — B3 venue-aware trigger-price label', () => {
+  const VALID_COUNTRY_TOKEN = {
+    address: '0x5555555555555555555555555555555555555555',
+    symbol: 'BRA',
+    // no countryAddress → country venue (quote = PITCH)
+  };
+  const VALID_PLAYER_TOKEN_BRA = {
+    address: '0x6666666666666666666666666666666666666666',
+    symbol: 'PLR',
+    countryAddress: '0x7777777777777777777777777777777777777777',
+    countrySymbol: 'BRA',
+  };
+
+  it('country venue: label reads "Trigger price (PITCH per 1 BRA)"', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_COUNTRY_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
+    expect(label.textContent).toBe('Trigger price (PITCH per 1 BRA)');
+    handle.destroy();
+  });
+
+  it('player venue: label reads "Trigger price ({country} per 1 {player})"', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN_BRA,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
+    expect(label.textContent).toBe('Trigger price (BRA per 1 PLR)');
+    handle.destroy();
+  });
+
+  it('label does NOT change with side toggle — denomination is venue-only', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN_BRA,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
+    const buyText = label.textContent;
+    container.querySelector('[data-test-id="side-sell"]').click();
+    await flush();
+    expect(label.textContent).toBe(buyText);
+    handle.destroy();
+  });
+
+  it('label updates after a token swap (player → country)', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: VALID_PLAYER_TOKEN_BRA,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
+    expect(label.textContent).toBe('Trigger price (BRA per 1 PLR)');
+    handle.setToken(VALID_COUNTRY_TOKEN);
+    await flush();
+    expect(label.textContent).toBe('Trigger price (PITCH per 1 BRA)');
+    handle.destroy();
+  });
+
+  it('falls back to plain "Trigger price" when no token is set', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      // No token at all → resolveVenue returns null.
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const label = container.querySelector('[data-test-id="trade-limit-price-label"]');
+    expect(label.textContent).toBe('Trigger price');
+    handle.destroy();
+  });
+});

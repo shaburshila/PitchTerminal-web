@@ -307,6 +307,72 @@ describe('mountChart', () => {
     expect(candleSeries.data).toEqual(makeChartPayload().candles);
   });
 
+  // B1 — Candle / line / marker colours read from tokens.css (--up / --down /
+  // --accent) instead of hardcoded hex. lightweight-charts does not parse
+  // var(--…) strings — readToken() resolves the variable (or returns the
+  // tokens.css canonical fallback in happy-dom where computed CSS vars are
+  // empty) and only literal hex is ever passed to the chart library.
+  it('candle series receives up/down colours from tokens.css (B1)', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    container.querySelector('[data-test-id="chart-type-candles"]').click();
+    await flush();
+    const chartInst = created.charts[0];
+    const candleOpts = chartInst.addCandlestickSeries.mock.calls.at(-1)?.[0];
+    expect(candleOpts).toBeDefined();
+    // Fallback canonical hex from tokens.css (happy-dom returns '' for CSS
+    // variables, so readToken() yields the fallback). All six colour fields
+    // map to the same two source tokens — no stray legacy hex (#4caf6e /
+    // #ff5c5c) leaking into the series.
+    expect(candleOpts.upColor).toBe('#3ddb8e');
+    expect(candleOpts.borderUpColor).toBe('#3ddb8e');
+    expect(candleOpts.wickUpColor).toBe('#3ddb8e');
+    expect(candleOpts.downColor).toBe('#ff5a5f');
+    expect(candleOpts.borderDownColor).toBe('#ff5a5f');
+    expect(candleOpts.wickDownColor).toBe('#ff5a5f');
+    // No legacy hardcoded hex anywhere in the series opts.
+    const blob = JSON.stringify(candleOpts);
+    expect(blob).not.toMatch(/#4caf6e/i);
+    expect(blob).not.toMatch(/#ff5c5c/i);
+  });
+
+  it('default line series uses --accent from tokens.css (B1)', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    const chartInst = created.charts[0];
+    const lineOpts = chartInst.addLineSeries.mock.calls.at(-1)?.[0];
+    expect(lineOpts).toBeDefined();
+    expect(lineOpts.color).toBe('#3ddb8e');
+  });
+
+  it('trade markers use --up / --down from tokens.css (B1)', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [
+        { time: 1709000100, price: 10.7, volume: 5, type: 'buy', trader: '0xMe' },
+        { time: 1709000200, price: 11.2, volume: 3, type: 'sell', trader: '0xMe' },
+      ],
+    });
+    const chart = mountChart(container, {
+      apiClient: makeApi(payload),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    // Both my+others on so both buy and sell markers render.
+    container.querySelector('[data-test-id="chart-overlay-others"]').click();
+    chart.setToken(makePlayer());
+    await flush();
+    const series = created.charts[0].seriesList[0];
+    const buyMarker = series.markers.find((m) => m.shape === 'arrowUp');
+    const sellMarker = series.markers.find((m) => m.shape === 'arrowDown');
+    expect(buyMarker.color).toBe('#3ddb8e');
+    expect(sellMarker.color).toBe('#ff5a5f');
+  });
+
   it('unit toggle is hidden for country tokens, visible for players', () => {
     const { lib } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });

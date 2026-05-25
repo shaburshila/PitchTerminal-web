@@ -160,6 +160,13 @@ export function showSignInModal(opts = {}) {
   card.appendChild(netRow);
   card.appendChild(actions);
   overlay.appendChild(card);
+  // B5 — capture the element that opened the modal so we can restore focus on
+  // close (WCAG 2.4.3). Fall back to body if the active element is unusable
+  // (e.g. `document.body` itself, or an element already detached from DOM).
+  const previouslyFocused =
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   document.body.appendChild(overlay);
   _activeOverlay = overlay;
   signBtn.focus();
@@ -167,12 +174,43 @@ export function showSignInModal(opts = {}) {
   let busy = false;
   let closed = false;
 
+  /**
+   * B5 — focus trap (WCAG 2.4.3 / 2.1.2). The signin modal is shown over the
+   * full app; Tab must cycle within the overlay so keyboard users can't get
+   * lost behind the dim background. Queried at each Tab keydown so dynamic
+   * disable/enable of the buttons (in-flight signing → cancel becomes
+   * disabled and drops out of the focus chain) is honoured.
+   */
+  function focusableNodes() {
+    const sel =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+      ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.from(overlay.querySelectorAll(sel)).filter((node) => {
+      // `disabled` covers <button disabled>; also skip nodes that are hidden
+      // via `hidden` attr or CSS display:none (offsetParent === null in
+      // browsers, but happy-dom doesn't always populate that, so checking
+      // disabled is enough for current modal contents).
+      return !node.hasAttribute('hidden');
+    });
+  }
+
   function close() {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onKey);
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     if (_activeOverlay === overlay) _activeOverlay = null;
+    // B5 — restore focus to the trigger element. Guarded against the trigger
+    // having been removed from DOM since open (rare, but defensive).
+    if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+      try {
+        if (previouslyFocused.isConnected !== false) {
+          previouslyFocused.focus();
+        }
+      } catch {
+        /* element disappeared — accept; next user keypress lands on body */
+      }
+    }
   }
 
   function onCancel() {
@@ -203,7 +241,29 @@ export function showSignInModal(opts = {}) {
   }
 
   function onKey(ev) {
-    if (ev.key === 'Escape') onCancel();
+    if (ev.key === 'Escape') {
+      onCancel();
+      return;
+    }
+    // B5 — focus trap. Tab → wrap from last to first; Shift+Tab → wrap from
+    // first to last. Out-of-overlay focus (clicks on background app) snaps
+    // back to the first focusable on next Tab.
+    if (ev.key !== 'Tab') return;
+    const nodes = focusableNodes();
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    const active = document.activeElement;
+    const inOverlay = overlay.contains(active);
+    if (ev.shiftKey) {
+      if (!inOverlay || active === first) {
+        ev.preventDefault();
+        last.focus();
+      }
+    } else if (!inOverlay || active === last) {
+      ev.preventDefault();
+      first.focus();
+    }
   }
 
   signBtn.addEventListener('click', onSign);
