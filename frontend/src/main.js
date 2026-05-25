@@ -10,6 +10,9 @@ import './styles.css';
 // styles.css so the extended row grid (4 columns instead of 3) overrides
 // the base layout cleanly without touching the global stylesheet.
 import './styles/sidebar-batch3.css';
+// Sidebar role filter — segmented toggle-button group (replaces legacy
+// `<select>`). Loaded after styles.css to override the input/select rule.
+import './styles/sidebar-role.css';
 // Phase 1.5 batch 8: resizable panel drag-handles.
 import './styles/resizable.css';
 // Phase 1.5 batch 7: modals (SIWE, pay-flow, profile, wallet-dropdown)

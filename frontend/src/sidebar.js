@@ -206,15 +206,30 @@ export function mountSidebar(container, options = {}) {
     dataset: { testId: 'sidebar-search' },
     attrs: { type: 'search', placeholder: 'Search...', 'aria-label': 'Search tokens' },
   });
-  const roleSelect = el('select', {
+  // Role filter — horizontal group of toggle buttons (All / Best / Captain /
+  // Rookie). Mirrors the portable-app UX; the `<select>` was replaced in this
+  // batch. The root container keeps `data-test-id="sidebar-role"` for backward
+  // compatibility (visibility toggle + a few existing tests). Each individual
+  // button carries `data-test-id="sidebar-role-<role>"`.
+  const roleGroup = el('div', {
     className: 'pt-sidebar__role',
     dataset: { testId: 'sidebar-role' },
-    attrs: { 'aria-label': 'Filter by role' },
+    attrs: { role: 'group', 'aria-label': 'Filter by role' },
   });
+  const roleButtons = {};
   for (const r of ROLES) {
-    const opt = el('option', { text: ROLE_LABEL[r] });
-    opt.value = r;
-    roleSelect.appendChild(opt);
+    const btn = el('button', {
+      className: 'pt-sidebar__role-btn',
+      dataset: { role: r, testId: `sidebar-role-${r}` },
+      attrs: {
+        type: 'button',
+        'aria-pressed': r === state.role ? 'true' : 'false',
+      },
+      text: ROLE_LABEL[r],
+    });
+    if (r === state.role) btn.classList.add('is-active');
+    roleButtons[r] = btn;
+    roleGroup.appendChild(btn);
   }
   const periodSelect = el('select', {
     className: 'pt-sidebar__period',
@@ -227,7 +242,7 @@ export function mountSidebar(container, options = {}) {
     periodSelect.appendChild(opt);
   }
   filters.appendChild(search);
-  filters.appendChild(roleSelect);
+  filters.appendChild(roleGroup);
   filters.appendChild(periodSelect);
 
   // List
@@ -254,7 +269,16 @@ export function mountSidebar(container, options = {}) {
   // ── Render ──────────────────────────────────────────────────────────────
   function applyRoleVisibility() {
     // Role filter only meaningful for players.
-    roleSelect.hidden = state.tab !== 'players';
+    roleGroup.hidden = state.tab !== 'players';
+  }
+
+  function applyRoleAria() {
+    for (const r of ROLES) {
+      const btn = roleButtons[r];
+      const active = r === state.role;
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.classList.toggle('is-active', active);
+    }
   }
 
   function applyTabAria() {
@@ -265,6 +289,7 @@ export function mountSidebar(container, options = {}) {
 
   function render() {
     applyTabAria();
+    applyRoleAria();
     applyRoleVisibility();
 
     const rows = selectTokens(state, state.tokens);
@@ -308,8 +333,8 @@ export function mountSidebar(container, options = {}) {
       // resolve via the same path enrichTokenPayload uses for the trade panel
       // — countryAddress → state.tokens.countries[].symbol.
       const symbol = el('div', { className: 'symbol' });
-      const flagSymbol =
-        state.tab === 'countries' ? token.symbol : enrichTokenPayload(token).countrySymbol;
+      const enriched = state.tab === 'players' ? enrichTokenPayload(token) : token;
+      const flagSymbol = state.tab === 'countries' ? token.symbol : enriched.countrySymbol;
       if (flagSymbol && hasFlag(flagSymbol)) {
         const flag = el('img', {
           className: 'pt-sidebar__flag',
@@ -356,9 +381,26 @@ export function mountSidebar(container, options = {}) {
       }
       const meta = el('div', { className: 'meta', text: metaParts.join(' · ') });
 
+      // Phase 1.5 follow-up: player rows display price in their native country
+      // denomination (e.g. "1.50 FRA") instead of the cross-token PITCH unit.
+      // Country tickers come from `enrichTokenPayload` which resolves
+      // `countryAddress → countries[].symbol` (with fallback to player.country).
+      // If the country symbol cannot be resolved at all, we still surface the
+      // priceCountry value but omit the unit suffix rather than misleading the
+      // user with a PITCH value (formatPrice handles undefined → "?").
+      // Country-tab rows keep the existing PITCH denomination.
+      let priceText;
+      if (state.tab === 'players') {
+        const countrySymbol = enriched.countrySymbol;
+        priceText = countrySymbol
+          ? `${formatPrice(token.priceCountry)} ${countrySymbol}`
+          : formatPrice(token.priceCountry);
+      } else {
+        priceText = `${formatPrice(token.pricePitch)} PITCH`;
+      }
       const price = el('div', {
         className: 'price',
-        text: `${formatPrice(token.pricePitch)} PITCH`,
+        text: priceText,
       });
 
       const changeValue = pctOf(token, state.period);
@@ -506,7 +548,6 @@ export function mountSidebar(container, options = {}) {
     // the new dataset has different length.
     if (tab !== 'players') {
       state.role = 'all';
-      roleSelect.value = 'all';
     }
     state.focusedIndex = 0;
     render();
@@ -517,8 +558,14 @@ export function mountSidebar(container, options = {}) {
     render();
   }
 
-  function onRoleChange() {
-    state.role = roleSelect.value || 'all';
+  function onRoleClick(ev) {
+    const target = ev.target instanceof Element ? ev.target.closest('[data-role]') : null;
+    if (!(target instanceof HTMLElement)) return;
+    const role = target.dataset.role;
+    if (!role || !ROLES.includes(role)) return;
+    if (state.role === role) return;
+    state.role = role;
+    state.focusedIndex = 0;
     render();
   }
 
@@ -529,7 +576,7 @@ export function mountSidebar(container, options = {}) {
 
   tabs.addEventListener('click', onTabClick);
   search.addEventListener('input', onSearchInput);
-  roleSelect.addEventListener('change', onRoleChange);
+  roleGroup.addEventListener('click', onRoleClick);
   periodSelect.addEventListener('change', onPeriodChange);
 
   // ── Public API ──────────────────────────────────────────────────────────
@@ -552,7 +599,7 @@ export function mountSidebar(container, options = {}) {
   function destroy() {
     tabs.removeEventListener('click', onTabClick);
     search.removeEventListener('input', onSearchInput);
-    roleSelect.removeEventListener('change', onRoleChange);
+    roleGroup.removeEventListener('click', onRoleClick);
     periodSelect.removeEventListener('change', onPeriodChange);
     container.replaceChildren();
   }

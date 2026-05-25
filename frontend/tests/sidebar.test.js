@@ -186,13 +186,57 @@ describe('mountSidebar', () => {
     const handle = mountSidebar(container, { apiClient: api });
     await handle.refresh();
 
-    const roleSelect = container.querySelector('[data-test-id="sidebar-role"]');
-    roleSelect.value = 'captain';
-    roleSelect.dispatchEvent(new Event('change'));
+    const captainBtn = container.querySelector('[data-test-id="sidebar-role-captain"]');
+    captainBtn.click();
 
     const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
     expect(rows.length).toBe(1);
     expect(rows[0].dataset.tokenAddress).toBe('0xaaa1');
+  });
+
+  it('role filter group renders 4 buttons (all/best/captain/rookie)', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const group = container.querySelector('[data-test-id="sidebar-role"]');
+    expect(group).not.toBeNull();
+    expect(group.getAttribute('role')).toBe('group');
+    const buttons = group.querySelectorAll('button[data-role]');
+    expect(buttons.length).toBe(4);
+    const roles = Array.from(buttons).map((b) => b.dataset.role);
+    expect(roles).toEqual(['all', 'best', 'captain', 'rookie']);
+    for (const r of ['all', 'best', 'captain', 'rookie']) {
+      expect(
+        container.querySelector(`[data-test-id="sidebar-role-${r}"]`),
+      ).not.toBeNull();
+    }
+  });
+
+  it('default role is "all" — sidebar-role-all carries aria-pressed="true"', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const all = container.querySelector('[data-test-id="sidebar-role-all"]');
+    const best = container.querySelector('[data-test-id="sidebar-role-best"]');
+    expect(all.getAttribute('aria-pressed')).toBe('true');
+    expect(best.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('clicking sidebar-role-best filters list to "best" players', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const bestBtn = container.querySelector('[data-test-id="sidebar-role-best"]');
+    bestBtn.click();
+
+    expect(bestBtn.getAttribute('aria-pressed')).toBe('true');
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // Only Mbappé has role="best".
+    expect(rows.length).toBe(1);
+    expect(rows[0].dataset.tokenAddress).toBe('0xaaa2');
   });
 
   it('period selector changes which changePct is shown in rows', async () => {
@@ -392,6 +436,35 @@ describe('mountSidebar', () => {
     expect(flags[1].getAttribute('src')).toBe('/flags/us.svg');
   });
 
+  it('player row price-cell shows priceCountry + country ticker (not PITCH)', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // Mbappé sorted first: priceCountry=2.0, countryAddress=0xccc2 → "FRA".
+    expect(rows[0].querySelector('.price').textContent).toBe('2.00 FRA');
+    // Pulisic: priceCountry=1.5, countryAddress=0xccc1 → "USA".
+    expect(rows[1].querySelector('.price').textContent).toBe('1.50 USA');
+    // No row should display PITCH suffix in the players tab.
+    for (const row of rows) {
+      expect(row.querySelector('.price').textContent).not.toContain('PITCH');
+    }
+  });
+
+  it('country row price-cell still shows pricePitch + PITCH', async () => {
+    const api = makeApi(defaultPayload());
+    const handle = mountSidebar(container, { apiClient: api });
+    await handle.refresh();
+    container.querySelector('[data-test-id="sidebar-tab-countries"]').click();
+
+    const rows = container.querySelectorAll('[data-test-id="sidebar-row"]');
+    // FRA pricePitch=0.01 sorted first; USA pricePitch=0.002 second.
+    expect(rows[0].querySelector('.price').textContent).toContain('PITCH');
+    expect(rows[0].querySelector('.price').textContent).toContain('0.01');
+    expect(rows[1].querySelector('.price').textContent).toContain('PITCH');
+  });
+
   it('change cell has positive/negative class', async () => {
     const api = makeApi(defaultPayload());
     const handle = mountSidebar(container, { apiClient: api });
@@ -420,9 +493,12 @@ describe('mountSidebar', () => {
     await handle.refresh();
     api.getTokens.mockClear();
 
-    // Push a fresh set with mutated price for Mbappé.
+    // Push a fresh set with mutated price for Mbappé. Bumping `pricePitch`
+    // keeps her in the first DESC slot, and `priceCountry` (now the displayed
+    // unit on player rows) carries the assertion-friendly value.
     const updated = defaultPayload();
     updated.players[1].pricePitch = 99.99;
+    updated.players[1].priceCountry = 99.99;
     handle.update(updated);
 
     const firstRow = container.querySelector('[data-test-id="sidebar-row"]');

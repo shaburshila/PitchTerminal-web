@@ -544,7 +544,6 @@ body.mode-dashboard .pt-profile {
 }
 
 .pt-sidebar__search,
-.pt-sidebar__role,
 .pt-sidebar__period {
   background: var(--bg-elev-2);
   color: var(--text);
@@ -555,7 +554,6 @@ body.mode-dashboard .pt-profile {
 }
 
 .pt-sidebar__search:focus-visible,
-.pt-sidebar__role:focus-visible,
 .pt-sidebar__period:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
