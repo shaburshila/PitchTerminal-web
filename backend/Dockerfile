@@ -59,12 +59,15 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-# Default to API via gunicorn (gevent worker — psycogreen.gevent monkey-patches
-# psycopg in shared/db.py so DB calls are cooperatively scheduled).
-# `run_api:app` resolves to the Flask app exported by `run_api.py`.
-# Override via compose `command:` for the worker container:
+# ENTRYPOINT runs `alembic upgrade head` then execs CMD. Both api and worker
+# go through this — migrations are idempotent and Postgres serializes parallel
+# attempts via the alembic_version row lock. See scripts/entrypoint.sh.
+#
+# Default CMD is API via gunicorn (gevent worker — psycogreen.gevent
+# monkey-patches psycopg in shared/db.py so DB calls are cooperatively
+# scheduled). Override via compose `command:` for the worker container:
 #   command: ["python", "run_worker.py"]
-ENTRYPOINT []
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 CMD ["python", "-m", "gunicorn", \
      "--worker-class", "gevent", \
      "--workers", "2", \

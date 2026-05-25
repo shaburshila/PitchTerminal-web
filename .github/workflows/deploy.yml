@@ -106,9 +106,11 @@ jobs:
             docker compose --env-file ../.env \
               -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Cold-start пауза: миграции (Backend.entrypoint делает
-            # alembic upgrade head), healthcheck окно (start_period: 15s),
-            # Caddy ACME renewal (если cert близок к expire).
+            # Cold-start пауза: миграции (backend ENTRYPOINT — scripts/
+            # entrypoint.sh — вызывает alembic upgrade head перед api/worker
+            # стартом; идемпотентно, Postgres сериализует параллельные
+            # попытки через alembic_version row lock), healthcheck окно
+            # (start_period: 15s), Caddy ACME renewal.
             echo "Waiting 30s for cold-start..."
             sleep 30
 
