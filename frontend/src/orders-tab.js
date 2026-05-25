@@ -44,14 +44,27 @@ import * as defaultApi from './api.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
 import { flagSrc, hasFlag } from './flags.js';
 
+// Status taxonomy: Wave 2A renames `pending` → `open` (the keeper rollout in
+// backend d94c2af made the status name visible to users via SSE and `/orders`
+// responses). We keep `pending` in the map as a backward-compat alias for any
+// older order rows still in the DB or test fixtures — both render as "Open".
 const STATUS_LABEL = {
-  pending: 'Pending',
+  open: 'Open',
+  pending: 'Open',
   executing: 'Executing',
   filled: 'Filled',
   failed: 'Failed',
   cancelled: 'Cancelled',
   expired: 'Expired',
 };
+
+const STATUS_TOOLTIP = {
+  open: 'Waiting for price condition',
+  pending: 'Waiting for price condition',
+};
+
+/** Statuses that allow user-side cancellation (and show the Cancel button). */
+const CANCELLABLE_STATUSES = new Set(['open', 'pending']);
 const SIDE_LABEL = {
   'limit-buy': 'Limit buy',
   'take-profit': 'Take-profit',
@@ -65,14 +78,23 @@ const SIDE_SHORT = {
 };
 
 // Filter chips order matches the orders-tab mockup. 'all' is the default.
-const FILTERS = Object.freeze(['all', 'pending', 'filled', 'cancelled', 'expired']);
+// Wave 2A — the "open" chip matches BOTH `open` and the legacy `pending`
+// status (see STATUS_LABEL above). The chip key stays `open` for the public
+// filter API + test ids; the row-matching logic lives in `matchesFilter`.
+const FILTERS = Object.freeze(['all', 'open', 'filled', 'cancelled', 'expired']);
 const FILTER_LABEL = {
   all: 'All',
-  pending: 'Pending',
+  open: 'Open',
   filled: 'Filled',
   cancelled: 'Cancelled',
   expired: 'Expired',
 };
+
+function matchesFilter(orderStatus, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'open') return orderStatus === 'open' || orderStatus === 'pending';
+  return String(orderStatus) === filter;
+}
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -451,10 +473,18 @@ export function mountOrdersTab(container, opts = {}) {
     whoCell.appendChild(buildOrderWho(order));
     tr.appendChild(whoCell);
 
+    // Wave 2A — Target column renders the DISPLAY (MID-space) price, NOT
+    // the signed execution-space value. Backend d94c2af writes both columns;
+    // older orders (created before the migration) only have `targetPrice` —
+    // fall through to it so they still render a sensible number.
+    const displayPriceWei =
+      typeof order.displayTargetPrice === 'string' && order.displayTargetPrice
+        ? order.displayTargetPrice
+        : order.targetPrice;
     tr.appendChild(
       el('td', {
         className: 'num',
-        text: formatWeiNumber(order.targetPrice),
+        text: formatWeiNumber(displayPriceWei),
       }),
     );
     tr.appendChild(
@@ -481,19 +511,26 @@ export function mountOrdersTab(container, opts = {}) {
     });
     tr.appendChild(ttlCell);
 
-    // Status pill with colored dot.
+    // Status pill with colored dot. Wave 2A — `pending` renders as "Open"
+    // via STATUS_LABEL alias; tooltip clarifies the keeper semantics.
     const statusCell = el('td', { className: 'status-cell' });
+    // Normalize legacy `pending` → `open` for the CSS modifier so styling is
+    // unified. The raw status stays on `dataset.status` for tests that pin
+    // the exact value, and is mirrored on the row dataset above.
+    const cssStatus = order.status === 'pending' ? 'open' : (order.status ?? 'unknown');
     const pill = el('span', {
-      className: `status status--${order.status ?? 'unknown'}`,
+      className: `status status--${cssStatus}`,
       dataset: { testId: 'orders-status', status: order.status ?? '' },
     });
+    const tooltip = STATUS_TOOLTIP[order.status];
+    if (tooltip) pill.setAttribute('title', tooltip);
     pill.appendChild(el('span', { className: 'status-dot' }));
     pill.appendChild(el('span', { text: STATUS_LABEL[order.status] ?? order.status ?? '—' }));
     statusCell.appendChild(pill);
     tr.appendChild(statusCell);
 
     const actionCell = el('td', { className: 'actions' });
-    if (order.status === 'pending') {
+    if (CANCELLABLE_STATUSES.has(order.status)) {
       const btn = el('button', {
         className: 'pt-btn pt-orders__cancel',
         dataset: { testId: 'orders-cancel', orderId: String(order.id ?? '') },
@@ -524,6 +561,8 @@ export function mountOrdersTab(container, opts = {}) {
     for (const o of state.orders) {
       const k = String(o?.status ?? '');
       counts[k] = (counts[k] ?? 0) + 1;
+      // Wave 2A — the `open` filter chip groups legacy `pending` rows too.
+      if (k === 'pending') counts.open = (counts.open ?? 0) + 1;
     }
     const bar = el('div', {
       className: 'pt-orders__filters',
@@ -615,7 +654,7 @@ export function mountOrdersTab(container, opts = {}) {
     const visible =
       state.filter === 'all'
         ? state.orders
-        : state.orders.filter((o) => String(o?.status) === state.filter);
+        : state.orders.filter((o) => matchesFilter(o?.status, state.filter));
 
     if (visible.length === 0) {
       tbody.appendChild(buildFilteredEmptyRow());
