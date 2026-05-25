@@ -56,13 +56,9 @@ class TestExecutionToMidWei:
 
     def test_accepts_event_side_aliases(self) -> None:
         ask_wei = 10 * 10**18
-        assert execution_to_mid_wei(ask_wei, "buy") == execution_to_mid_wei(
-            ask_wei, "limit-buy"
-        )
+        assert execution_to_mid_wei(ask_wei, "buy") == execution_to_mid_wei(ask_wei, "limit-buy")
         bid_wei = 10 * 10**18
-        assert execution_to_mid_wei(bid_wei, "sell") == execution_to_mid_wei(
-            bid_wei, "take-profit"
-        )
+        assert execution_to_mid_wei(bid_wei, "sell") == execution_to_mid_wei(bid_wei, "take-profit")
 
     def test_rejects_zero_and_negative(self) -> None:
         with pytest.raises(ValueError):
