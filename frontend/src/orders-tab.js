@@ -20,7 +20,9 @@
  *   needed for the happy path).
  *
  * UI states:
- *   - SOFT-LOCKED: not premium → soft-lock overlay.
+ *   - LOCKED:      not premium → compact "Premium feature" placeholder. The
+ *     lock-badge + pay-modal CTA live on the bottom-tab BUTTON; this pane
+ *     intentionally avoids the gold pro-cover.
  *   - NO-TOKEN:    premium but no selected token → placeholder.
  *   - PHASE-2-STUB: backend returns 404/501 (route not implemented yet) →
  *     "Coming soon" notice.
@@ -39,7 +41,6 @@
  */
 
 import * as defaultApi from './api.js';
-import { mountSoftLock } from './soft-lock.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
 import { flagSrc, hasFlag } from './flags.js';
 
@@ -148,6 +149,9 @@ function isPhase2Unavailable(err) {
  * }} [apiClient]
  * @property {string|null} [token]
  * @property {{ openPayModal?: Function, payOpts?: object }} [softLock]
+ *   Legacy option — accepted for backward compat with callers/tests but no
+ *   longer used here. The locked-state lock badge + pay-modal click handler
+ *   live on the bottom-tab BUTTON now (see `components/bottom/index.js`).
  * @property {() => number} [now]   ms epoch — injected for deterministic TTL tests.
  * @property {(action:string, info?:object) => void} [onActionDone]
  *   Test hook fired after cancel / armed-toggle resolves (success or error).
@@ -167,7 +171,10 @@ export function mountOrdersTab(container, opts = {}) {
   }
 
   const apiClient = opts.apiClient ?? defaultApi;
-  const softLockOpts = opts.softLock ?? {};
+  // `softLock` option kept in the signature for backward compat (callers
+  // still pass `{ openPayModal, payOpts }`), but the locked-state UI is now
+  // owned by the tab BUTTON (lock badge in bottom/index.js). This pane just
+  // renders a compact placeholder when not premium — no full gold cover.
   const onTabCount = typeof opts.onTabCount === 'function' ? opts.onTabCount : null;
   const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now();
   const fireAction = (action, info) => {
@@ -216,18 +223,12 @@ export function mountOrdersTab(container, opts = {}) {
   const root = el('div', { className: 'pt-orders', dataset: { testId: 'orders' } });
   container.appendChild(root);
 
-  let lockHandle = null;
   let tickerId = null;
 
+  // No-op kept so existing call sites stay valid. The full gold pro-cover
+  // overlay was removed — the lock affordance lives on the bottom-tab BUTTON.
   function tearDownLock() {
-    if (lockHandle) {
-      try {
-        lockHandle.destroy();
-      } catch {
-        /* ignore */
-      }
-      lockHandle = null;
-    }
+    /* no-op (kept for clarity at call sites) */
   }
 
   function stopTicker() {
@@ -260,21 +261,20 @@ export function mountOrdersTab(container, opts = {}) {
   function renderLock() {
     stopTicker();
     root.replaceChildren();
-    tearDownLock();
-    const skeleton = el('div', {
-      className: 'pt-orders__skeleton',
-      dataset: { testId: 'orders-skeleton' },
+    // Compact placeholder for non-premium users. The "upgrade" CTA lives on
+    // the tab button (lock badge → opens pay modal) and on the trade-panel
+    // pro-cover; we deliberately don't repeat it here.
+    const wrap = el('div', {
+      className: 'pt-orders__locked',
+      dataset: { testId: 'orders-locked' },
     });
-    skeleton.appendChild(el('div', { className: 'pt-orders__skel-row' }));
-    skeleton.appendChild(el('div', { className: 'pt-orders__skel-row' }));
-    skeleton.appendChild(el('div', { className: 'pt-orders__skel-row' }));
-    root.appendChild(skeleton);
-    lockHandle = mountSoftLock(root, {
-      zone: 'orders',
-      label: 'Premium — limit orders',
-      openPayModal: softLockOpts.openPayModal,
-      payOpts: softLockOpts.payOpts,
-    });
+    wrap.appendChild(
+      el('p', {
+        className: 'pt-orders__locked-body',
+        text: 'Premium feature — your limit orders appear here once you upgrade.',
+      }),
+    );
+    root.appendChild(wrap);
   }
 
   function renderNoToken() {

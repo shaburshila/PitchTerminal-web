@@ -27,6 +27,10 @@
 import * as defaultApi from '../../api.js';
 import { mountMyWalletTab } from '../../my-wallet-tab.js';
 import { mountOrdersTab } from '../../orders-tab.js';
+import {
+  get as defaultGetAccessState,
+  subscribe as defaultSubscribeAccess,
+} from '../../access-store.js';
 
 const TABS = Object.freeze(['trades', 'holders', 'my-wallet', 'orders']);
 const TAB_LABEL = {
@@ -35,6 +39,20 @@ const TAB_LABEL = {
   'my-wallet': 'My Wallet',
   orders: 'Orders',
 };
+// Phase 1.5: My Wallet + Orders are premium-only. When the user is not premium
+// we mark the tab buttons `.is-locked` (lock-badge + dimmed label, same pattern
+// as the header Profile/Referral buttons) and intercept clicks to open the
+// pay modal instead of switching tabs.
+const PREMIUM_TABS = Object.freeze(['my-wallet', 'orders']);
+
+/**
+ * Lazily import access.js's openPayModal — viem/wagmi are heavy, so non-locked
+ * sessions never pay the import cost. Tests inject softLock.openPayModal.
+ */
+async function defaultOpenPayModal(opts) {
+  const mod = await import('../../access.js');
+  return mod.openPayModal(opts);
+}
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_TRADES_IN_MEMORY = 500;
 const BASESCAN_TX = 'https://basescan.org/tx/';
@@ -115,6 +133,19 @@ export function mountBottomTabs(container, options = {}) {
 
   const apiClient = options.apiClient ?? defaultApi;
   const pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
+  // Phase 1.5: premium-gating wiring for tab buttons. Tests can inject mocked
+  // access-store helpers + openPayModal via `options.access` / `options.softLock`.
+  const getAccessState =
+    typeof options.getAccessState === 'function' ? options.getAccessState : defaultGetAccessState;
+  const subscribeAccess =
+    typeof options.subscribeAccess === 'function'
+      ? options.subscribeAccess
+      : defaultSubscribeAccess;
+  const softLockOpts = options.softLock ?? {};
+  const openPayModal =
+    typeof softLockOpts.openPayModal === 'function'
+      ? softLockOpts.openPayModal
+      : defaultOpenPayModal;
 
   container.replaceChildren();
 
@@ -170,6 +201,21 @@ export function mountBottomTabs(container, options = {}) {
     });
     counter.hidden = true;
     btn.appendChild(counter);
+    // Phase 1.5: lock badge for premium-only tabs (My Wallet + Orders). The
+    // badge is hidden by default; CSS reveals it when the parent button is
+    // `.is-locked`. Mirrors the header Profile/Referral button pattern so the
+    // visual language is consistent across the app — instead of a full gold
+    // pro-cover inside the pane, free users see just the 🔒 chip on the tab.
+    if (PREMIUM_TABS.includes(tab)) {
+      btn.appendChild(
+        el('span', {
+          className: 'pt-bottom__tab-lock',
+          dataset: { testId: `bottom-tab-lock-${tab}` },
+          attrs: { 'aria-hidden': 'true' },
+          text: '🔒',
+        }),
+      );
+    }
     tabCounters[tab] = counter;
     tabButtons[tab] = btn;
     tabs.appendChild(btn);
@@ -523,16 +569,47 @@ export function mountBottomTabs(container, options = {}) {
     await fetchPage({ cursor: state.nextCursor, append: true });
   }
 
+  // ── Premium gating for tab buttons ─────────────────────────────────────
+  // Phase 1.5: keep My Wallet + Orders tab buttons visible but mark them
+  // `.is-locked` for non-premium users (lock badge + aria-disabled). Click on
+  // a locked tab opens the pay modal instead of switching panes.
+  function applyTabLockState() {
+    const isPremium = getAccessState() === 'premium';
+    for (const tab of PREMIUM_TABS) {
+      const btn = tabButtons[tab];
+      if (!btn) continue;
+      btn.classList.toggle('is-locked', !isPremium);
+      btn.setAttribute('aria-disabled', String(!isPremium));
+    }
+  }
+  applyTabLockState();
+  const unsubscribeAccess = subscribeAccess(() => applyTabLockState());
+
+  function tryOpenPay() {
+    try {
+      openPayModal(softLockOpts.payOpts);
+    } catch (err) {
+      // openPayModal is async-import wrapped — error surfaces to console here.
+      console.error('mountBottomTabs: openPayModal threw:', err);
+    }
+  }
+
   // ── Event handlers ──────────────────────────────────────────────────────
   function onTabClick(ev) {
     const target = ev.target instanceof Element ? ev.target.closest('[data-tab]') : null;
     if (!(target instanceof HTMLElement)) return;
     const tab = target.dataset.tab;
-    if (!tab || !TABS.includes(tab) || state.tab === tab) return;
+    if (!tab || !TABS.includes(tab)) return;
+    // Locked premium tab → open pay modal, do NOT switch.
+    if (PREMIUM_TABS.includes(tab) && getAccessState() !== 'premium') {
+      tryOpenPay();
+      return;
+    }
+    if (state.tab === tab) return;
     state.tab = tab;
-    // Lazy-mount premium tabs on first activation. The sub-tabs handle their
-    // own access-state gating, so they're safe to mount for free users too —
-    // they'll render the soft-lock overlay.
+    // Lazy-mount premium tabs on first activation. The sub-tabs render a
+    // compact placeholder for non-premium (no full gold cover) — the gating
+    // UX is owned by the tab button itself (lock badge above).
     if (tab === 'my-wallet') ensureMyWalletMounted();
     if (tab === 'orders') ensureOrdersMounted();
     renderTabsAria();
@@ -647,6 +724,11 @@ export function mountBottomTabs(container, options = {}) {
 
   function destroy() {
     tabs.removeEventListener('click', onTabClick);
+    try {
+      unsubscribeAccess();
+    } catch {
+      /* ignore */
+    }
     if (myWalletHandle) {
       try {
         myWalletHandle.destroy();

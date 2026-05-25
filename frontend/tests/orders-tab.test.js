@@ -66,17 +66,20 @@ describe('mountOrdersTab', () => {
     expect(() => mountOrdersTab(null)).toThrow(TypeError);
   });
 
-  it('renders soft-lock when not premium', () => {
+  it('renders compact locked placeholder when not premium (no soft-lock overlay)', () => {
     const c = makeContainer();
-    mountOrdersTab(c, { apiClient: makeApi(), token: TOKEN, softLock: { openPayModal: vi.fn() } });
-    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeTruthy();
+    mountOrdersTab(c, { apiClient: makeApi(), token: TOKEN });
+    // Lock affordance now lives on the bottom-tab BUTTON. The pane just shows
+    // a compact "Premium feature" placeholder — no gold cover, no skeleton.
+    expect(c.querySelector('[data-test-id="orders-locked"]')).toBeTruthy();
+    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
     expect(c.querySelector('[data-test-id="orders-table"]')).toBeFalsy();
   });
 
   it('does not fetch when not premium', async () => {
     const c = makeContainer();
     const api = makeApi();
-    mountOrdersTab(c, { apiClient: api, token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    mountOrdersTab(c, { apiClient: api, token: TOKEN });
     await flush();
     expect(api.getOrders).not.toHaveBeenCalled();
   });
@@ -413,7 +416,7 @@ describe('mountOrdersTab', () => {
     accessStore.set('free');
     const c = makeContainer();
     const api = makeApi({ items: [makeOrder()] });
-    mountOrdersTab(c, { apiClient: api, token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    mountOrdersTab(c, { apiClient: api, token: TOKEN });
     await flush();
     expect(api.getOrders).not.toHaveBeenCalled();
 
@@ -423,12 +426,11 @@ describe('mountOrdersTab', () => {
     expect(c.querySelector('[data-test-id="orders-table"]')).toBeTruthy();
   });
 
-  it('destroy() tears down lock and stops ticker', () => {
+  it('destroy() stops ticker and clears the pane', () => {
     const c = makeContainer();
     const handle = mountOrdersTab(c, {
       apiClient: makeApi(),
       token: TOKEN,
-      softLock: { openPayModal: vi.fn() },
     });
     expect(() => handle.destroy()).not.toThrow();
     expect(c.children.length).toBe(0);

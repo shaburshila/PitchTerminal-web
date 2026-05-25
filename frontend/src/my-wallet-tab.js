@@ -7,7 +7,10 @@
  * the trades+holders payload.
  *
  * UI states (mutually exclusive — only one renders at a time):
- *   - SOFT-LOCKED: not premium → render the soft-lock overlay from F0.13.
+ *   - LOCKED:      not premium → compact "Premium feature" placeholder. The
+ *     lock-badge + pay-modal CTA live on the bottom-tab BUTTON
+ *     (`components/bottom/index.js`); this pane intentionally avoids the gold
+ *     pro-cover so the upgrade pitch isn't repeated everywhere.
  *     We never request `/position` while locked (it'd 401/402 anyway).
  *   - NO-TOKEN:    premium but no selected token → placeholder.
  *   - LOADING:     premium + token, request in flight → spinner text.
@@ -31,7 +34,6 @@
  */
 
 import * as defaultApi from './api.js';
-import { mountSoftLock } from './soft-lock.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
 import { flagSrc, hasFlag } from './flags.js';
 
@@ -81,7 +83,9 @@ function pnlClass(value) {
  * @property {{ symbol?: string, name?: string, kind?: 'player'|'country' }|null} [tokenMeta]
  *   Phase 1.5 batch 6 — optional token meta for flag + name rendering.
  * @property {{ openPayModal?: Function, payOpts?: object }} [softLock]
- *   Pass-through options forwarded to mountSoftLock (lets tests inject mocks).
+ *   Legacy option — accepted for backward compat with callers/tests but no
+ *   longer used here. The locked-state lock badge + pay-modal click handler
+ *   live on the bottom-tab BUTTON now (see `components/bottom/index.js`).
  * @property {(count: number|null) => void} [onTabCount]
  *   Phase 1.5 batch 6 — host callback fired with the current position count
  *   (0 / 1 / null). Used by the bottom-tabs shell to render the tab badge.
@@ -103,7 +107,10 @@ export function mountMyWalletTab(container, opts = {}) {
   }
 
   const apiClient = opts.apiClient ?? defaultApi;
-  const softLockOpts = opts.softLock ?? {};
+  // `softLock` option kept in the signature for backward compat (callers
+  // still pass `{ openPayModal, payOpts }`), but the locked-state UI is now
+  // owned by the tab BUTTON (lock badge in bottom/index.js). This pane just
+  // renders a compact placeholder when not premium — no full gold cover.
   const onTabCount = typeof opts.onTabCount === 'function' ? opts.onTabCount : null;
   const onBalance = typeof opts.onBalance === 'function' ? opts.onBalance : null;
 
@@ -152,40 +159,30 @@ export function mountMyWalletTab(container, opts = {}) {
   });
   container.appendChild(root);
 
-  /** @type {{ destroy: () => void }|null} */
-  let lockHandle = null;
-
+  // No-op kept so callers using the pre-refactor return shape (`destroy`)
+  // stay valid. The gold pro-cover overlay was removed — the lock affordance
+  // lives on the bottom-tab BUTTON now.
   function tearDownLock() {
-    if (lockHandle) {
-      try {
-        lockHandle.destroy();
-      } catch {
-        /* ignore */
-      }
-      lockHandle = null;
-    }
+    /* no-op (kept for clarity at call sites) */
   }
 
   function renderLock() {
+    // Compact placeholder for non-premium users. The "upgrade" CTA lives on
+    // the tab button (lock badge → opens pay modal) and on the trade-panel
+    // pro-cover; we deliberately don't repeat it here to avoid the gold-cover
+    // overload the user flagged.
     root.replaceChildren();
-    tearDownLock();
-    // mountSoftLock both blurs and overlays — but blur requires content beneath
-    // to actually be visible. Render a faux skeleton card so the user sees
-    // "something is here, premium will unlock it" rather than an empty pane.
-    const skeleton = el('div', {
-      className: 'pt-mywallet__skeleton',
-      dataset: { testId: 'mywallet-skeleton' },
+    const wrap = el('div', {
+      className: 'pt-mywallet__locked',
+      dataset: { testId: 'mywallet-locked' },
     });
-    skeleton.appendChild(el('div', { className: 'pt-mywallet__skel-row' }));
-    skeleton.appendChild(el('div', { className: 'pt-mywallet__skel-row' }));
-    skeleton.appendChild(el('div', { className: 'pt-mywallet__skel-row' }));
-    root.appendChild(skeleton);
-    lockHandle = mountSoftLock(root, {
-      zone: 'my-wallet',
-      label: 'Premium — PnL for the selected token',
-      openPayModal: softLockOpts.openPayModal,
-      payOpts: softLockOpts.payOpts,
-    });
+    wrap.appendChild(
+      el('p', {
+        className: 'pt-mywallet__locked-body',
+        text: 'Premium feature — your per-token PnL appears here once you upgrade.',
+      }),
+    );
+    root.appendChild(wrap);
   }
 
   function renderNoToken() {

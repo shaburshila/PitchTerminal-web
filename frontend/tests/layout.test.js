@@ -65,7 +65,7 @@ describe('mountLayout', () => {
     expect(handle.profile.getAttribute('aria-label')).toMatch(/profile/i);
   });
 
-  it('renders Profile and Referral buttons to the left of wallet-area (phase 1.5)', () => {
+  it('renders Referral and Profile buttons to the left of wallet-area (UX-fix: Referral first)', () => {
     mountLayout(root);
     const profileBtn = root.querySelector('[data-test-id="header-profile-btn"]');
     const referralBtn = root.querySelector('[data-test-id="header-referral-btn"]');
@@ -77,7 +77,17 @@ describe('mountLayout', () => {
     const right = walletArea.parentElement;
     expect(right.classList.contains('pt-header__right')).toBe(true);
     const order = Array.from(right.children).map((c) => c.dataset.testId);
-    expect(order).toEqual(['header-profile-btn', 'header-referral-btn', 'wallet-area']);
+    expect(order).toEqual(['header-referral-btn', 'header-profile-btn', 'wallet-area']);
+  });
+
+  it('renders the PitchTerminal logo as a clickable button', () => {
+    mountLayout(root);
+    const logo = root.querySelector('[data-test-id="header-logo"]');
+    expect(logo).not.toBeNull();
+    expect(logo.tagName).toBe('BUTTON');
+    expect(logo.getAttribute('type')).toBe('button');
+    expect(logo.textContent).toBe('PitchTerminal');
+    expect(logo.getAttribute('aria-label')).toMatch(/dashboard/i);
   });
 
   it('renders the anonymous-state connect button by default', () => {

@@ -815,6 +815,68 @@
   font-family: var(--font-ui);
 }
 
+/* ── Header Referral dropdown ─────────────────────────────────────────────
+   Reuses the .pt-wallet-dropdown base styling (popover frame, padding,
+   shadow) but adds a wider min-width to fit the full ref-link URL plus a
+   primary copy button. Anchored to the referral button — its parent gets
+   `position: relative` from JS so the absolute positioning below resolves
+   against the button cell, not the whole header. */
+.pt-ref-dropdown {
+  min-width: 320px;
+  padding-top: 0;
+}
+
+.pt-ref-dropdown__header {
+  /* Lighter header than wallet-dropdown — referral popover is informational,
+     not action-heavy. */
+  padding: 10px 14px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.pt-ref-dropdown__label {
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+.pt-ref-dropdown__link-row {
+  padding: 12px 14px 6px;
+}
+
+.pt-ref-dropdown__url {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 5px);
+  padding: 6px 8px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.pt-ref-dropdown__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 14px 12px;
+}
+
+.pt-ref-dropdown__copy {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 5px 14px;
+}
+
+.pt-ref-dropdown__status {
+  padding: 0 14px 12px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
 /* ── Profile view + cards ────────────────────────────────────────────── */
 
 .pt-profile__wrap {

@@ -70,22 +70,24 @@ describe('mountMyWalletTab', () => {
     expect(() => mountMyWalletTab(null)).toThrow(TypeError);
   });
 
-  it('renders soft-lock when not premium (default state)', () => {
+  it('renders compact locked placeholder when not premium (no soft-lock overlay)', () => {
     const c = makeContainer();
     mountMyWalletTab(c, {
       apiClient: makeApi(),
       token: TOKEN,
-      softLock: { openPayModal: vi.fn() },
     });
-    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeTruthy();
-    expect(c.querySelector('[data-test-id="mywallet-skeleton"]')).toBeTruthy();
+    // Lock affordance now lives on the bottom-tab BUTTON. The pane just shows
+    // a compact "Premium feature" placeholder — no gold cover, no skeleton.
+    expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeTruthy();
+    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-skeleton"]')).toBeFalsy();
     expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeFalsy();
   });
 
-  it('renders soft-lock and never fetches when not premium', async () => {
+  it('does not fetch when not premium', async () => {
     const c = makeContainer();
     const api = makeApi();
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
     await flush();
     expect(api.getPosition).not.toHaveBeenCalled();
   });
@@ -95,7 +97,7 @@ describe('mountMyWalletTab', () => {
     const c = makeContainer();
     mountMyWalletTab(c, { apiClient: makeApi(), token: null });
     expect(c.querySelector('[data-test-id="mywallet-no-token"]')).toBeTruthy();
-    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeFalsy();
   });
 
   it('fetches and renders PnL grid for premium + token', async () => {
@@ -146,7 +148,7 @@ describe('mountMyWalletTab', () => {
     accessStore.set('free');
     const c = makeContainer();
     const api = makeApi();
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
     await flush();
     expect(api.getPosition).not.toHaveBeenCalled();
 
@@ -156,17 +158,18 @@ describe('mountMyWalletTab', () => {
     expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeTruthy();
   });
 
-  it('clears data + re-renders lock when access downgrades from premium', async () => {
+  it('clears data + re-renders locked placeholder when access downgrades from premium', async () => {
     accessStore.set('premium');
     const c = makeContainer();
-    mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN });
     await flush();
     expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeTruthy();
 
     accessStore.set('free');
     await flush();
     expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeFalsy();
-    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeTruthy();
+    expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeTruthy();
+    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
   });
 
   it('setToken fetches new data for new token', async () => {
@@ -229,7 +232,7 @@ describe('mountMyWalletTab', () => {
     accessStore.set('free');
     const c = makeContainer();
     const api = makeApi();
-    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN, softLock: { openPayModal: vi.fn() } });
+    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN });
     handle.destroy();
     accessStore.set('premium');
     await flush();

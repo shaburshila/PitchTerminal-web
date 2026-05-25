@@ -466,6 +466,127 @@ describe('mountBottomTabs', () => {
     });
   });
 
+  // ── Phase 1.5: premium-gating on My Wallet + Orders tab BUTTONS ─────────
+  describe('premium tab gating (lock badge on tab button)', () => {
+    function makeAccess(initial = 'free') {
+      let state = initial;
+      const listeners = new Set();
+      return {
+        getAccessState: () => state,
+        subscribeAccess: (fn) => {
+          listeners.add(fn);
+          return () => listeners.delete(fn);
+        },
+        set(next) {
+          state = next;
+          for (const fn of [...listeners]) fn(next);
+        },
+      };
+    }
+
+    it('adds .is-locked + aria-disabled to My Wallet + Orders tabs for non-premium users', () => {
+      const access = makeAccess('free');
+      const openPayModal = vi.fn();
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal },
+      });
+      const myWallet = container.querySelector('[data-test-id="bottom-tab-my-wallet"]');
+      const orders = container.querySelector('[data-test-id="bottom-tab-orders"]');
+      const trades = container.querySelector('[data-test-id="bottom-tab-trades"]');
+      expect(myWallet.classList.contains('is-locked')).toBe(true);
+      expect(orders.classList.contains('is-locked')).toBe(true);
+      expect(trades.classList.contains('is-locked')).toBe(false);
+      expect(myWallet.getAttribute('aria-disabled')).toBe('true');
+      expect(orders.getAttribute('aria-disabled')).toBe('true');
+      // Lock badge nodes are appended once and revealed via CSS.
+      expect(
+        container.querySelector('[data-test-id="bottom-tab-lock-my-wallet"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[data-test-id="bottom-tab-lock-orders"]')).not.toBeNull();
+    });
+
+    it('does NOT lock tabs for premium users', () => {
+      const access = makeAccess('premium');
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal: vi.fn() },
+      });
+      const myWallet = container.querySelector('[data-test-id="bottom-tab-my-wallet"]');
+      const orders = container.querySelector('[data-test-id="bottom-tab-orders"]');
+      expect(myWallet.classList.contains('is-locked')).toBe(false);
+      expect(orders.classList.contains('is-locked')).toBe(false);
+      expect(myWallet.getAttribute('aria-disabled')).toBe('false');
+      expect(orders.getAttribute('aria-disabled')).toBe('false');
+    });
+
+    it('click on locked My Wallet tab opens pay modal and does NOT switch tab', () => {
+      const access = makeAccess('free');
+      const openPayModal = vi.fn();
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal },
+      });
+      const myWallet = container.querySelector('[data-test-id="bottom-tab-my-wallet"]');
+      myWallet.click();
+      expect(openPayModal).toHaveBeenCalledTimes(1);
+      // Tab did NOT switch — trades stays selected.
+      expect(
+        container.querySelector('[data-test-id="bottom-tab-trades"]').getAttribute('aria-selected'),
+      ).toBe('true');
+      expect(myWallet.getAttribute('aria-selected')).toBe('false');
+    });
+
+    it('click on locked Orders tab opens pay modal', () => {
+      const access = makeAccess('free');
+      const openPayModal = vi.fn();
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal },
+      });
+      container.querySelector('[data-test-id="bottom-tab-orders"]').click();
+      expect(openPayModal).toHaveBeenCalledTimes(1);
+    });
+
+    it('flipping access to premium removes .is-locked from premium tabs', () => {
+      const access = makeAccess('free');
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal: vi.fn() },
+      });
+      const myWallet = container.querySelector('[data-test-id="bottom-tab-my-wallet"]');
+      expect(myWallet.classList.contains('is-locked')).toBe(true);
+      access.set('premium');
+      expect(myWallet.classList.contains('is-locked')).toBe(false);
+      expect(myWallet.getAttribute('aria-disabled')).toBe('false');
+    });
+
+    it('premium user clicking My Wallet switches the tab (no pay modal)', () => {
+      const access = makeAccess('premium');
+      const openPayModal = vi.fn();
+      mountBottomTabs(container, {
+        apiClient: makeApi(makeTradesResponse()),
+        getAccessState: access.getAccessState,
+        subscribeAccess: access.subscribeAccess,
+        softLock: { openPayModal },
+      });
+      const myWallet = container.querySelector('[data-test-id="bottom-tab-my-wallet"]');
+      myWallet.click();
+      expect(openPayModal).not.toHaveBeenCalled();
+      expect(myWallet.getAttribute('aria-selected')).toBe('true');
+    });
+  });
+
   it('destroy clears container', async () => {
     const api = makeApi(makeTradesResponse());
     const handle = mountBottomTabs(container, { apiClient: api });

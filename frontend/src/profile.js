@@ -19,7 +19,6 @@
  */
 
 import * as defaultApi from './api.js';
-import { mountProfileReferral } from './profile-referral.js';
 
 const TRADES_PAGE_LIMIT = 100;
 
@@ -137,9 +136,9 @@ export function mountProfile(container, opts = {}) {
 
   // ── Block containers ────────────────────────────────────────────────────
   const summary = buildCard('Summary', 'profile-summary');
-  // Referral block sits between summary and the value chart — small,
-  // high-signal, doesn't push the chart below the fold.
-  const referral = buildCard('Referral link', 'profile-referral-card');
+  // Referral section was removed from Profile — referral surface now lives
+  // exclusively in the header Referral button → dropdown popover. See
+  // components/header-actions.js.
   const valueChart = buildCard('Portfolio value', 'profile-value-chart');
   const allocation = buildCard('Allocation', 'profile-allocation');
   const balances = buildCard('Balances', 'profile-balances');
@@ -152,7 +151,6 @@ export function mountProfile(container, opts = {}) {
   // Grid: top row = summary (full-width), then 2-col layout for the rest.
   const grid = el('div', { className: 'pt-profile__grid' });
   grid.appendChild(summary.card);
-  grid.appendChild(referral.card);
   grid.appendChild(valueChart.card);
   grid.appendChild(allocation.card);
   grid.appendChild(balances.card);
@@ -763,15 +761,6 @@ export function mountProfile(container, opts = {}) {
   // Initial load fires immediately.
   loadProfile();
 
-  // Mount referral section — independent lifecycle from profile data
-  // (uses different endpoint and is auth-only, not premium-only).
-  let referralHandle = null;
-  try {
-    referralHandle = mountProfileReferral(referral.body, { apiClient });
-  } catch (err) {
-    console.error('mountProfile: referral mount failed', err);
-  }
-
   function destroy() {
     if (chartInstance && typeof chartInstance.remove === 'function') {
       try {
@@ -782,24 +771,11 @@ export function mountProfile(container, opts = {}) {
     }
     chartInstance = null;
     chartSeries = null;
-    if (referralHandle && typeof referralHandle.destroy === 'function') {
-      try {
-        referralHandle.destroy();
-      } catch {
-        /* ignore */
-      }
-    }
-    referralHandle = null;
     container.replaceChildren();
   }
 
   return {
     reload: () => {
-      if (referralHandle && typeof referralHandle.refresh === 'function') {
-        referralHandle.refresh().catch(() => {
-          /* surfaced via section UI */
-        });
-      }
       return loadProfile();
     },
     destroy,

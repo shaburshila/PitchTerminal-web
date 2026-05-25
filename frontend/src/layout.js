@@ -38,9 +38,17 @@ function buildHeader() {
     attrs: { role: 'banner' },
   });
 
-  // Left: logo
+  // Left: logo. Rendered as a <button> so it can act as "exit Profile →
+  // dashboard" trigger. Styled to look like a plain text node via CSS (no
+  // native button chrome). Click handler is wired in main.js so it shares
+  // the live `layout.setMode` reference.
   const left = el('div', { className: 'pt-header__left' });
-  const logo = el('div', { className: 'pt-header__logo', text: 'PitchTerminal' });
+  const logo = el('button', {
+    className: 'pt-header__logo',
+    dataset: { testId: 'header-logo' },
+    attrs: { type: 'button', 'aria-label': 'Go to dashboard' },
+    text: 'PitchTerminal',
+  });
   left.appendChild(logo);
 
   // Center: network badge
@@ -116,8 +124,10 @@ function buildHeader() {
   // would leak listeners on re-mount).
   walletArea.appendChild(connectBtn);
 
-  right.appendChild(profileBtn);
+  // Order: Referral → Profile → wallet-area (UX update — Referral lives on
+  // the outer left of the cluster so the eye lands on it before Profile).
   right.appendChild(referralBtn);
+  right.appendChild(profileBtn);
   right.appendChild(walletArea);
 
   header.appendChild(left);

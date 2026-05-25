@@ -162,6 +162,65 @@ button {
   display: block;
 }
 
+/* Phase 1.5: lock-badge overlay for premium-gated bottom-tab buttons
+   (My Wallet + Orders). Mirrors the header pattern above — hidden by default,
+   shown when the parent button is `.is-locked`. Click handler still fires
+   (intercepted by JS to open the pay modal), so no `disabled` attr is used. */
+.pt-bottom__tab {
+  position: relative;
+}
+.pt-bottom__tab-lock {
+  display: none;
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: var(--bg-0);
+  font-size: 8px;
+  line-height: 14px;
+  text-align: center;
+  border: 1.5px solid var(--bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  font-family: var(--font-ui, system-ui);
+}
+.pt-bottom__tab.is-locked {
+  opacity: 0.55;
+  cursor: pointer; /* Stays clickable — click → pay modal. */
+}
+.pt-bottom__tab.is-locked:hover {
+  opacity: 0.85;
+  border-color: var(--warn);
+}
+.pt-bottom__tab.is-locked .pt-bottom__tab-lock {
+  display: block;
+}
+
+/* Compact "Premium feature" placeholder shown inside the locked pane (replaces
+   the legacy gold pro-cover overlay). The locked-state CTA lives on the tab
+   button itself + the trade-panel cover — this pane just signals "nothing here
+   for free users" without re-pitching the upgrade. */
+.pt-mywallet__locked,
+.pt-orders__locked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  min-height: 80px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+.pt-mywallet__locked-body,
+.pt-orders__locked-body {
+  margin: 0;
+  max-width: 360px;
+  line-height: 1.5;
+}
+
 .pt-header__wallet-area {
   /* Inline-flex so any future multi-element render (chip + switch button)
      stays on the baseline. */
@@ -174,6 +233,23 @@ button {
   font-size: 16px;
   letter-spacing: 0.4px;
   color: var(--text);
+  /* Rendered as <button> so it can switch back to dashboard from Profile —
+     strip native chrome so it reads as a plain text logo. */
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.pt-header__logo:hover {
+  color: var(--accent);
+}
+.pt-header__logo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .pt-net-badge {

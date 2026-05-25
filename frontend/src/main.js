@@ -544,6 +544,19 @@ function bootstrap() {
     });
   }
 
+  // Logo click → exit Profile back to dashboard. Without this the only way
+  // out of Profile mode was a full page reload.
+  const logoBtn = layout.header.querySelector('[data-test-id="header-logo"]');
+  if (logoBtn instanceof HTMLElement) {
+    logoBtn.addEventListener('click', () => {
+      try {
+        layout.setMode('dashboard');
+      } catch (err) {
+        console.error('logo click: setMode failed', err);
+      }
+    });
+  }
+
   // F0.9/F0.10: header wallet area. We need `/config` for the WC projectId
   // before mounting so the picker shows/hides the WC entry deterministically.
   // If `/config` fails, fall back to injected-only.
