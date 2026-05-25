@@ -29,7 +29,10 @@ from app.errors import abort_with_problem
 from app.pagination import clamp_limit, decode_cursor, encode_cursor
 from shared.chart import TF_SECONDS, build_candles
 from shared.db import fetch_all, fetch_one
+from shared.log import get_logger
 from shared.price import market_price, to_display_units
+
+log = get_logger("app.tokens")
 
 bp = Blueprint("tokens", __name__)
 
@@ -349,6 +352,74 @@ def _scale_events_to_pitch(
     return out
 
 
+def _log_chart_mid_sanity(
+    token: str,
+    events: list[dict[str, Any]],
+    market: dict[str, Any],
+    unit: str,
+) -> None:
+    """Sanity-check: last event's MID-derived price ≈ market_state.price_*.
+
+    ``shared.price.market_price`` already produces fee-free MID prices from
+    ``base_value`` / ``fee`` / ``token_value`` — the chart pipeline is
+    therefore MID-aligned with ``Hook.currentPrice`` (which is what
+    ``market_state.price_country`` / ``price_pitch`` cache). This helper
+    logs a comparison the first time a token's chart is requested so a
+    regression in the math is visible in logs.
+
+    The comparison is done at the chart endpoint level (not at every
+    candle build) to keep overhead bounded — one fetch_one's worth of work
+    per request, and only when there's at least one event.
+    """
+
+    if not events:
+        return
+    # Only compare for the unit that matches the market_state column.
+    # 'country' unit ⇔ price_country (player venue native); 'pitch' for
+    # countries collapses onto price_pitch.
+    last = events[-1]
+    side = last["side"]
+    base_value = int(last["base_value"])
+    fee_value = int(last["fee"])
+    token_value = int(last["token_value"])
+    if token_value <= 0:
+        return
+    last_mid_display = market_price(side, base_value, fee_value, token_value)
+    if last_mid_display <= 0:
+        return
+
+    if unit == "country":
+        cached_wei = int(market.get("price_country") or 0)
+    else:
+        cached_wei = int(market.get("price_pitch") or 0)
+    if cached_wei <= 0:
+        return
+    cached_display = cached_wei / 1e18
+
+    # Allow ~1% drift between the last event's MID and the cached
+    # Hook.currentPrice — price impact of the last trade itself easily
+    # accounts for sub-1% gaps; anything bigger is worth a warning.
+    drift = abs(last_mid_display - cached_display) / cached_display
+    if drift > 0.01:
+        log.warning(
+            "chart.mid_drift",
+            token=token,
+            unit=unit,
+            last_event_mid=round(last_mid_display, 8),
+            cached_mid=round(cached_display, 8),
+            drift_pct=round(drift * 100, 3),
+        )
+    else:
+        log.debug(
+            "chart.mid_ok",
+            token=token,
+            unit=unit,
+            last_event_mid=round(last_mid_display, 8),
+            cached_mid=round(cached_display, 8),
+            drift_pct=round(drift * 100, 3),
+        )
+
+
 def _append_spot_point(
     points: list[dict[str, Any]],
     market: dict[str, Any],
@@ -396,6 +467,19 @@ def get_chart(token: str) -> Any:
       (this is the contract-native denomination — no conversion). For country
       tokens the value is identical to ``pitch`` (countries trade against
       PITCH directly).
+
+    **Price space:** every value returned by this endpoint — historical
+    candles, line points, and the synthetic spot tick — is the fee-free
+    **MID** price (what the bonding curve calls ``currentPrice``). The
+    conversion happens in :func:`shared.price.market_price`, which already
+    extracts MID from each event's ``base_value`` / ``fee`` /
+    ``token_value`` (``(base - fee) / token`` for buys; ``(base + fee) /
+    token`` for sells). The spot tick comes from
+    ``market_state.price_country`` / ``price_pitch`` which are populated
+    from ``Hook.currentPrice`` — also MID. So the chart axis is in a
+    single, consistent denomination; the per-trade ASK/BID rates from the
+    trade table are NOT used here. See :mod:`shared.fee` for the
+    user-facing ASK/BID story.
     """
 
     row = _normalize_token_or_404(token)
@@ -456,6 +540,16 @@ def get_chart(token: str) -> Any:
     # collapse to the same column (price_pitch), so pass "pitch" regardless.
     spot_unit = "country" if (row["kind"] == "player" and unit == "country") else "pitch"
     points = _append_spot_point(points, market, unit=spot_unit)
+
+    # MID-alignment sanity log — see ``_log_chart_mid_sanity``. Comparing
+    # the country-unit MID against the cached price_country only makes
+    # sense for ``unit=country`` (player venue) or for country tokens.
+    # For ``unit=pitch`` on a player token we've already multiplied by
+    # the country→PITCH ratio so the comparison is apples-to-apples
+    # against ``price_pitch``.
+    sanity_unit = "country" if (row["kind"] == "player" and unit == "country") else "pitch"
+    sanity_events = chart_events if needs_conversion else events
+    _log_chart_mid_sanity(addr, sanity_events, market, sanity_unit)
 
     country_names = _country_name_map()
     country_name = ""
