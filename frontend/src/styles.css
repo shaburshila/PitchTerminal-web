@@ -300,7 +300,7 @@ button {
 .pt-header__logo {
   font-weight: 600;
   font-size: 16px;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.2px;
   color: var(--text);
   /* Rendered as <button> so it can switch back to dashboard from Profile —
      strip native chrome so it reads as a plain text logo. */
@@ -310,7 +310,30 @@ button {
   margin: 0;
   font-family: inherit;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   transition: color 120ms ease;
+}
+.pt-header__logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.pt-header__logo-beta {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0;
 }
 .pt-header__logo:hover {
   color: var(--accent);

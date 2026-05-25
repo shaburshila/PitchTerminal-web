@@ -91,7 +91,8 @@ describe('mountLayout', () => {
     expect(logo).not.toBeNull();
     expect(logo.tagName).toBe('BUTTON');
     expect(logo.getAttribute('type')).toBe('button');
-    expect(logo.textContent).toBe('PitchTerminal');
+    expect(logo.textContent).toContain('PitchTerminal');
+    expect(logo.textContent).toContain('beta');
     expect(logo.getAttribute('aria-label')).toMatch(/dashboard/i);
   });
 

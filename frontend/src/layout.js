@@ -47,8 +47,22 @@ function buildHeader() {
     className: 'pt-header__logo',
     dataset: { testId: 'header-logo' },
     attrs: { type: 'button', 'aria-label': 'Go to dashboard' },
-    text: 'PitchTerminal',
   });
+  logo.appendChild(
+    el('span', {
+      className: 'pt-header__logo-mark',
+      attrs: { 'aria-hidden': 'true' },
+      text: 'P',
+    }),
+  );
+  logo.appendChild(el('span', { className: 'pt-header__logo-name', text: 'PitchTerminal' }));
+  logo.appendChild(
+    el('span', {
+      className: 'pt-header__logo-beta',
+      attrs: { 'aria-hidden': 'true' },
+      text: '· beta',
+    }),
+  );
   left.appendChild(logo);
 
   // Right side cluster — [Profile] [Referral] [wallet-area]. The cluster
