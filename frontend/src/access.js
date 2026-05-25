@@ -332,13 +332,115 @@ export function openPayModal(opts = {}) {
     attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pt-pay-title' },
   });
   const card = el('div', { className: 'pt-modal pt-modal--pay' });
-  card.appendChild(
+
+  // Phase 1.5 batch 7: close button (visual, mirrors Cancel button — same
+  // handler so existing test that only clicks "pay-cancel" still works).
+  const closeBtn = el('button', {
+    className: 'pt-modal__close',
+    dataset: { testId: 'pay-close' },
+    attrs: { type: 'button', 'aria-label': 'Close' },
+    text: '✕',
+  });
+  card.appendChild(closeBtn);
+
+  // Hero strip with gold-accent star + title + sub-line.
+  const hero = el('div', { className: 'pt-pay__hero' });
+  hero.appendChild(
+    el('div', {
+      className: 'pt-pay__hero-icon',
+      attrs: { 'aria-hidden': 'true' },
+      text: '★',
+    }),
+  );
+  const heroText = el('div', { className: 'pt-pay__hero-text' });
+  heroText.appendChild(
     el('h2', {
       className: 'pt-modal__title',
       attrs: { id: 'pt-pay-title' },
-      text: 'Premium access',
+      text: 'Upgrade to Pro',
     }),
   );
+  heroText.appendChild(
+    el('p', {
+      text: '1 PITCH one-time. Lifetime access — limit orders, take-profit, premium views.',
+    }),
+  );
+  hero.appendChild(heroText);
+  card.appendChild(hero);
+
+  // Stepper — visual hint of the two on-chain popups (approve + buyAccess).
+  // Driven via `setStep(n, opts)` from the pay-flow below.
+  const stepper = el('div', {
+    className: 'pt-pay__stepper',
+    dataset: { testId: 'pay-stepper' },
+  });
+  function buildStep(n, title) {
+    const step = el('div', { className: 'pt-pay__step', dataset: { stepIndex: String(n) } });
+    step.appendChild(el('div', { className: 'pt-pay__step-circle', text: String(n) }));
+    const stepText = el('div', { className: 'pt-pay__step-text' });
+    stepText.appendChild(el('div', { className: 'pt-pay__step-title', text: title }));
+    stepText.appendChild(el('div', { className: 'pt-pay__step-sub', text: 'queued' }));
+    step.appendChild(stepText);
+    return step;
+  }
+  const step1 = buildStep(1, 'Approve PITCH');
+  const step2 = buildStep(2, 'Buy access');
+  const stepBar = el('div', { className: 'pt-pay__step-bar' });
+  stepper.appendChild(step1);
+  stepper.appendChild(stepBar);
+  stepper.appendChild(step2);
+  card.appendChild(stepper);
+
+  /**
+   * Visual-only stepper driver — does not affect the on-chain flow.
+   *   stage: 0 = idle, 1 = approving, 2 = buying, 3 = done.
+   */
+  function setStep(stage) {
+    const setClasses = (node, { active, done } = {}) => {
+      node.classList.toggle('pt-pay__step--active', !!active);
+      node.classList.toggle('pt-pay__step--done', !!done);
+    };
+    const subOf = (node) => node.querySelector('.pt-pay__step-sub');
+    const circleOf = (node) => node.querySelector('.pt-pay__step-circle');
+    if (stage <= 0) {
+      setClasses(step1);
+      setClasses(step2);
+      subOf(step1).textContent = 'pending';
+      subOf(step2).textContent = 'queued';
+      circleOf(step1).textContent = '1';
+      circleOf(step2).textContent = '2';
+      stepBar.classList.remove('pt-pay__step-bar--filled');
+      return;
+    }
+    if (stage === 1) {
+      setClasses(step1, { active: true });
+      setClasses(step2);
+      subOf(step1).textContent = 'pending';
+      subOf(step2).textContent = 'queued';
+      circleOf(step1).textContent = '1';
+      circleOf(step2).textContent = '2';
+      stepBar.classList.remove('pt-pay__step-bar--filled');
+      return;
+    }
+    if (stage === 2) {
+      setClasses(step1, { done: true });
+      setClasses(step2, { active: true });
+      subOf(step1).textContent = 'confirmed';
+      subOf(step2).textContent = 'pending';
+      circleOf(step1).textContent = '✓';
+      circleOf(step2).textContent = '2';
+      stepBar.classList.add('pt-pay__step-bar--filled');
+      return;
+    }
+    // 3+ — both done.
+    setClasses(step1, { done: true });
+    setClasses(step2, { done: true });
+    subOf(step1).textContent = 'confirmed';
+    subOf(step2).textContent = 'confirmed';
+    circleOf(step1).textContent = '✓';
+    circleOf(step2).textContent = '✓';
+    stepBar.classList.add('pt-pay__step-bar--filled');
+  }
 
   const statusEl = el('div', {
     className: 'pt-modal__status',
@@ -404,12 +506,16 @@ export function openPayModal(opts = {}) {
   actions.appendChild(cancelBtn);
   actions.appendChild(payBtn);
 
+  // Phase 1.5 batch 7 order: status (loading copy), ref pill (when ref
+  // active), breakdown box, error, links, disclaimer, actions. Matches the
+  // mockup's vertical rhythm (referral applied badge sits above the quote
+  // block so the discount line below it has visual context).
   card.appendChild(statusEl);
-  card.appendChild(breakdownEl);
   card.appendChild(refEl);
-  card.appendChild(disclaimerEl);
-  card.appendChild(linksEl);
+  card.appendChild(breakdownEl);
   card.appendChild(errEl);
+  card.appendChild(linksEl);
+  card.appendChild(disclaimerEl);
   card.appendChild(actions);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
@@ -502,6 +608,16 @@ export function openPayModal(opts = {}) {
     if (rawHandle && rawHandle !== referrer && !/^0x/i.test(rawHandle)) {
       txt += ` (${rawHandle})`;
     }
+    // Phase 1.5 batch 7: small ✓ tick + Inter text. The label keeps the
+    // address + handle in plain text so existing tests (which read
+    // refEl.textContent) still match.
+    refEl.appendChild(
+      el('span', {
+        className: 'pt-pay__ref-tick',
+        attrs: { 'aria-hidden': 'true' },
+        text: '✓',
+      }),
+    );
     refEl.appendChild(el('span', { text: txt }));
   }
 
@@ -570,6 +686,7 @@ export function openPayModal(opts = {}) {
   }
 
   cancelBtn.addEventListener('click', onCancel);
+  closeBtn.addEventListener('click', onCancel);
   document.addEventListener('keydown', onKey);
 
   // ── Initial load: defensive /config?fresh=1 + balance probe ────────────
@@ -665,6 +782,7 @@ export function openPayModal(opts = {}) {
 
       // 2. If insufficient, approve (with USDT-style reset if > 0).
       if (allowance < payWei) {
+        setStep(1);
         if (allowance > 0n) {
           setStatus('Resetting allowance… (popup 1/3)');
           await client.approve({
@@ -692,6 +810,7 @@ export function openPayModal(opts = {}) {
       }
 
       // 3. buyAccess.
+      setStep(2);
       setStatus('Purchasing access…');
       const txHash = await client.buyAccess({
         accessAddress,
@@ -710,6 +829,7 @@ export function openPayModal(opts = {}) {
       }
 
       paid = true;
+      setStep(3);
       if (typeof opts.onPaid === 'function') {
         try {
           opts.onPaid({ txHash });

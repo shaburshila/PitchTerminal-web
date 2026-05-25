@@ -199,6 +199,24 @@ describe('openPayModal — no referrer', () => {
   });
 });
 
+describe('openPayModal — batch-7 redesign chrome', () => {
+  it('renders hero + stepper + close button', async () => {
+    const api = makeApiClient();
+    const payment = makePaymentClient();
+    openPayModal({ apiClient: api, payment });
+    await flush(10);
+    expect(document.querySelector('.pt-pay__hero')).not.toBeNull();
+    expect(document.querySelector('.pt-pay__hero-icon')).not.toBeNull();
+    expect(document.querySelector('[data-test-id="pay-stepper"]')).not.toBeNull();
+    expect(document.querySelectorAll('.pt-pay__step').length).toBe(2);
+    const close = document.querySelector('[data-test-id="pay-close"]');
+    expect(close).not.toBeNull();
+    // Close button closes the modal (same handler as Cancel).
+    close.click();
+    expect(document.querySelector('[data-test-id="pay-overlay"]')).toBeNull();
+  });
+});
+
 describe('openPayModal — with valid referrer', () => {
   beforeEach(() => {
     localStorage.setItem('referralWallet', REF_WALLET);

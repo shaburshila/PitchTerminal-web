@@ -234,4 +234,17 @@ describe('mountWalletChip — connected state', () => {
     mountWalletChip(host(), { wcProjectId: 'abc123' });
     expect(fake.wcProjectId).toBe('abc123');
   });
+
+  it('renders the batch-7 chevron next to the address', () => {
+    mountWalletChip(host());
+    setAccount({
+      address: '0x71ecd1a09380ca46cca741bc48d04c556674756f',
+      chainId: 8453,
+      isConnected: true,
+      connectorId: 'injected',
+    });
+    const chev = document.querySelector('.pt-wallet-chip__chev');
+    expect(chev).not.toBeNull();
+    expect(chev.textContent).toBe('▾');
+  });
 });

@@ -31,6 +31,19 @@ describe('signin-modal', () => {
     expect(getOverlay()).toBeNull();
   });
 
+  it('renders batch-7 redesign chrome (brand-mark, preview, net-row)', () => {
+    showSignInModal({});
+    // Brand-mark + redesigned title.
+    expect(document.querySelector('.pt-modal__brand-mark')).not.toBeNull();
+    expect(document.querySelector('[data-test-id="signin-preview"]')).not.toBeNull();
+    expect(document.querySelector('[data-test-id="signin-net"]')).not.toBeNull();
+    // Default CTA copy updated to "Sign with wallet".
+    const submit = document.querySelector('[data-test-id="signin-submit"]');
+    expect(submit.textContent).toBe('Sign with wallet');
+    const cancel = document.querySelector('[data-test-id="signin-cancel"]');
+    expect(cancel.textContent).toBe('Cancel');
+  });
+
   it('calls injected signIn and invokes onSuccess on success', async () => {
     const fakeSignIn = vi.fn(async () => ({ address: '0xfeed' }));
     const onSuccess = vi.fn();

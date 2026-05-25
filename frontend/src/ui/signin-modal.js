@@ -59,33 +59,101 @@ export function showSignInModal(opts = {}) {
     attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pt-signin-title' },
   });
   const card = el('div', { className: 'pt-modal pt-modal--signin' });
+
+  // Phase 1.5 batch 7: brand-mark + title in the head row.
+  const head = el('div', { className: 'pt-modal__brand' });
+  head.appendChild(
+    el('div', {
+      className: 'pt-modal__brand-mark',
+      attrs: { 'aria-hidden': 'true' },
+      text: 'P',
+    }),
+  );
   const title = el('h2', {
     className: 'pt-modal__title',
     attrs: { id: 'pt-signin-title' },
     text: 'Sign in to PitchTerminal',
   });
+  head.appendChild(title);
+
   const body = el('p', {
     className: 'pt-modal__body',
-    text:
-      'Sign a message to prove wallet ownership. ' + 'This is not a transaction and costs no gas.',
+    dataset: { testId: 'signin-body' },
+    text: 'Sign a message to prove you own this wallet. No transaction, no gas.',
   });
+
+  // Optional SIWE preview — only rendered when document.location is present
+  // (i.e. real browser). The preview is visual-only — the signed message is
+  // still produced by `signIn()` in siwe.js.
+  const sectionLabel = el('div', {
+    className: 'pt-modal__section-label',
+    text: 'SIWE message',
+  });
+  const preview = el('div', {
+    className: 'pt-modal__siwe-preview',
+    dataset: { testId: 'signin-preview' },
+  });
+  try {
+    const host =
+      typeof location !== 'undefined' && location.hostname ? location.hostname : 'pitchterminal';
+    const previewHost = el('span', { className: 'pt-modal__siwe-host', text: host });
+    preview.appendChild(previewHost);
+    preview.appendChild(document.createTextNode(' wants you to sign in with your Ethereum account\n'));
+    preview.appendChild(document.createTextNode('\n'));
+    const keyURI = el('span', { className: 'pt-modal__siwe-key', text: 'URI: ' });
+    preview.appendChild(keyURI);
+    const uri =
+      typeof location !== 'undefined' && location.origin ? location.origin : 'https://pitchterminal';
+    preview.appendChild(document.createTextNode(`${uri}\n`));
+    const keyVer = el('span', { className: 'pt-modal__siwe-key', text: 'Version: ' });
+    preview.appendChild(keyVer);
+    preview.appendChild(document.createTextNode('1\n'));
+    const keyChain = el('span', { className: 'pt-modal__siwe-key', text: 'Chain ID: ' });
+    preview.appendChild(keyChain);
+    preview.appendChild(document.createTextNode('8453'));
+  } catch {
+    // happy-dom / SSR — leave preview blank; CSS will still render the box.
+  }
+
+  // Network row — purely informational. Wallet must already be on Base for
+  // the signed message to be accepted by /siwe/verify; we surface that here.
+  const netRow = el('div', {
+    className: 'pt-modal__net-row',
+    dataset: { testId: 'signin-net' },
+  });
+  const netLeft = el('div', { className: 'pt-modal__net-row-left' });
+  netLeft.appendChild(el('span', { className: 'pt-modal__net-dot' }));
+  const netText = el('span');
+  netText.appendChild(document.createTextNode('Network: '));
+  const netB = document.createElement('b');
+  netB.textContent = 'Base';
+  netText.appendChild(netB);
+  netLeft.appendChild(netText);
+  const netRight = el('span', { className: 'pt-modal__net-row-right', text: 'Chain ID 8453' });
+  netRow.appendChild(netLeft);
+  netRow.appendChild(netRight);
+
   const actions = el('div', { className: 'pt-modal__actions' });
-  const signBtn = el('button', {
-    className: 'pt-btn pt-btn--primary',
-    dataset: { testId: 'signin-submit' },
-    attrs: { type: 'button' },
-    text: 'Sign message',
-  });
   const cancelBtn = el('button', {
     className: 'pt-btn',
     dataset: { testId: 'signin-cancel' },
     attrs: { type: 'button' },
-    text: 'Later',
+    text: 'Cancel',
+  });
+  const signBtn = el('button', {
+    className: 'pt-btn pt-btn--primary',
+    dataset: { testId: 'signin-submit' },
+    attrs: { type: 'button' },
+    text: 'Sign with wallet',
   });
   actions.appendChild(cancelBtn);
   actions.appendChild(signBtn);
-  card.appendChild(title);
+
+  card.appendChild(head);
   card.appendChild(body);
+  card.appendChild(sectionLabel);
+  card.appendChild(preview);
+  card.appendChild(netRow);
   card.appendChild(actions);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
@@ -126,7 +194,7 @@ export function showSignInModal(opts = {}) {
       busy = false;
       signBtn.disabled = false;
       cancelBtn.disabled = false;
-      signBtn.textContent = origText || 'Sign message';
+      signBtn.textContent = origText || 'Sign with wallet';
     }
   }
 

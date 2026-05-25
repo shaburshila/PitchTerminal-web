@@ -112,6 +112,9 @@ export function mountWalletChip(container, opts = {}) {
   if (wcEnabled) picker.appendChild(pickWc);
 
   // Connected view: chip + dropdown.
+  // Phase 1.5 batch 7: dot + address + chevron, with a status-dot replacing
+  // the abstract avatar from the mockup (we don't generate identicons yet —
+  // the colored dot still communicates online/wrong-network).
   const chip = el('button', {
     className: 'pt-wallet-chip',
     dataset: { testId: 'wallet-chip' },
@@ -126,8 +129,14 @@ export function mountWalletChip(container, opts = {}) {
     dataset: { testId: 'wallet-chip-text' },
     text: '',
   });
+  const chipChev = el('span', {
+    className: 'pt-wallet-chip__chev',
+    attrs: { 'aria-hidden': 'true' },
+    text: '▾',
+  });
   chip.appendChild(chipDot);
   chip.appendChild(chipText);
+  chip.appendChild(chipChev);
   chip.hidden = true;
 
   const switchBtn = el('button', {
@@ -139,11 +148,31 @@ export function mountWalletChip(container, opts = {}) {
   switchBtn.hidden = true;
 
   const dropdown = el('div', {
-    className: 'pt-wallet-dropdown',
+    className: 'pt-wallet-dropdown pt-wallet-dropdown--connected',
     dataset: { testId: 'wallet-dropdown' },
     attrs: { role: 'menu' },
   });
   dropdown.hidden = true;
+
+  // Phase 1.5 batch 7: dropdown header with full address + copy button.
+  // The address span is updated by `render()` so it always reflects the
+  // currently-connected wallet.
+  const ddHeader = el('div', { className: 'pt-wallet-dropdown__header' });
+  const ddAddr = el('span', {
+    className: 'pt-wallet-dropdown__addr',
+    dataset: { testId: 'wallet-dropdown-addr' },
+    text: '',
+  });
+  const ddCopy = el('button', {
+    className: 'pt-wallet-dropdown__copy',
+    dataset: { testId: 'wallet-dropdown-copy' },
+    attrs: { type: 'button', 'aria-label': 'Copy address' },
+    text: 'Copy',
+  });
+  ddHeader.appendChild(ddAddr);
+  ddHeader.appendChild(ddCopy);
+  dropdown.appendChild(ddHeader);
+
   const viewProfile = el('button', {
     className: 'pt-wallet-dropdown__item',
     dataset: { testId: 'wallet-view-profile' },
@@ -195,6 +224,12 @@ export function mountWalletChip(container, opts = {}) {
       chipBox.hidden = false;
       chip.hidden = false;
       chipText.textContent = shortAddr(acc.address);
+      // Phase 1.5 batch 7: full address in the dropdown header.
+      try {
+        ddAddr.textContent = getAddress(acc.address);
+      } catch {
+        ddAddr.textContent = acc.address;
+      }
       if (isOnBase()) {
         chipDot.classList.remove('pt-wallet-chip__dot--wrong');
         switchBtn.hidden = true;
@@ -265,6 +300,24 @@ export function mountWalletChip(container, opts = {}) {
     }
   }
 
+  async function onCopyClick(ev) {
+    // Don't bubble up — outside-click handler would close the dropdown.
+    if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    const addr = ddAddr.textContent || '';
+    if (!addr) return;
+    try {
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === 'function'
+      ) {
+        await navigator.clipboard.writeText(addr);
+      }
+    } catch {
+      // best-effort — no toast (the user can read the address in-place).
+    }
+  }
+
   async function onSwitchClick() {
     try {
       await switchToBase();
@@ -294,6 +347,7 @@ export function mountWalletChip(container, opts = {}) {
   viewProfile.addEventListener('click', onViewProfileClick);
   disconnectItem.addEventListener('click', onDisconnectClick);
   switchBtn.addEventListener('click', onSwitchClick);
+  ddCopy.addEventListener('click', onCopyClick);
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onDocKey);
 
@@ -313,6 +367,7 @@ export function mountWalletChip(container, opts = {}) {
     viewProfile.removeEventListener('click', onViewProfileClick);
     disconnectItem.removeEventListener('click', onDisconnectClick);
     switchBtn.removeEventListener('click', onSwitchClick);
+    ddCopy.removeEventListener('click', onCopyClick);
     document.removeEventListener('click', onDocClick);
     document.removeEventListener('keydown', onDocKey);
     unsubscribe();

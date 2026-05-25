@@ -12,6 +12,12 @@ import './styles.css';
 import './styles/sidebar-batch3.css';
 // Phase 1.5 batch 8: resizable panel drag-handles.
 import './styles/resizable.css';
+// Phase 1.5 batch 7: modals (SIWE, pay-flow, profile, wallet-dropdown)
+// redesigned to the dark-green design system. Loaded last so its overrides
+// for `.pt-modal*`, `.pt-wallet-*`, `.pt-pay__*`, `.pt-profile__*` win the
+// cascade against the legacy F0.x rules in styles.css. Pure CSS overlay —
+// the underlying JS components keep their existing class names + test-ids.
+import './styles/modals-batch7.css';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
