@@ -13,6 +13,13 @@ Then loop forever every 5 seconds:
 * ``nonces.cleanup()``
 * ``expiry.tick()`` — sub-tick, runs at most once every
   :data:`worker.expiry.EXPIRY_TICK_INTERVAL_SEC` (30 s) via a timestamp gate.
+* ``keeper.tick()`` — sub-tick, runs at most once every
+  :data:`worker.keeper.KEEPER_TICK_INTERVAL_SEC` (5 s). No-ops silently
+  when the keeper EOA / executor address are unset.
+
+Before the main loop we also call ``keeper.run_recovery()`` once — it walks
+``status='executing'`` rows left over from a previous crash and resolves
+them against on-chain receipts.
 
 Each tick is wrapped in its own try/except (inside the respective module),
 so a single failing tick never crashes the whole worker.
@@ -32,6 +39,7 @@ from worker import (
     backfill,
     event_loop,
     expiry,
+    keeper,
     nonces,
     operator_alerts,
     price_loop,
@@ -90,6 +98,11 @@ def run() -> None:
         log.exception("worker.access_bootstrap_failed")
 
     try:
+        keeper.run_recovery()
+    except Exception:
+        log.exception("worker.keeper_recovery_failed")
+
+    try:
         operator_alerts.announce_worker_start(backfill_complete=backfill_complete)
     except Exception:
         log.exception("worker.boot_alert_failed")
@@ -100,6 +113,7 @@ def run() -> None:
     # immediately (we want expiry to flush any orders that aged-out while the
     # worker was down).
     next_expiry_at = 0.0
+    next_keeper_at = 0.0
     while not _shutdown_requested:
         price_loop.tick()
         event_loop.tick()
@@ -116,6 +130,18 @@ def run() -> None:
             except Exception:
                 log.exception("worker.expiry_failed")
             next_expiry_at = now_mono + expiry.EXPIRY_TICK_INTERVAL_SEC
+
+        # Keeper tick: 5s cadence (per docs/plans/backend.md B2.3). No-ops
+        # silently when ``KEEPER_PRIVATE_KEY`` / ``EXECUTOR_CONTRACT`` are
+        # unset — see ``worker/keeper.py`` ``_enabled()``.
+        if now_mono >= next_keeper_at:
+            try:
+                touched = keeper.tick()
+                if touched > 0:
+                    log.info("worker.keeper.tick", touched=touched)
+            except Exception:
+                log.exception("worker.keeper_failed")
+            next_keeper_at = now_mono + keeper.KEEPER_TICK_INTERVAL_SEC
 
         # Sleep in 0.5s slices so SIGTERM is honored within ~500ms instead of
         # ~5s. Docker default grace-period is 10s — we want to exit well inside.
