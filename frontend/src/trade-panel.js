@@ -1524,13 +1524,53 @@ export function mountTradePanel(container, options = {}) {
     return state.token?.symbol || (state.token?.address ? shortenAddress(state.token.address) : '');
   }
 
+  /**
+   * Choose the MID price the fee-breakdown should be computed against.
+   *
+   * Market mode: current chart MID (`getDisplayMid`) — what the user gets if
+   * the swap executes right now.
+   * Limit mode:  user's target price (in the same display units as MID) —
+   * what the user will get when the keeper fires the order. Returns
+   * `null` when the target is empty / zero / invalid, so the breakdown
+   * stays hidden until a real target is entered (showing numbers against
+   * current MID before that would be misleading).
+   *
+   * @returns {number|null}
+   */
+  function getEffectiveMid() {
+    if (state.mode === 'limit') {
+      const triggerWei = parseAmountToWei(state.limitTriggerPriceStr);
+      if (!triggerWei || triggerWei <= 0n) return null;
+      const n = Number(formatWei(triggerWei, 18));
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    return getDisplayMid();
+  }
+
   function renderFeeBreakdown() {
     const amountWei = parseAmountToWei(state.amountStr);
-    const mid = getDisplayMid();
+    const effectiveMid = getEffectiveMid();
     const baseSym = baseTokenSymbol();
     const quoteSym = quoteTokenSymbol();
-    if (!amountWei || amountWei <= 0n || !mid || !baseSym || !quoteSym) {
+    // Limit mode + valid amount but no target yet → show a single-line
+    // placeholder so the user understands why the breakdown is empty.
+    if (
+      state.mode === 'limit' &&
+      amountWei &&
+      amountWei > 0n &&
+      baseSym &&
+      quoteSym &&
+      (effectiveMid === null || effectiveMid <= 0)
+    ) {
+      feeHeadlineLine.textContent = 'Enter trigger price to estimate fill';
+      feeMathLine.textContent = '';
+      feeBlock.classList.add('is-placeholder');
+      feeBlock.hidden = false;
+      return;
+    }
+    if (!amountWei || amountWei <= 0n || !effectiveMid || !baseSym || !quoteSym) {
       feeBlock.hidden = true;
+      feeBlock.classList.remove('is-placeholder');
       feeHeadlineLine.textContent = '';
       feeMathLine.textContent = '';
       return;
@@ -1542,20 +1582,23 @@ export function mountTradePanel(container, options = {}) {
     const amountNum = Number(formatWei(amountWei, 18));
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       feeBlock.hidden = true;
+      feeBlock.classList.remove('is-placeholder');
       return;
     }
-    // "Naive" = the amount the user would receive at MID with no fee.
-    // Buy:  naive base = amountIn (quote) / MID
-    // Sell: naive quote = amountIn (base)  × MID
+    // "Naive" = the amount the user would receive at the effective MID
+    // with no fee. In limit mode this is what the user gets when the
+    // keeper triggers at the target price, not what they'd get right now.
+    // Buy:  naive base = amountIn (quote) / effectiveMid
+    // Sell: naive quote = amountIn (base)  × effectiveMid
     let naiveNum;
     let inSym;
     let outSym;
     if (state.side === 'buy') {
-      naiveNum = amountNum / mid;
+      naiveNum = amountNum / effectiveMid;
       inSym = quoteSym;
       outSym = baseSym;
     } else {
-      naiveNum = amountNum * mid;
+      naiveNum = amountNum * effectiveMid;
       inSym = baseSym;
       outSym = quoteSym;
     }
@@ -1564,6 +1607,7 @@ export function mountTradePanel(container, options = {}) {
     const naiveWei = parseAmountToWei(naiveNum.toFixed(18));
     if (!naiveWei || naiveWei <= 0n) {
       feeBlock.hidden = true;
+      feeBlock.classList.remove('is-placeholder');
       return;
     }
     const { net, fee } = applyFeeToNaiveAmount(naiveWei);
@@ -1575,6 +1619,7 @@ export function mountTradePanel(container, options = {}) {
     const verb = state.side === 'buy' ? 'Spending' : 'Selling';
     feeHeadlineLine.textContent = `${verb} ${amountStr} ${inSym} → ≈ ${netStr} ${outSym}`;
     feeMathLine.textContent = `naive ${naiveStr} ${outSym}, ${feePct}% fee ${feeStr} ${outSym}`;
+    feeBlock.classList.remove('is-placeholder');
     feeBlock.hidden = false;
   }
 
@@ -2096,6 +2141,10 @@ export function mountTradePanel(container, options = {}) {
     state.limitTriggerPriceStr = limitPriceInput.value;
     renderLimit();
     renderCta();
+    // Wave 3 — limit-mode fee breakdown is computed against the target price,
+    // not current MID. Re-render on every trigger-price keystroke so the
+    // "≈ net out" estimate stays in sync with what the user is typing.
+    renderFeeBreakdown();
   }
 
   function onLimitTtlChange() {

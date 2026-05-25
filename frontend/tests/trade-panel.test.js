@@ -2822,6 +2822,141 @@ describe('mountTradePanel — Wave 2A fee breakdown', () => {
   });
 });
 
+// Wave 3 — limit-mode fee breakdown must reflect the user's target price,
+// not current MID. Market mode keeps its existing behaviour (uses MID).
+describe('mountTradePanel — Wave 3 fee breakdown in limit mode', () => {
+  const COUNTRY_TOKEN = {
+    address: '0xeeee000000000000000000000000000000000001',
+    symbol: 'BRA',
+    pricePitch: 0.5, // current MID = 0.5 PITCH per BRA
+  };
+
+  it('market-mode breakdown is based on current MID (baseline)', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    // MID = 0.5 → 1 PITCH buys naive 2 BRA, net 1.9 BRA after 5% fee.
+    expect(headline.textContent).toContain('1 PITCH');
+    expect(headline.textContent).toContain('1.9 BRA');
+    handle.destroy();
+  });
+
+  it('limit-mode with empty target shows placeholder, no MID numbers', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const block = container.querySelector('[data-test-id="fee-breakdown"]');
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    const math = container.querySelector('[data-test-id="fee-breakdown-math"]');
+    // Placeholder visible, but no MID-based numbers shown.
+    expect(block.hidden).toBe(false);
+    expect(headline.textContent.toLowerCase()).toContain('trigger price');
+    expect(headline.textContent).not.toContain('1.9');
+    expect(headline.textContent).not.toContain('2 BRA');
+    expect(math.textContent).toBe('');
+    handle.destroy();
+  });
+
+  it('limit-mode with target=10 computes breakdown against 10, not MID', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN, // current MID = 0.5
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '10'; // limit-buy at 10 PITCH per BRA
+    trigger.dispatchEvent(new Event('input'));
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    const math = container.querySelector('[data-test-id="fee-breakdown-math"]');
+    // At target=10: naive base = 1 / 10 = 0.1 BRA, fee 5% = 0.005, net 0.095 BRA.
+    // Specifically NOT the MID-based 1.9 BRA (which would imply MID=0.5).
+    expect(headline.textContent).toContain('1 PITCH');
+    expect(headline.textContent).toContain('0.095 BRA');
+    expect(headline.textContent).not.toContain('1.9 BRA');
+    expect(math.textContent).toContain('naive 0.1 BRA');
+    expect(math.textContent).toContain('0.005 BRA');
+    handle.destroy();
+  });
+
+  it('limit-buy at target=10 with MID=4.05 yields smaller out than market would', async () => {
+    const TOKEN_HIGH_MID = { ...COUNTRY_TOKEN, pricePitch: 4.05 };
+    // Market: 1 PITCH / 4.05 ≈ 0.2469 BRA naive, net ≈ 0.2346
+    // Limit @ 10: 1 PITCH / 10 = 0.1 BRA naive, net = 0.095 — clearly smaller.
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: TOKEN_HIGH_MID,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '10';
+    trigger.dispatchEvent(new Event('input'));
+    const headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    // Breakdown reflects the limit target (0.095 BRA), not market (~0.2346 BRA).
+    expect(headline.textContent).toContain('0.095 BRA');
+    expect(headline.textContent).not.toContain('0.234');
+    handle.destroy();
+  });
+
+  it('limit-mode trigger cleared after entry → returns to placeholder', async () => {
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: COUNTRY_TOKEN,
+      proCoverEnabled: false,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+    });
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '10';
+    trigger.dispatchEvent(new Event('input'));
+    let headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    expect(headline.textContent).toContain('0.095 BRA');
+    // Now clear the trigger.
+    trigger.value = '';
+    trigger.dispatchEvent(new Event('input'));
+    headline = container.querySelector('[data-test-id="fee-breakdown-headline"]');
+    expect(headline.textContent.toLowerCase()).toContain('trigger price');
+    expect(headline.textContent).not.toContain('BRA');
+    handle.destroy();
+  });
+});
+
 // Wave 2A — limit-mode "target already met" pre-check warning. Compares
 // current MID (chart price) against the user-typed display target.
 describe('mountTradePanel — Wave 2A target-already-met warning', () => {
