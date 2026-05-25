@@ -32,9 +32,6 @@ from shared.db import fetch_all
 
 bp = Blueprint("portfolio", __name__)
 
-_TINY_WEI = 0  # any non-zero wei position is shown; dust comes from float arith,
-# but the SQL aggregation stays in NUMERIC(78,0), so true integer 0 is the cutoff.
-
 
 def _load_positions(wallet: str) -> list[dict[str, Any]]:
     """Aggregate ``events`` for ``wallet`` into per-token positions.
@@ -64,14 +61,13 @@ def _load_positions(wallet: str) -> list[dict[str, Any]]:
           t.symbol,
           t.kind,
           t.country_address,
-          COALESCE(m.price_pitch, 0) AS price_pitch_wei,
-          COALESCE(m.price_country, 0) AS price_country_wei
+          COALESCE(m.price_pitch, 0) AS price_pitch_wei
         FROM events e
         JOIN tokens t        ON t.address = e.token_address
         LEFT JOIN market_state m ON m.token_address = e.token_address
         WHERE e.trader_address = %s
         GROUP BY e.token_address, t.symbol, t.kind, t.country_address,
-                 m.price_pitch, m.price_country
+                 m.price_pitch
         HAVING SUM(CASE WHEN e.side='buy' THEN e.token_value::numeric
                         ELSE -e.token_value::numeric END) > 0
         ORDER BY e.token_address
@@ -128,7 +124,6 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
     received_wei = int(row["received_wei"])
     fees_wei = int(row["fees_wei"])
     price_pitch_wei = int(row["price_pitch_wei"])
-    price_country_wei = int(row["price_country_wei"])
 
     # ─── Cost basis (avg entry per token, in *base* currency, wei) ──────────
     # spent / bought, integer-divided to stay in wei units. Used for both
