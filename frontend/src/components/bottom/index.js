@@ -141,11 +141,13 @@ function formatPercent(value) {
  *   pageSize?: number,
  *   softLock?: object,
  *   onBalance?: (addr: string|null, balance: number) => void,
+ *   onTokenSelect?: (item: { token: string, symbol: string, kind: string|null }) => void,
  * }} [options]
  * @returns {{
  *   setToken: (token: string|null) => Promise<void>,
  *   setMyAddress: (address: string|null) => void,
  *   pushTrades: (trades: object[]) => void,
+ *   pushBalances: (balances: Array<{address: string, token: string, wei: string}>) => void,
  *   refresh: () => Promise<void>,
  *   destroy: () => void,
  * }}

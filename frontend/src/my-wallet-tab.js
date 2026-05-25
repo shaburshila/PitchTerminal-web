@@ -38,7 +38,10 @@
 
 import * as defaultApi from './api.js';
 import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
-import { getAccount as defaultGetAccount, onAccountChange as defaultOnAccountChange } from './wallet.js';
+import {
+  getAccount as defaultGetAccount,
+  onAccountChange as defaultOnAccountChange,
+} from './wallet.js';
 import { flagSrc, hasFlag } from './flags.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -315,7 +318,7 @@ export function mountMyWalletTab(container, opts = {}) {
     wrap.appendChild(
       el('p', {
         className: 'pt-mywallet__empty-body',
-        text: 'You have no holdings. Browse the markets and buy your first position to see it here.',
+        text: 'You have no holdings. Browse the markets and buy your first position.',
       }),
     );
     root.appendChild(wrap);
@@ -332,7 +335,10 @@ export function mountMyWalletTab(container, opts = {}) {
     );
     const totalValue = state.items.reduce((acc, it) => acc + (it.value || 0), 0);
     const totalPnl = state.items.reduce((acc, it) => acc + (it.pnl || 0), 0);
-    const totalCost = state.items.reduce((acc, it) => acc + (it.balance || 0) * (it.avgEntry || 0), 0);
+    const totalCost = state.items.reduce(
+      (acc, it) => acc + (it.balance || 0) * (it.avgEntry || 0),
+      0,
+    );
     const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : null;
 
     const valueWrap = el('span', { className: 'pt-mywallet__head-value' });
