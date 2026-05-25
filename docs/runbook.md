@@ -170,6 +170,13 @@ $ vim .env
 
 > Никогда не коммить `.env`. Он в `.gitignore`, но привычка важнее.
 
+После заполнения `.env` создай симлинк `infra/.env -> ../.env` (требуется для compose substitution — см. §9.5 для подробностей):
+
+```bash
+$ cd ~/pitchterminal
+$ bash infra/scripts/setup-env-symlink.sh
+```
+
 ---
 
 ## 8. Старт стека
@@ -294,16 +301,32 @@ $ docker compose logs --since 30s worker | grep keeper
 
 ### Симлинк `infra/.env → ../.env` (требуется для compose variable substitution)
 
-Compose-файл использует `${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}` для подстановки. Substitution читает переменные **из shell или из `.env` файла в директории compose-file** — то есть из `infra/.env`. `env_file: ../.env` в YAML-блоке сервиса в substitution НЕ участвует — он только пробрасывается внутрь контейнера.
+**Проблема.** Compose-файл `infra/docker-compose.yml` использует `${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}` (и аналогичные `${...:-default}`) для подстановки. Substitution резолвится **из shell env или из `.env` файла рядом с compose-file** — то есть из `infra/.env`. Реальный production-`.env` живёт уровнем выше (`~/pitchterminal/.env`), потому что секреты не должны лежать внутри clonable-репо. Эти две директории compose воспринимает как разные scope'ы.
 
-Без симлинка `infra/.env` substitution получает дефолт `pt:pt`, что не совпадает с реальным паролем postgres (длинный из `~/pitchterminal/.env`) — worker падает с `password authentication failed for user "pt"`.
+`env_file: ../.env` в YAML-блоке сервиса в substitution **НЕ участвует** — он только пробрасывает переменные внутрь контейнера на runtime.
 
-Setup (один раз на VPS):
+**Что ломается без симлинка.** Substitution получает дефолт `pt:pt` (или другой плейсхолдер), который не совпадает с фактическим длинным паролем Postgres (тот, что в `~/pitchterminal/.env` + `POSTGRES_PASSWORD` уже захэширован в `pg_authid` volume). Worker/api контейнеры стартуют с `DATABASE_URL=postgresql://pt:pt@postgres:5432/pt` и валятся в restart-loop с `password authentication failed for user "pt"`.
+
+**Setup (один раз на fresh VPS, после первого `git clone` и заполнения `~/pitchterminal/.env`):**
+
 ```bash
-$ cd ~/pitchterminal/infra && ln -s ../.env .env
+$ cd ~/pitchterminal
+$ bash infra/scripts/setup-env-symlink.sh
+# [ok] created infra/.env -> ../.env
 ```
 
-Альтернатива — всегда вызывать `docker compose --env-file ../.env ...` (что и делает §8 этого runbook'а), но CD-скрипт деплоя `docker compose up -d --build` без `--env-file` не подхватит — поэтому симлинк надёжнее.
+Скрипт идемпотентен — повторный запуск при уже существующем правильном симлинке = no-op (`[ok] already symlinked`). При collision (на месте симлинка лежит реальный файл, либо симлинк указывает не туда) — exit 1 без перезаписи.
+
+**Verify (substitution резолвится к реальному паролю):**
+
+```bash
+$ cd ~/pitchterminal/infra
+$ docker compose config | grep -E 'DATABASE_URL|POSTGRES_PASSWORD' | head -4
+# Должны увидеть ваш длинный production-пароль (НЕ default `pt:pt`).
+# Если в выводе `pt:pt` — симлинк не подхватился, перезапусти setup-env-symlink.sh.
+```
+
+**Альтернатива** — всегда вызывать `docker compose --env-file ../.env ...` (что и делает §8 этого runbook'а). Но CD-скрипт деплоя (`.github/workflows/deploy.yml`) делает `docker compose up -d --build` без `--env-file` — поэтому симлинк надёжнее для unattended-redeploy.
 
 ---
 
@@ -313,7 +336,17 @@ $ cd ~/pitchterminal/infra && ln -s ../.env .env
 
 Compose substitution `${DATABASE_URL:-...}` не нашёл переменную и подставил дефолт `pt:pt`, который не соответствует фактическому паролю postgres. Симптом: после `docker compose up -d --force-recreate` (или CD-redeploy) worker/api валятся с auth-fail, хотя `.env` правильный.
 
-Фикс: создать симлинк `infra/.env -> ../.env` (см. §9.5). Существующий postgres data volume **не** надо трогать (`docker volume rm pt_pgdata` — DATA LOSS).
+**Это первое, что надо проверить** при failed auth после deploy на fresh VPS либо после `rm infra/.env` инцидента.
+
+Фикс — запустить idempotent setup-скрипт:
+
+```bash
+$ cd ~/pitchterminal
+$ bash infra/scripts/setup-env-symlink.sh
+$ docker compose -f infra/docker-compose.yml up -d --force-recreate api worker
+```
+
+Существующий postgres data volume **не** надо трогать (`docker volume rm pt_pgdata` — DATA LOSS). Детали — см. §9.5.
 
 ### `FileNotFoundError: '/app/abis/LimitOrderExecutor.json'` в логах keeper'а
 
