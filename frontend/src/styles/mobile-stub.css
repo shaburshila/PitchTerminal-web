@@ -1,0 +1,100 @@
+/*
+ * Mobile-stub overlay — full-screen branded "desktop-only" screen.
+ *
+ * Uses tokens.css palette so the stub matches the dark-green design system
+ * the rest of the app has migrated to (Phase 1.5 Batch 9). The card sits
+ * centered, max 420px wide, with the same surface + radius + line tokens
+ * as the production modals (`pt-modal`-family).
+ *
+ * `z-index: 9999` is above everything else the app could possibly mount —
+ * defensive in case bootstrap() runs anyway and starts spawning DOM (it
+ * shouldn't, but we want the stub to win regardless).
+ */
+
+.pt-mobile-stub {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-0, #0a0f0d);
+  font-family: var(--font-ui, 'Inter', system-ui, sans-serif);
+  color: var(--text, #e8efe9);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.pt-mobile-stub__card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, #1f2a26);
+  border-radius: var(--radius-lg, 9px);
+  padding: 32px 24px;
+  box-shadow: var(--shadow-modal, 0 20px 80px rgba(0, 0, 0, 0.4));
+  text-align: center;
+}
+
+.pt-mobile-stub__brand {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent, #3ddb8e);
+  margin-bottom: 20px;
+}
+
+.pt-mobile-stub__lead {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text, #e8efe9);
+  margin: 0 0 12px;
+}
+
+.pt-mobile-stub__body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2, #9caea6);
+  margin: 0 0 20px;
+}
+
+.pt-mobile-stub__soon {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--accent, #3ddb8e);
+  background: var(--up-dim, rgba(61, 219, 142, 0.15));
+  border: 1px solid var(--line, #1f2a26);
+  border-radius: var(--radius-pill, 14px);
+  padding: 6px 12px;
+  margin-bottom: 24px;
+}
+
+.pt-mobile-stub__copy {
+  appearance: none;
+  background: var(--bg-2, #141d1a);
+  border: 1px solid var(--line, #1f2a26);
+  color: var(--text, #e8efe9);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 16px;
+  border-radius: var(--radius-md, 6px);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.pt-mobile-stub__copy:hover:not(:disabled) {
+  background: var(--bg-3, #1a2421);
+  border-color: var(--line-strong, #2a3530);
+}
+
+.pt-mobile-stub__copy:disabled {
+  opacity: 0.65;
+  cursor: default;
+}

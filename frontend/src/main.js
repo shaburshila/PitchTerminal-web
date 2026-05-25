@@ -28,6 +28,11 @@ import './styles/modals-batch7.css';
 import './styles/trade-panel-batch5.css';
 // Onboarding welcome modal + header help button (`?`).
 import './styles/onboarding.css';
+// Mobile stub — full-screen takeover for sub-1024px viewports (MVP-time
+// fallback, see mobile-stub.js for rationale). Loaded eagerly because
+// bootstrap() decides whether to mount the stub vs the full app synchronously.
+import './styles/mobile-stub.css';
+import { isMobileViewport, mountMobileStub } from './mobile-stub.js';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
@@ -318,6 +323,17 @@ function bootstrap() {
   const root = document.getElementById('app');
   if (!root) {
     console.error('PitchTerminal: #app root element not found');
+    return;
+  }
+  // Mobile viewport (or wide viewport without an injected wallet provider)
+  // — render the desktop-only stub and bail out BEFORE any wallet / wagmi /
+  // SSE init. wagmi's `injected()` connector throws "Provider not found." on
+  // contexts without `window.ethereum`, which would otherwise surface as a
+  // red banner. We also skip layout mount so the broken 3-col grid never
+  // paints. See mobile-stub.js for the breakpoint + provider-check
+  // rationale.
+  if (isMobileViewport()) {
+    mountMobileStub(root);
     return;
   }
   // F0.12a: parse `?ref=` and resolve it asynchronously. Fire-and-forget —
