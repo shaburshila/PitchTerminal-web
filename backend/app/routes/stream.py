@@ -136,11 +136,83 @@ def _fetch_prices(addresses: list[str]) -> dict[str, Any]:
     return {"updatedAt": now_ts, "stale": False, "tokens": tokens}
 
 
+def _fetch_post_trade_balances(
+    pairs: list[tuple[str, str]],
+) -> list[dict[str, str]]:
+    """Return post-trade net token balances for ``(token, trader)`` pairs.
+
+    For the bonding-curve hooks every Buy/Sell event has exactly one
+    counterparty (the bonding curve itself mints/burns the supply, no peer
+    on the other side). So the "post-trade balance" is the trader's current
+    net position for that token, computed as the integer wei sum
+    ``Σ(buys.token_value) - Σ(sells.token_value)``. Because the producer
+    already inserted the new events before NOTIFY-ing ``pt_events``, the
+    aggregation here includes them — i.e. it IS the post-trade balance.
+
+    Returns ``[{address, token, wei}]`` per unique pair. Pairs with no events
+    (defensive — shouldn't happen since the caller passes addresses pulled
+    from the same events) yield ``wei = "0"``. Frontend uses this list to
+    reactively update the Holders bottom-tab without an extra round-trip.
+    """
+
+    if not pairs:
+        return []
+    # ``ANY(%s)`` over a row-typed array is awkward; instead unzip the pairs
+    # into two arrays and reconstruct the cross-product in Python. Since each
+    # caller batch has very few unique pairs (typically 1-5 events per NOTIFY)
+    # the extra rows from the cartesian SQL are tolerable. We dedupe in
+    # Python before the query so the cardinality stays small.
+    unique = list({(tok.lower(), trd.lower()) for tok, trd in pairs})
+    tokens = [t for t, _ in unique]
+    traders = [tr for _, tr in unique]
+    rows = fetch_all(
+        """
+        SELECT token_address, trader_address,
+               SUM(CASE WHEN side='buy' THEN token_value::numeric
+                        ELSE -token_value::numeric END) AS net_wei
+        FROM events
+        WHERE token_address = ANY(%s) AND trader_address = ANY(%s)
+        GROUP BY token_address, trader_address
+        """,
+        (tokens, traders),
+    )
+    by_pair: dict[tuple[str, str], int] = {}
+    for r in rows:
+        key = (r["token_address"].strip().lower(), r["trader_address"].strip().lower())
+        net = int(r["net_wei"])
+        # Clamp to 0 — float drift can't sneak in (NUMERIC), but a sell that
+        # exceeds prior balance would mean the indexer saw events out of
+        # order. Better to ship 0 than a negative balance to the UI.
+        by_pair[key] = max(net, 0)
+    # Preserve the original ``unique`` order, but only include pairs that
+    # actually appear in ``pairs`` — defensive against caller mistakes.
+    out: list[dict[str, str]] = []
+    for tok, trd in unique:
+        out.append(
+            {
+                "address": trd,
+                "token": tok,
+                "wei": str(by_pair.get((tok, trd), 0)),
+            }
+        )
+    return out
+
+
 def _fetch_events(ids: list[int]) -> dict[str, Any]:
-    """Fetch ``events`` rows by id; build the ``event: events`` payload."""
+    """Fetch ``events`` rows by id; build the ``event: events`` payload.
+
+    Payload shape per api-spec §8.3 ``event: events``:
+        ``{newTrades: [...], balances: [{address, token, wei}, ...]}``
+
+    The ``balances`` list carries the post-trade net token holding of the
+    trader for every (token, trader) pair affected by this batch. Frontend
+    uses it to reactively update the Holders bottom-tab without re-fetching
+    ``/api/v1/tokens/{token}/trades``. Pairs are deduplicated — multiple
+    trades by the same wallet on the same token contribute a single entry.
+    """
 
     if not ids:
-        return {"newTrades": []}
+        return {"newTrades": [], "balances": []}
     rows = fetch_all(
         """
         SELECT id, token_address, side, trader_address,
@@ -152,6 +224,7 @@ def _fetch_events(ids: list[int]) -> dict[str, Any]:
         (ids,),
     )
     trades = []
+    pairs: list[tuple[str, str]] = []
     for row in rows:
         base = int(row["base_value"]) / 1e18
         tok = int(row["token_value"]) / 1e18
@@ -164,11 +237,13 @@ def _fetch_events(ids: list[int]) -> dict[str, Any]:
             market_price = (base - fee) / tok if tok > 0 else 0.0
         else:
             market_price = (base + fee) / tok if tok > 0 else 0.0
+        token_addr = row["token_address"]
+        trader_addr = row["trader_address"]
         trades.append(
             {
-                "token": row["token_address"],
+                "token": token_addr,
                 "type": row["side"],
-                "trader": row["trader_address"],
+                "trader": trader_addr,
                 "baseValue": base,
                 "tokenValue": tok,
                 "price": eff_price,
@@ -178,7 +253,10 @@ def _fetch_events(ids: list[int]) -> dict[str, Any]:
                 "timestamp": int(row["ts"].timestamp()) if row["ts"] is not None else 0,
             }
         )
-    return {"newTrades": trades}
+        pairs.append((token_addr, trader_addr))
+
+    balances = _fetch_post_trade_balances(pairs)
+    return {"newTrades": trades, "balances": balances}
 
 
 def _fetch_order_for_owner(order_id: int, owner_address: str) -> dict[str, Any] | None:
