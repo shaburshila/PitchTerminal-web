@@ -333,18 +333,14 @@ function bootstrap() {
   }
 
   const chart = mountChart(chartZone);
-  // Phase 1.5 batch 4 wiring — when my-wallet-tab fetches a fresh position,
-  // feed the balance (display units, NOT wei) into chart.setOwnBalance so
-  // the Net pos overlay line shows. Cleared to 0 on token swap / no-data.
-  const bottom = mountBottomTabs(bottomZone, {
-    onBalance: (addr, balance) => chart.setOwnBalance(addr, balance),
-  });
   // F1.3 — address → token-row map for country tokens, populated from a
   // one-shot getTokens() fetch below. Used by the trade panel's "Купить
   // country" CTA: the panel hands us a lowercase address; we look up the
   // full registry row and feed it through the same chart/bottom/trade
   // setToken plumbing the sidebar uses.
   const countryTokensByAddr = new Map();
+  /** @type {Map<string, object>} address (lc) → player token-registry row. */
+  const playerTokensByAddr = new Map();
 
   function selectToken(token) {
     if (!token || typeof token.address !== 'string') return;
@@ -352,6 +348,40 @@ function bootstrap() {
     bottom.setToken(token.address);
     trade.setToken(token);
   }
+
+  /**
+   * Resolve a token address to a registry row (country or player) and call
+   * selectToken. Used by my-wallet portfolio row clicks (Wave 2B). When the
+   * registry doesn't have the row yet (race on first mount), build a minimal
+   * row from the supplied meta so the click still does something useful.
+   */
+  function selectByAddress(addr, meta) {
+    if (typeof addr !== 'string' || !addr) return;
+    const key = addr.toLowerCase();
+    const row =
+      countryTokensByAddr.get(key) ||
+      playerTokensByAddr.get(key) ||
+      (meta
+        ? {
+            address: addr,
+            symbol: meta.symbol || '',
+            name: meta.symbol || addr,
+            kind: meta.kind || null,
+          }
+        : null);
+    if (!row) return;
+    selectToken(row);
+  }
+
+  // Phase 1.5 batch 4 wiring — when my-wallet-tab fetches a fresh position,
+  // feed the balance (display units, NOT wei) into chart.setOwnBalance so
+  // the Net pos overlay line shows. Cleared to 0 on token swap / no-data.
+  // Wave 2B: also forward portfolio row-clicks via onTokenSelect → selectByAddress.
+  const bottom = mountBottomTabs(bottomZone, {
+    onBalance: (addr, balance) => chart.setOwnBalance(addr, balance),
+    onTokenSelect: (item) =>
+      selectByAddress(item?.token, { symbol: item?.symbol, kind: item?.kind }),
+  });
 
   // F1.1: Market trade panel — read-only quote in this phase. Approve/swap
   // (F1.2) will be wired in the next batch. Mounted BEFORE the soft-lock so
@@ -471,14 +501,22 @@ function bootstrap() {
     sidebar,
   });
 
-  // Populate the country-token registry once; same /tokens endpoint the
-  // sidebar already hits, so the response is hot in the HTTP cache.
+  // Populate the country + player token registries once; same /tokens endpoint
+  // the sidebar already hits, so the response is hot in the HTTP cache. The
+  // player registry feeds selectByAddress (Wave 2B) so my-wallet row clicks
+  // on player tokens resolve to a full token row.
   getTokens()
     .then((data) => {
       const countries = Array.isArray(data?.countries) ? data.countries : [];
       for (const c of countries) {
         if (c && typeof c.address === 'string' && c.address) {
           countryTokensByAddr.set(c.address.toLowerCase(), c);
+        }
+      }
+      const players = Array.isArray(data?.players) ? data.players : [];
+      for (const p of players) {
+        if (p && typeof p.address === 'string' && p.address) {
+          playerTokensByAddr.set(p.address.toLowerCase(), p);
         }
       }
     })

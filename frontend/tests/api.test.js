@@ -12,6 +12,7 @@ import {
   getConfig,
   getHealth,
   getOrders,
+  getPortfolio,
   getPosition,
   getProfile,
   getTokens,
@@ -269,6 +270,12 @@ describe('endpoint wrappers — URLs', () => {
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe(`${API_BASE}/orders/1234`);
     expect(init.method).toBe('DELETE');
+  });
+
+  it('getPortfolio hits /portfolio', async () => {
+    fetch.mockResolvedValueOnce(makeResponse({ body: { items: [] } }));
+    await getPortfolio();
+    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/portfolio`);
   });
 
   it('setArmed PUTs { armed }', async () => {

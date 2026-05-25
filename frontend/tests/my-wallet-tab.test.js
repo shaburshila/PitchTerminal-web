@@ -5,41 +5,50 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountMyWalletTab } from '../src/my-wallet-tab.js';
 import * as accessStore from '../src/access-store.js';
 
-const TOKEN = '0xaaa1';
+const TOKEN = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+const TOKEN_2 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2';
 
-function makePosition(overrides = {}) {
+function makeItem(overrides = {}) {
   return {
-    configured: true,
-    address: '0x1111111111111111111111111111111111111111',
-    hasActivity: true,
-    buys: 3,
-    sells: 1,
-    position: 2.5,
-    positionValue: 30.0,
-    spent: 30.0,
-    received: 12.0,
-    tokensSold: 1.0,
-    avgBuy: 12.0,
-    breakEven: 7.2,
-    currentPrice: 12.0,
-    realizedPnl: 1.5,
-    unrealizedPnl: -0.5,
-    totalPnl: 1.0,
-    totalPnlPct: 3.3,
-    breakEvenDistPct: 66.6,
-    feesPaid: 0.4,
-    ownershipPct: 0.001,
-    rank: 5,
-    holdersCount: 12,
-    firstTradeTs: 1709000000,
-    holdingDays: 1.5,
+    token: TOKEN,
+    symbol: 'FRA',
+    kind: 'country',
+    balance: '2500000000000000000',
+    balanceDisplay: 2.5,
+    avgEntryPitch: '12000000000000000000',
+    avgEntryPitchDisplay: 12.0,
+    currentPricePitch: '12000000000000000000',
+    currentPricePitchDisplay: 12.0,
+    valuePitch: '30000000000000000000',
+    valuePitchDisplay: 30.0,
+    pnlPitch: '1000000000000000000',
+    pnlPitchDisplay: 1.0,
+    feesPaidWei: '400000000000000000',
+    spentBaseWei: '30000000000000000000',
+    receivedBaseWei: '12000000000000000000',
     ...overrides,
   };
 }
 
-function makeApi(resp) {
+function makeApi(items = [makeItem()]) {
   return {
-    getPosition: vi.fn(async () => resp ?? makePosition()),
+    getPortfolio: vi.fn(async () => ({ items })),
+  };
+}
+
+function makeAccount({ connected = true, address = '0xUSER' } = {}) {
+  let snapshot = { isConnected: connected, address: connected ? address : null };
+  const listeners = new Set();
+  return {
+    getAccount: () => snapshot,
+    onAccountChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    setState(next) {
+      snapshot = { ...snapshot, ...next };
+      for (const fn of [...listeners]) fn(snapshot);
+    },
   };
 }
 
@@ -72,71 +81,108 @@ describe('mountMyWalletTab', () => {
 
   it('renders compact locked placeholder when not premium (no soft-lock overlay)', () => {
     const c = makeContainer();
+    const acc = makeAccount();
     mountMyWalletTab(c, {
       apiClient: makeApi(),
       token: TOKEN,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
     });
-    // Lock affordance now lives on the bottom-tab BUTTON. The pane just shows
-    // a compact "Premium feature" placeholder — no gold cover, no skeleton.
     expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeTruthy();
     expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
-    expect(c.querySelector('[data-test-id="mywallet-skeleton"]')).toBeFalsy();
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeFalsy();
   });
 
   it('does not fetch when not premium', async () => {
     const c = makeContainer();
     const api = makeApi();
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      token: TOKEN,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    expect(api.getPosition).not.toHaveBeenCalled();
+    expect(api.getPortfolio).not.toHaveBeenCalled();
   });
 
-  it('shows placeholder for premium + no token', () => {
+  it('shows disconnected placeholder when premium but wallet not connected', () => {
     accessStore.set('premium');
     const c = makeContainer();
-    mountMyWalletTab(c, { apiClient: makeApi(), token: null });
-    expect(c.querySelector('[data-test-id="mywallet-no-token"]')).toBeTruthy();
+    const acc = makeAccount({ connected: false });
+    mountMyWalletTab(c, {
+      apiClient: makeApi(),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    expect(c.querySelector('[data-test-id="mywallet-disconnected"]')).toBeTruthy();
     expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeFalsy();
   });
 
-  it('fetches and renders PnL grid for premium + token', async () => {
+  it('fetches and renders portfolio table for premium + connected', async () => {
     accessStore.set('premium');
     const c = makeContainer();
-    const api = makeApi();
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const api = makeApi([
+      makeItem({ token: TOKEN, symbol: 'FRA', kind: 'country', valuePitchDisplay: 30 }),
+      makeItem({
+        token: TOKEN_2,
+        symbol: 'BRA',
+        kind: 'country',
+        balanceDisplay: 5.0,
+        avgEntryPitchDisplay: 4.0,
+        currentPricePitchDisplay: 5.0,
+        valuePitchDisplay: 25.0,
+        pnlPitchDisplay: 5.0,
+      }),
+    ]);
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    expect(api.getPosition).toHaveBeenCalledWith(TOKEN);
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeTruthy();
-    expect(c.querySelector('[data-test-id="mywallet-position"]')).toBeTruthy();
-    // Position value cell shows 2.5
-    expect(c.querySelector('[data-test-id="mywallet-position"]').textContent).toContain('2.5');
-    // Total PnL has positive class (+1.0)
-    const total = c.querySelector('[data-test-id="mywallet-total"]');
-    expect(total.querySelector('.pt-mywallet__stat-value').className).toContain('positive');
+    expect(api.getPortfolio).toHaveBeenCalledTimes(1);
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeTruthy();
+    const rows = c.querySelectorAll('[data-test-id="mywallet-row"]');
+    expect(rows.length).toBe(2);
+    // Sorted by value desc — FRA(30) before BRA(25)
+    expect(rows[0].dataset.token).toBe(TOKEN);
+    expect(rows[1].dataset.token).toBe(TOKEN_2);
   });
 
-  it('renders empty-state for hasActivity=false', async () => {
+  it('renders empty-state when items array is empty', async () => {
     accessStore.set('premium');
     const c = makeContainer();
-    const api = makeApi({ configured: true, hasActivity: false });
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const api = makeApi([]);
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
     expect(c.querySelector('[data-test-id="mywallet-empty"]')).toBeTruthy();
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeFalsy();
   });
 
-  it('renders error when getPosition rejects', async () => {
+  it('renders error when getPortfolio rejects with non-auth error', async () => {
     accessStore.set('premium');
     const c = makeContainer();
     const api = {
-      getPosition: vi.fn(async () => {
+      getPortfolio: vi.fn(async () => {
         const err = new Error('Server down');
         err.status = 500;
         throw err;
       }),
     };
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
     const errEl = c.querySelector('[data-test-id="mywallet-error"]');
     expect(errEl).toBeTruthy();
@@ -144,204 +190,385 @@ describe('mountMyWalletTab', () => {
     expect(errEl.textContent).toContain('500');
   });
 
+  it('treats 402 as empty (silent gating) without error banner', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const api = {
+      getPortfolio: vi.fn(async () => {
+        const err = new Error('Payment required');
+        err.status = 402;
+        throw err;
+      }),
+    };
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    expect(c.querySelector('[data-test-id="mywallet-error"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-empty"]')).toBeTruthy();
+  });
+
   it('auto-fetches when access flips from free to premium', async () => {
     accessStore.set('free');
     const c = makeContainer();
     const api = makeApi();
-    mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    expect(api.getPosition).not.toHaveBeenCalled();
+    expect(api.getPortfolio).not.toHaveBeenCalled();
 
     accessStore.set('premium');
     await flush();
-    expect(api.getPosition).toHaveBeenCalledTimes(1);
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeTruthy();
+    expect(api.getPortfolio).toHaveBeenCalledTimes(1);
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeTruthy();
   });
 
   it('clears data + re-renders locked placeholder when access downgrades from premium', async () => {
     accessStore.set('premium');
     const c = makeContainer();
-    mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN });
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi(),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeTruthy();
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeTruthy();
 
     accessStore.set('free');
     await flush();
-    expect(c.querySelector('[data-test-id="mywallet-grid"]')).toBeFalsy();
+    expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeFalsy();
     expect(c.querySelector('[data-test-id="mywallet-locked"]')).toBeTruthy();
-    expect(c.querySelector('[data-test-id="soft-lock"]')).toBeFalsy();
-  });
-
-  it('setToken fetches new data for new token', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    const api = makeApi();
-    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN });
-    await flush();
-    expect(api.getPosition).toHaveBeenCalledWith(TOKEN);
-
-    await handle.setToken('0xbbb2');
-    expect(api.getPosition).toHaveBeenCalledWith('0xbbb2');
-    expect(api.getPosition).toHaveBeenCalledTimes(2);
-  });
-
-  it('setToken with same address but fresh meta literal does not re-fetch', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    const api = makeApi();
-    const handle = mountMyWalletTab(c, {
-      apiClient: api,
-      token: TOKEN,
-      tokenMeta: { symbol: 'FRA', kind: 'country' },
-    });
-    await flush();
-    expect(api.getPosition).toHaveBeenCalledTimes(1);
-
-    // Caller rebuilds the meta object literal — reference inequality, but
-    // address unchanged. Guard should treat this as display-only update.
-    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
-    await flush();
-    expect(api.getPosition).toHaveBeenCalledTimes(1);
-
-    await handle.setToken(TOKEN, { symbol: 'FRA', kind: 'country' });
-    await flush();
-    expect(api.getPosition).toHaveBeenCalledTimes(1);
-  });
-
-  it('setToken(null) clears and shows no-token placeholder', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    const handle = mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN });
-    await flush();
-    await handle.setToken(null);
-    expect(c.querySelector('[data-test-id="mywallet-no-token"]')).toBeTruthy();
   });
 
   it('refresh() re-fetches', async () => {
     accessStore.set('premium');
     const c = makeContainer();
     const api = makeApi();
-    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const acc = makeAccount();
+    const handle = mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    expect(api.getPosition).toHaveBeenCalledTimes(1);
+    expect(api.getPortfolio).toHaveBeenCalledTimes(1);
     await handle.refresh();
-    expect(api.getPosition).toHaveBeenCalledTimes(2);
+    expect(api.getPortfolio).toHaveBeenCalledTimes(2);
   });
 
   it('destroy() unsubscribes from access changes', async () => {
     accessStore.set('free');
     const c = makeContainer();
     const api = makeApi();
-    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN });
+    const acc = makeAccount();
+    const handle = mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     handle.destroy();
     accessStore.set('premium');
     await flush();
-    expect(api.getPosition).not.toHaveBeenCalled();
+    expect(api.getPortfolio).not.toHaveBeenCalled();
   });
 
-  // ── Phase 1.5 batch 6 — visual redesign ────────────────────────────────
-  describe('Phase 1.5 batch 6 redesign', () => {
-    it('renders the head strip with total holdings value + positive PnL pill', async () => {
-      accessStore.set('premium');
-      const c = makeContainer();
-      const api = makeApi(makePosition({ positionValue: 42.5, totalPnl: 5.25, totalPnlPct: 14.2 }));
-      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
-      await flush();
-      const head = c.querySelector('[data-test-id="mywallet-head"]');
-      expect(head).toBeTruthy();
-      expect(c.querySelector('[data-test-id="mywallet-head-value"]').textContent).toContain('42.5');
-      const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
-      expect(pill).toBeTruthy();
-      expect(pill.className).toContain('is-positive');
-      expect(pill.textContent).toContain('+5.25');
-      expect(pill.textContent).toContain('+14.20%');
+  it('emits onTabCount=N (item count) when premium loads, null when downgraded', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const counts = [];
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem(), makeItem({ token: TOKEN_2, symbol: 'BRA' })]),
+      onTabCount: (n) => counts.push(n),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
     });
+    await flush();
+    expect(counts[counts.length - 1]).toBe(2);
 
-    it('PnL pill flips to is-negative when totalPnl is negative', async () => {
-      accessStore.set('premium');
-      const c = makeContainer();
-      const api = makeApi(makePosition({ totalPnl: -3.1, totalPnlPct: -8.7 }));
-      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
-      await flush();
-      const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
-      expect(pill.className).toContain('is-negative');
-      expect(pill.textContent).toContain('-3.1');
-    });
-
-    it('renders flag image when tokenMeta has country symbol with hasFlag mapping', async () => {
-      accessStore.set('premium');
-      const c = makeContainer();
-      mountMyWalletTab(c, {
-        apiClient: makeApi(),
-        token: TOKEN,
-        tokenMeta: { symbol: 'BRA', kind: 'country', name: 'Brazil' },
-      });
-      await flush();
-      const img = c.querySelector('[data-test-id="mywallet-flag"]');
-      expect(img).toBeTruthy();
-      expect(img.getAttribute('src')).toBe('/flags/br.svg');
-      const name = c.querySelector('.pt-mywallet__name');
-      expect(name.textContent).toBe('Brazil');
-    });
-
-    it('renders placeholder flag (no img) when no tokenMeta is provided', async () => {
-      accessStore.set('premium');
-      const c = makeContainer();
-      mountMyWalletTab(c, { apiClient: makeApi(), token: TOKEN });
-      await flush();
-      expect(c.querySelector('[data-test-id="mywallet-flag"]')).toBeFalsy();
-      expect(c.querySelector('.pt-mywallet__flag--placeholder')).toBeTruthy();
-    });
-
-    it('illustrated empty state has icon + title "No position yet"', async () => {
-      accessStore.set('premium');
-      const c = makeContainer();
-      const api = makeApi({ configured: true, hasActivity: false });
-      mountMyWalletTab(c, { apiClient: api, token: TOKEN });
-      await flush();
-      const empty = c.querySelector('[data-test-id="mywallet-empty"]');
-      expect(empty).toBeTruthy();
-      expect(empty.querySelector('.pt-mywallet__empty-title').textContent).toContain('No position');
-      expect(empty.querySelector('.pt-mywallet__empty-icon svg')).toBeTruthy();
-    });
-
-    it('emits onTabCount=1 when a position with activity loads, null when downgraded', async () => {
-      accessStore._resetForTests();
-      accessStore.set('premium');
-      const c = makeContainer();
-      const counts = [];
-      mountMyWalletTab(c, {
-        apiClient: makeApi(),
-        token: TOKEN,
-        onTabCount: (n) => counts.push(n),
-      });
-      await flush();
-      expect(counts[counts.length - 1]).toBe(1);
-
-      accessStore.set('free');
-      await flush();
-      expect(counts[counts.length - 1]).toBeNull();
-    });
+    accessStore.set('free');
+    await flush();
+    expect(counts[counts.length - 1]).toBeNull();
   });
 
-  it('discards stale response from a previous token', async () => {
+  it('clicking a row fires onTokenSelect with token/symbol/kind', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const selected = [];
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ token: TOKEN, symbol: 'FRA', kind: 'country' })]),
+      onTokenSelect: (item) => selected.push(item),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const row = c.querySelector('[data-test-id="mywallet-row"]');
+    row.click();
+    expect(selected.length).toBe(1);
+    expect(selected[0]).toEqual({ token: TOKEN, symbol: 'FRA', kind: 'country' });
+  });
+
+  it('emits onBalance with active-token balance after load', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const balances = [];
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ token: TOKEN, balanceDisplay: 7.5 })]),
+      token: TOKEN,
+      onBalance: (addr, bal) => balances.push({ addr, bal }),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const last = balances[balances.length - 1];
+    expect(last.addr).toBe(TOKEN);
+    expect(last.bal).toBe(7.5);
+  });
+
+  it('emits onBalance=0 when active token is not in portfolio', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const balances = [];
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ token: TOKEN_2 })]),
+      token: TOKEN,
+      onBalance: (addr, bal) => balances.push({ addr, bal }),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const last = balances[balances.length - 1];
+    expect(last.addr).toBe(TOKEN);
+    expect(last.bal).toBe(0);
+  });
+
+  it('setToken clears stale balance on previous token before swap', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const balances = [];
+    const acc = makeAccount();
+    const handle = mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ token: TOKEN, balanceDisplay: 7.5 })]),
+      token: TOKEN,
+      onBalance: (addr, bal) => balances.push({ addr, bal }),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    balances.length = 0;
+    await handle.setToken(TOKEN_2);
+    // Should emit a clear (TOKEN, 0) BEFORE the active token changes.
+    const clearEmit = balances.find((b) => b.addr === TOKEN && b.bal === 0);
+    expect(clearEmit).toBeTruthy();
+  });
+
+  it('head strip shows total holdings value across all items', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([
+        makeItem({ valuePitchDisplay: 30 }),
+        makeItem({ token: TOKEN_2, symbol: 'BRA', valuePitchDisplay: 25, pnlPitchDisplay: 5 }),
+      ]),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const head = c.querySelector('[data-test-id="mywallet-head"]');
+    expect(head).toBeTruthy();
+    expect(c.querySelector('[data-test-id="mywallet-head-value"]').textContent).toContain('55');
+  });
+
+  it('country row with hasFlag symbol renders flag img', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ symbol: 'BRA', kind: 'country' })]),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const img = c.querySelector('[data-test-id="mywallet-flag"]');
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toBe('/flags/br.svg');
+  });
+
+  it('player row renders placeholder flag (no img)', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ symbol: 'MESSI', kind: 'player' })]),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    expect(c.querySelector('[data-test-id="mywallet-flag"]')).toBeFalsy();
+    expect(c.querySelector('.pt-mywallet__flag--placeholder')).toBeTruthy();
+  });
+
+  it('active token row has is-active class + data-active=1', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([
+        makeItem({ token: TOKEN }),
+        makeItem({ token: TOKEN_2, symbol: 'BRA' }),
+      ]),
+      token: TOKEN,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const rows = c.querySelectorAll('[data-test-id="mywallet-row"]');
+    const activeRow = Array.from(rows).find((r) => r.dataset.token === TOKEN);
+    expect(activeRow.classList.contains('is-active')).toBe(true);
+    expect(activeRow.dataset.active).toBe('1');
+  });
+
+  it('account-change to disconnect clears portfolio and emits onBalance=0', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const balances = [];
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi(),
+      token: TOKEN,
+      onBalance: (addr, bal) => balances.push({ addr, bal }),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    balances.length = 0;
+    acc.setState({ isConnected: false, address: null });
+    await flush();
+    expect(c.querySelector('[data-test-id="mywallet-disconnected"]')).toBeTruthy();
+    const clearEmit = balances.find((b) => b.addr === TOKEN && b.bal === 0);
+    expect(clearEmit).toBeTruthy();
+  });
+
+  it('account-change to connect (when premium) triggers fetch', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const api = makeApi();
+    const acc = makeAccount({ connected: false });
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    expect(api.getPortfolio).not.toHaveBeenCalled();
+    acc.setState({ isConnected: true, address: '0xUSER' });
+    await flush();
+    expect(api.getPortfolio).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards stale response from a previous fetch when refresh() is called rapidly', async () => {
     accessStore.set('premium');
     const c = makeContainer();
     let resolveFirst;
-    const firstPromise = new Promise((res) => { resolveFirst = res; });
+    const firstPromise = new Promise((res) => {
+      resolveFirst = res;
+    });
     const api = {
-      getPosition: vi.fn((t) => {
-        if (t === TOKEN) return firstPromise;
-        return Promise.resolve(makePosition({ position: 9.9 }));
-      }),
+      getPortfolio: vi
+        .fn()
+        .mockImplementationOnce(() => firstPromise)
+        .mockImplementationOnce(async () => ({
+          items: [makeItem({ token: TOKEN_2, symbol: 'BRA', balanceDisplay: 9.9 })],
+        })),
     };
-    const handle = mountMyWalletTab(c, { apiClient: api, token: TOKEN });
-    // First fetch in flight; switch token before it resolves.
-    await handle.setToken('0xbbb2');
-    // Now resolve the stale first fetch — should be discarded.
-    resolveFirst(makePosition({ position: 1.1 }));
+    const acc = makeAccount();
+    const handle = mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
     await flush();
-    const positionCell = c.querySelector('[data-test-id="mywallet-position"]');
-    expect(positionCell.textContent).toContain('9.9');
+    // First fetch in flight; trigger a refresh.
+    const second = handle.refresh();
+    // Now resolve the stale first fetch — should be discarded.
+    resolveFirst({ items: [makeItem({ token: TOKEN, symbol: 'OLD', balanceDisplay: 1.1 })] });
+    await second;
+    await flush();
+    const rows = c.querySelectorAll('[data-test-id="mywallet-row"]');
+    expect(rows.length).toBe(1);
+    expect(rows[0].dataset.token).toBe(TOKEN_2);
+  });
+
+  it('falls back to wei-string parsing when *Display fields are missing', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    // 5e18 wei = 5.0 display
+    mountMyWalletTab(c, {
+      apiClient: {
+        getPortfolio: vi.fn(async () => ({
+          items: [
+            {
+              token: TOKEN,
+              symbol: 'FRA',
+              kind: 'country',
+              balance: '5000000000000000000',
+              avgEntryPitch: '2000000000000000000',
+              currentPricePitch: '3000000000000000000',
+              valuePitch: '15000000000000000000',
+              pnlPitch: '5000000000000000000',
+            },
+          ],
+        })),
+      },
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const row = c.querySelector('[data-test-id="mywallet-row"]');
+    expect(row).toBeTruthy();
+    // Balance cell should show 5
+    expect(row.textContent).toContain('5');
+  });
+
+  it('does not fetch when wallet is disconnected even if premium', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const api = makeApi();
+    const acc = makeAccount({ connected: false });
+    mountMyWalletTab(c, {
+      apiClient: api,
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    expect(api.getPortfolio).not.toHaveBeenCalled();
+  });
+
+  it('total PnL pill flips between is-positive and is-negative', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ pnlPitchDisplay: -3.5 })]),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
+    expect(pill.className).toContain('is-negative');
+    expect(pill.textContent).toContain('-3.5');
   });
 });

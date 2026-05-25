@@ -265,6 +265,9 @@ export function mountBottomTabs(container, options = {}) {
       softLock: options.softLock,
       onTabCount: (n) => setTabCount('my-wallet', n),
       onBalance: options.onBalance ?? null,
+      // Wave 2B: multi-token portfolio table → clicking a row selects that
+      // token in the main app. Host (main.js) wires this to `selectToken`.
+      onTokenSelect: options.onTokenSelect ?? null,
     });
     return myWalletHandle;
   }

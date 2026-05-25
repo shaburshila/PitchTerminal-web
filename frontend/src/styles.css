@@ -2144,7 +2144,7 @@ body.mode-dashboard .pt-profile {
 
 .pt-mywallet__thead {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) 90px 100px 110px 130px;
+  grid-template-columns: minmax(0, 1.6fr) 90px 100px 100px 100px 130px;
   gap: 12px;
   padding: 8px 12px;
   margin-top: 10px;
@@ -2163,7 +2163,7 @@ body.mode-dashboard .pt-profile {
 }
 .pt-mywallet__row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) 90px 100px 110px 130px;
+  grid-template-columns: minmax(0, 1.6fr) 90px 100px 100px 100px 130px;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -2239,6 +2239,31 @@ body.mode-dashboard .pt-profile {
 .pt-mywallet__pnl-abs.is-negative,
 .pt-mywallet__pnl-pct.is-negative {
   color: var(--down, var(--danger));
+}
+
+/* Wave 2B: multi-token portfolio list. */
+.pt-mywallet__list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, var(--border));
+  border-top: none;
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+  background: var(--bg-1, #0f1614);
+  max-height: 400px;
+  overflow-y: auto;
+}
+.pt-mywallet__row {
+  cursor: pointer;
+}
+.pt-mywallet__row.is-active {
+  background: var(--bg-2, #141d1a);
+  box-shadow: inset 2px 0 0 var(--accent, #3ddb8e);
+}
+.pt-mywallet__tick--country,
+.pt-mywallet__tick--player {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .pt-mywallet__details-label {
