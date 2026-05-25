@@ -73,9 +73,14 @@ _NONCE_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 
 class OrderStatus(StrEnum):
-    """Lifecycle of a limit order (db-schema ``order_status``)."""
+    """Lifecycle of a limit order (db-schema ``order_status``).
 
-    PENDING = "pending"
+    ``OPEN`` was historically named ``PENDING``; migration 0003 renamed the
+    Postgres enum value to ``'open'`` so the UX-facing label stops misleading
+    users into thinking an armed order was already being executed.
+    """
+
+    OPEN = "open"
     EXECUTING = "executing"
     FILLED = "filled"
     FAILED = "failed"

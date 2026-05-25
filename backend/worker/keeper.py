@@ -3,7 +3,7 @@
 Polled from :mod:`worker.main` once every :data:`KEEPER_TICK_INTERVAL_SEC`
 seconds. The keeper
 
-1. Scans ``limit_orders`` for ``status='pending'`` rows whose price condition
+1. Scans ``limit_orders`` for ``status='open'`` rows whose price condition
    is satisfied against ``market_state`` (same filter as the ``/orders/armed``
    endpoint, but server-side so the worker doesn't HTTP-loop into the API).
 2. For each candidate it ``eth_call``-simulates ``executor.execute`` first.
@@ -13,7 +13,7 @@ seconds. The keeper
    ``OrderExecuted`` log the row flips to ``filled``; on a reverted receipt
    (or a terminal simulation failure) it flips to ``failed`` with a parsed
    :data:`order_fail_reason`.
-4. On a "price moved" revert the row stays ``pending`` but ``retry_after``
+4. On a "price moved" revert the row stays ``open`` but ``retry_after``
    is set to ``now() + ORDER_COOLDOWN_SEC`` so the next tick skips it.
 
 The keeper is **lazy / fail-soft**:
@@ -220,7 +220,7 @@ def decode_revert_reason(error_data: Any) -> tuple[str, str | None]:
 def is_retryable_label(label: str | None) -> bool:
     """True when ``label`` is a "price moved" / "min-out missed" kind of failure.
 
-    Retryable failures keep the row at ``pending`` with ``retry_after`` set;
+    Retryable failures keep the row at ``open`` with ``retry_after`` set;
     everything else (or no label at all from a hard error) is terminal.
     """
 
@@ -325,7 +325,7 @@ def _select_armed_orders() -> list[dict[str, Any]]:
         "FROM limit_orders lo "
         "LEFT JOIN market_state ms ON ms.token_address = lo.token_address "
         "LEFT JOIN user_settings us ON us.owner_address = lo.owner_address "
-        "WHERE lo.status = 'pending' "
+        "WHERE lo.status = 'open' "
         "  AND (lo.retry_after IS NULL OR lo.retry_after <= now()) "
         "  AND (lo.expires_at IS NULL OR lo.expires_at > now()) "
         "ORDER BY lo.id ASC LIMIT %s"
@@ -376,7 +376,7 @@ def _mark_executing(order_id: int, tx_hash: str) -> None:
             "UPDATE limit_orders "
             "SET status='executing', executed_tx_hash=%s, "
             "    last_attempt_at=now(), attempts=attempts+1 "
-            "WHERE id=%s AND status='pending'",
+            "WHERE id=%s AND status='open'",
             (tx_hash.lower(), order_id),
         )
 
@@ -396,20 +396,20 @@ def _mark_failed(order_id: int, reason: str, detail: str | None) -> None:
         cur.execute(
             "UPDATE limit_orders SET status='failed', "
             "    fail_reason=%s, fail_detail=%s "
-            "WHERE id=%s AND status IN ('pending','executing')",
+            "WHERE id=%s AND status IN ('open','executing')",
             (reason, (detail[:500] if detail else None), order_id),
         )
 
 
 def _mark_cooldown(order_id: int, reason: str, detail: str | None) -> None:
-    """Keep status='pending' but set ``retry_after`` and ``last_attempt_at``."""
+    """Keep status='open' but set ``retry_after`` and ``last_attempt_at``."""
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE limit_orders SET retry_after=now() + make_interval(secs => %s), "
             "    last_attempt_at=now(), attempts=attempts+1, "
             "    fail_reason=%s, fail_detail=%s "
-            "WHERE id=%s AND status='pending'",
+            "WHERE id=%s AND status='open'",
             (
                 int(_get_order_cooldown_sec()),
                 reason,
@@ -507,7 +507,7 @@ def _send_execute(
     """Build/sign/send ``executor.execute(order, sig)``; return ``tx_hash`` hex.
 
     Bumps the local nonce counter on success. Caller decides what to do on
-    exception (typically: log + leave the order pending; next tick retries).
+    exception (typically: log + leave the order open; next tick retries).
     """
 
     keeper_addr = account.address
@@ -619,14 +619,14 @@ def _poll_receipt(w3: Any, contract: Any, row: dict[str, Any]) -> None:
         label=label,
     )
     # Reverts that came from the contract's own price-condition checks are
-    # not terminal — leave the order pending with a cooldown. Everything
+    # not terminal — leave the order open with a cooldown. Everything
     # else is terminal failure.
     if is_retryable_label(label):
-        # Move it back to pending with a cooldown so the next tick can
+        # Move it back to open with a cooldown so the next tick can
         # re-evaluate against fresh prices.
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                "UPDATE limit_orders SET status='pending', executed_tx_hash=NULL, "
+                "UPDATE limit_orders SET status='open', executed_tx_hash=NULL, "
                 "    retry_after=now() + make_interval(secs => %s), "
                 "    fail_reason=%s, fail_detail=%s "
                 "WHERE id=%s AND status='executing'",
@@ -648,7 +648,7 @@ def run_recovery() -> None:
     For each row:
 
     * receipt exists, status=1 → ``filled``.
-    * receipt exists, status=0 → ``failed`` (or pending+cooldown for
+    * receipt exists, status=0 → ``failed`` (or open+cooldown for
       retryable causes).
     * receipt absent / RPC failure → leave the row, the tick loop polls it
       again next iteration.
@@ -796,7 +796,7 @@ def tick() -> int:
             # Could be: nonce too low (someone else used the key), RPC
             # disconnect, gas-estimation failure. Resync nonce on next tick
             # by clearing the timestamp gate; otherwise leave the order
-            # pending so we'll try again.
+            # open so we'll try again.
             log.warning("keeper.send_failed", order_id=order_id, error=type(exc).__name__)
             _state.last_nonce_resync_ts = 0.0
             continue

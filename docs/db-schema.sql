@@ -25,8 +25,11 @@ CREATE TYPE event_side AS ENUM ('buy', 'sell');
 CREATE TYPE order_side AS ENUM ('limit-buy', 'take-profit');
 CREATE TYPE order_venue AS ENUM ('player', 'country');
 CREATE TYPE order_status AS ENUM (
-    'pending', 'executing', 'filled', 'failed', 'cancelled', 'expired'
+    'open', 'executing', 'filled', 'failed', 'cancelled', 'expired'
 );
+-- 'open' was historically named 'pending'; renamed in migration 0003 because
+-- the UX label misled users into thinking the order was already being
+-- processed. Semantically it means "armed, waiting for trigger condition".
 
 CREATE TYPE order_fail_reason AS ENUM (
     'no_allowance',          -- approve отозван / недостаточен
@@ -178,7 +181,7 @@ CREATE TABLE limit_orders (
     nonce             CHAR(66)       NOT NULL
                                      CHECK (nonce ~ '^0x[0-9a-f]{64}$'),
     signature         BYTEA          NOT NULL,
-    status            order_status   NOT NULL DEFAULT 'pending',
+    status            order_status   NOT NULL DEFAULT 'open',
     created_at        TIMESTAMPTZ    NOT NULL DEFAULT now(),
     executed_tx_hash  CHAR(66)       NULL
                                      CHECK (executed_tx_hash IS NULL
@@ -194,7 +197,7 @@ CREATE TABLE limit_orders (
 
 CREATE INDEX limit_orders_pending_idx
     ON limit_orders(token_address, side)
-    WHERE status = 'pending';
+    WHERE status = 'open';
 
 CREATE INDEX limit_orders_executing_idx
     ON limit_orders(executed_tx_hash)
@@ -206,7 +209,7 @@ CREATE INDEX limit_orders_owner_idx
 
 CREATE INDEX limit_orders_expiring_idx
     ON limit_orders(expires_at)
-    WHERE status = 'pending' AND expires_at IS NOT NULL;
+    WHERE status = 'open' AND expires_at IS NOT NULL;
 
 -- venue → определяет какую пару Router/Hook использовать (см. eip712.md).
 -- Подпись сохраняется в БД, чтобы keeper мог пере-исполнить (например, после

@@ -99,7 +99,7 @@ def _insert_order(
     *,
     target_price: int = 1000,
     side: str = "limit-buy",
-    status: str = "pending",
+    status: str = "open",
     retry_after_sec: int | None = None,
     attempts: int = 0,
     executed_tx_hash: str | None = None,
@@ -219,13 +219,13 @@ class TestKeeperTick:
         oid = _insert_order(nonce_idx=1)
         with patch.object(keeper, "_get_keeper_private_key", return_value=""):
             assert keeper.tick() == 0
-        assert _row(oid)["status"] == "pending"
+        assert _row(oid)["status"] == "open"
 
     def test_disabled_when_executor_zero_address(self) -> None:
         oid = _insert_order(nonce_idx=2)
         with patch.object(keeper, "_get_executor_contract", return_value="0x" + "00" * 20):
             assert keeper.tick() == 0
-        assert _row(oid)["status"] == "pending"
+        assert _row(oid)["status"] == "open"
 
     def test_happy_path_pending_to_executing(self) -> None:
         """Trigger + clean sim + clean send → row moves to ``executing``."""
@@ -273,7 +273,7 @@ class TestKeeperTick:
             touched = keeper.tick()
 
         assert touched == 0
-        assert _row(oid)["status"] == "pending"
+        assert _row(oid)["status"] == "open"
         # Simulation must not have been attempted.
         contract.functions.execute.assert_not_called()
 
@@ -304,7 +304,7 @@ class TestKeeperTick:
 
         assert touched == 1
         row = _row(oid)
-        assert row["status"] == "pending"
+        assert row["status"] == "open"
         assert row["has_retry_after"] is True
         assert row["fail_reason"] == "router_revert"
         assert row["fail_detail"] == "PriceConditionNotMet"
@@ -366,7 +366,7 @@ class TestKeeperTick:
             touched = keeper.tick()
 
         assert touched == 0
-        assert _row(oid)["status"] == "pending"
+        assert _row(oid)["status"] == "open"
         contract.functions.execute.assert_not_called()
 
     def test_retry_after_in_future_skipped(self) -> None:
@@ -386,7 +386,7 @@ class TestKeeperTick:
 
         assert touched == 0
         contract.functions.execute.assert_not_called()
-        assert _row(oid)["status"] == "pending"
+        assert _row(oid)["status"] == "open"
 
     def test_attempts_exhausted_marks_failed(self) -> None:
         """``attempts >= MAX_ATTEMPTS`` → straight to failed without sim/send."""
@@ -536,7 +536,7 @@ class TestKeeperTick:
             keeper.tick()
 
         row = _row(oid)
-        assert row["status"] == "pending"
+        assert row["status"] == "open"
         assert row["executed_tx_hash"] is None
         assert row["has_retry_after"] is True
         assert row["fail_reason"] == "router_revert"

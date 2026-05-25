@@ -623,13 +623,13 @@ nonces-чистки покрывается в IC-0.3 — отдельного ш
   - **Recovery при старте**: SELECT WHERE status='executing' → для каждого
     `eth_getTransactionReceipt(executed_tx_hash)`:
     - receipt status=1 + `OrderExecuted` event → `filled`.
-    - receipt status=0 → расшифровать revert reason → `failed` или `pending`
+    - receipt status=0 → расшифровать revert reason → `failed` или `open`
       (если «цена ушла»).
     - receipt None → оставить executing (дождётся следующего тика).
     - **На старте** keeper читает `eth.getTransactionCount(keeper_addr, 'pending')`
       → выставляет локальный `next_nonce` = это значение. Дальше — локальный
       counter, не дёргаем RPC на каждый send.
-  - **Tick**: для каждого pending-ордера (с `retry_after IS NULL OR now() >= retry_after`):
+  - **Tick**: для каждого open-ордера (с `retry_after IS NULL OR now() >= retry_after`):
     - Прочитать `currentPrice` у хука (из market_state — кэш).
     - Если условие выполнено + `user_settings.orders_armed = true`:
       - **Pre-flight simulation**: `executor.execute(order, signature).call()`
@@ -661,9 +661,9 @@ nonces-чистки покрывается в IC-0.3 — отдельного ш
   cookie, tx-payload sig — никогда в открытом виде в логах.
 
 **DoD:**
-- Тестовый pending-ордер с выполнимой ценой → keeper его подбирает → execute
+- Тестовый open-ордер с выполнимой ценой → keeper его подбирает → execute
   на форк-тесте → status `filled`.
-- Симуляция revert «цена ушла» → status остаётся pending → `retry_after`
+- Симуляция revert «цена ушла» → status остаётся open → `retry_after`
   установлен → следующий tick через 60с.
 - Рестарт worker'а во время `executing` → recovery подбирает по receipt.
 
@@ -676,7 +676,7 @@ nonces-чистки покрывается в IC-0.3 — отдельного ш
 
 **Действия:**
 - `worker/expiry.py:tick`:
-  - `UPDATE limit_orders SET status='expired' WHERE status='pending' AND expires_at <= now() RETURNING id`.
+  - `UPDATE limit_orders SET status='expired' WHERE status='open' AND expires_at <= now() RETURNING id`.
   - Для каждого — NOTIFY `pt_orders`.
 - Запускается в основном цикле worker'а раз в 30 сек.
 

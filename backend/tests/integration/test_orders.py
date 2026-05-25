@@ -250,7 +250,7 @@ class TestCreateOrder:
         assert resp.status_code == 200, resp.get_json()
         body = resp.get_json()
         assert body["owner"] == _TEST_ADDR
-        assert body["status"] == "pending"
+        assert body["status"] == "open"
         assert body["venue"] == "player"
         assert body["side"] == "limit-buy"
         assert body["targetPrice"] == str(order["targetPrice"])

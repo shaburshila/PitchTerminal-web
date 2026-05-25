@@ -759,8 +759,10 @@ PITCH, country-токены. Player-токены **не показываются
 Список ордеров пользователя. Доступ PREMIUM.
 
 **Query:**
-- `status` — фильтр; `pending`, `executing`, `filled`, `failed`, `cancelled`,
-  `expired`, или CSV (`pending,executing`). Default — все.
+- `status` — фильтр; `open`, `executing`, `filled`, `failed`, `cancelled`,
+  `expired`, или CSV (`open,executing`). Default — все.
+  Значение `open` ранее называлось `pending` — переименовано миграцией 0003,
+  чтобы UX-метка не вводила пользователей в заблуждение (см. §7 ниже).
 - `token` — фильтр по токену (lowercase-адрес).
 - `limit`, `cursor` — пагинация.
 
@@ -782,7 +784,7 @@ PITCH, country-токены. Player-токены **не показываются
       "slippageBps": 100,
       "expiresAt": 1709500000,
       "nonce": "0xabcdef...",
-      "status": "pending",
+      "status": "open",
       "createdAt": 1709000000,
       "executedTxHash": null,
       "failReason": null,
@@ -810,12 +812,12 @@ PITCH, country-токены. Player-токены **не показываются
 
 | Из | В | Кто | Условие |
 |---|---|---|---|
-| `pending` | `executing` | keeper | Цель достигнута, tx подана; пишет `executed_tx_hash` |
+| `open` | `executing` | keeper | Цель достигнута, tx подана; пишет `executed_tx_hash` |
 | `executing` | `filled` | keeper | Receipt получен, статус `1`, `OrderExecuted` присутствует |
 | `executing` | `failed` | keeper | Receipt со статусом `0` и причина терминальная (нет approve, нет средств, bad quote token) |
-| `executing` | `pending` | keeper | Revert по «цена ушла» — ордер живёт дальше; `retry_after = now + COOLDOWN_SEC` |
-| `pending` | `cancelled` | API | `DELETE /orders/{id}` |
-| `pending` | `expired` | worker | Отдельный цикл — `expires_at ≤ now` |
+| `executing` | `open` | keeper | Revert по «цена ушла» — ордер живёт дальше; `retry_after = now + COOLDOWN_SEC` |
+| `open` | `cancelled` | API | `DELETE /orders/{id}` |
+| `open` | `expired` | worker | Отдельный цикл — `expires_at ≤ now` |
 
 `armed` дублируется в каждом ответе, чтобы фронт не делал отдельный запрос.
 
@@ -831,7 +833,7 @@ PITCH, country-токены. Player-токены **не показываются
 **Recovery подвисших executing-ордеров.** При старте worker'а keeper'а сначала
 обходит все ордера в статусе `executing` (индекс `limit_orders_executing_idx`):
 для каждого делает `eth_getTransactionReceipt(executed_tx_hash)` и применяет
-обычные переходы (`filled` / `failed` / `pending` по причине revert'а). Если
+обычные переходы (`filled` / `failed` / `open` по причине revert'а). Если
 receipt ещё не доступен (tx в mempool) — оставляет в `executing`, дождётся на
 следующем тике. Это закрывает дыру «worker упал между подачей tx и приёмом
 receipt — ордер навсегда в executing».
@@ -892,7 +894,7 @@ receipt — ордер навсегда в executing».
 
 Отмена ордера (server-side, бесплатно). Доступ PREMIUM.
 
-- Только pending → cancelled.
+- Только open → cancelled.
 - Не свой ордер → 404 (не 403 — не раскрываем существование чужих).
 - Уже cancelled/filled/expired → 204 (идемпотентно).
 
@@ -913,7 +915,7 @@ receipt — ордер навсегда в executing».
 ```
 
 Поведение: при `armed=false` keeper пропускает ордера этого пользователя (статус
-остаётся `pending`). Этим переключателем пользователь временно ставит все свои
+остаётся `open`). Этим переключателем пользователь временно ставит все свои
 ордера на паузу без отмены.
 
 ---

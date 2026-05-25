@@ -12,7 +12,7 @@ Out-of-scope for B2.1 (handled by sibling tasks):
 
 * SSE channel ``pt_orders`` consumption → B2.2.
 * Keeper tick / on-chain execution → B2.3.
-* Expiry cycle (``status='pending' AND expires_at <= now()``) → B2.4.
+* Expiry cycle (``status='open' AND expires_at <= now()``) → B2.4.
 
 We still emit the ``pt_orders`` NOTIFY on insert so the channel is ready to be
 plugged in by B2.2 without round-tripping through B2.1.
@@ -524,7 +524,7 @@ def cancel_order(order_id: str) -> Any:
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE limit_orders SET status='cancelled' WHERE id = %s AND status='pending'",
+            "UPDATE limit_orders SET status='cancelled' WHERE id = %s AND status='open'",
             (oid,),
         )
 
@@ -557,7 +557,7 @@ def list_armed_orders() -> Any:
 
     Filters:
 
-    * ``status = 'pending'``.
+    * ``status = 'open'``.
     * ``retry_after IS NULL OR now() >= retry_after``.
     * ``user_settings.orders_armed`` is true (or row missing — default true).
     * Order's price condition is met against the cached ``market_state`` row
@@ -589,7 +589,7 @@ def list_armed_orders() -> Any:
         "LEFT JOIN tokens t        ON t.address = lo.token_address "
         "LEFT JOIN market_state ms ON ms.token_address = lo.token_address "
         "LEFT JOIN user_settings us ON us.owner_address = lo.owner_address "
-        "WHERE lo.status = 'pending' "
+        "WHERE lo.status = 'open' "
         "  AND (lo.retry_after IS NULL OR lo.retry_after <= now()) "
         "  AND (lo.expires_at IS NULL OR lo.expires_at > now()) "
         "ORDER BY lo.id ASC LIMIT 500"
