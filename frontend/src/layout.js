@@ -51,15 +51,6 @@ function buildHeader() {
   });
   left.appendChild(logo);
 
-  // Center: network badge
-  const center = el('div', { className: 'pt-header__center' });
-  const netBadge = el('div', {
-    className: 'pt-net-badge',
-    dataset: { testId: 'network-badge' },
-    text: 'Base · 8453',
-  });
-  center.appendChild(netBadge);
-
   // Right side cluster — [Profile] [Referral] [wallet-area]. The cluster
   // itself is a flex container; the wallet-area is the placeholder that
   // `mountWalletChip` populates (kept on the same `[data-test-id="wallet-area"]`
@@ -131,7 +122,6 @@ function buildHeader() {
   right.appendChild(walletArea);
 
   header.appendChild(left);
-  header.appendChild(center);
   header.appendChild(right);
   return header;
 }

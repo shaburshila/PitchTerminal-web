@@ -98,11 +98,10 @@ describe('mountLayout', () => {
     expect(btn.textContent).toMatch(/Connect/);
   });
 
-  it('renders the network badge', () => {
+  it('does not render the network badge', () => {
     mountLayout(root);
     const badge = root.querySelector('[data-test-id="network-badge"]');
-    expect(badge).not.toBeNull();
-    expect(badge.textContent).toContain('8453');
+    expect(badge).toBeNull();
   });
 
   it('sets mode-dashboard on body by default', () => {
