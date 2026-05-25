@@ -220,7 +220,10 @@ contract LimitOrderExecutor is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice `Order.targetPrice` is zero.
     error ZeroTargetPrice();
 
-    /// @notice `Order.token` or `Order.quoteToken` is the zero address.
+    /// @notice `Order.owner`, `Order.token`, or `Order.quoteToken` is the zero
+    ///         address. `owner == address(0)` is a defence-in-depth bound on top
+    ///         of `SignatureChecker` (which already rejects sigs that recover to
+    ///         the zero address).
     error ZeroOrderAddress();
 
     /// @notice `Order.venue` is not in {0, 1}.
@@ -322,7 +325,9 @@ contract LimitOrderExecutor is Ownable2Step, Pausable, ReentrancyGuard {
         // ---- Checks: cheap bounds first (fail fast, no SLOAD / external) ----
         if (order.amountIn == 0) revert ZeroAmount();
         if (order.targetPrice == 0) revert ZeroTargetPrice();
-        if (order.token == address(0) || order.quoteToken == address(0)) {
+        if (
+            order.owner == address(0) || order.token == address(0) || order.quoteToken == address(0)
+        ) {
             revert ZeroOrderAddress();
         }
         if (order.venue > 1) revert InvalidVenue();
@@ -396,8 +401,12 @@ contract LimitOrderExecutor is Ownable2Step, Pausable, ReentrancyGuard {
     ///         still let users invalidate nonces, otherwise pause would become
     ///         a funds-capture vector. The owner of the order is `msg.sender`
     ///         here — this scopes cancellation to the signer regardless of who
-    ///         might broadcast `execute` first.
+    ///         might broadcast `execute` first. Reverts `NonceAlreadyUsed` if
+    ///         the nonce was already consumed by `execute` or a prior `cancel`
+    ///         — backend indexers rely on `OrderCancelled` not firing for
+    ///         already-executed orders.
     function cancel(uint256 nonce) external {
+        if (usedNonces[msg.sender][nonce]) revert NonceAlreadyUsed();
         usedNonces[msg.sender][nonce] = true;
         emit OrderCancelled(msg.sender, nonce);
     }

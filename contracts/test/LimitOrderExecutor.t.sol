@@ -624,6 +624,18 @@ contract LimitOrderExecutorTest is Test {
         executor.execute(o, sig);
     }
 
+    /// @notice Defence-in-depth on top of SignatureChecker (which already
+    ///         rejects sigs that ecrecover to the zero address). Bounds check
+    ///         fires before nonce / signature paths, so the revert reason is
+    ///         `ZeroOrderAddress`, not `InvalidSignature`.
+    function test_N_RevertsOnZeroOwner() public {
+        LimitOrderExecutor.Order memory o = _mkOrder(0, 0, 1e18, 22);
+        o.owner = address(0);
+        bytes memory sig = _sign(alicePk, o); // signature irrelevant — bound check is first
+        vm.expectRevert(LimitOrderExecutor.ZeroOrderAddress.selector);
+        executor.execute(o, sig);
+    }
+
     function test_N_RevertsOnInvalidVenue() public {
         LimitOrderExecutor.Order memory o = _mkOrder(0, 0, 1e18, 14);
         o.venue = 2;
@@ -816,6 +828,20 @@ contract LimitOrderExecutorTest is Test {
         assertEq(executor.quoteMinOut(o), expected);
     }
 
+    /// @notice Characterisation test for known precision loss: when
+    ///         `amountIn * 1e18 < targetPrice`, integer division in `_minOut`
+    ///         collapses `baseIdeal` to 0, so the executor's own slippage
+    ///         second-line check becomes a no-op (router-level slippage is
+    ///         still active). Documented in docs/eip712.md §5.2 — UI must
+    ///         reject sub-dust `amountIn`. This test pins the behaviour so a
+    ///         future change to `_minOut` cannot silently introduce a different
+    ///         rounding policy.
+    function test_I_MinOutRoundsToZero_OnSubDustAmountIn() public view {
+        LimitOrderExecutor.Order memory o = _mkOrder(0, 0, 1, 60);
+        o.targetPrice = 1e19; // baseIdeal = 1 * 1e18 / 1e19 = 0 (integer div)
+        assertEq(executor.quoteMinOut(o), 0);
+    }
+
     /// @notice If the realised swap output is below the signed minOut (e.g. the
     ///         router returned less than the executor's signed-only bound),
     ///         `execute` must revert. We force this by setting the hook's quote
@@ -991,6 +1017,36 @@ contract LimitOrderExecutorTest is Test {
         bytes memory sig = _sign(alicePk, o);
         vm.expectRevert(LimitOrderExecutor.NonceAlreadyUsed.selector);
         executor.execute(o, sig);
+    }
+
+    /// @notice `cancel` is idempotent-by-revert: calling it twice on the same
+    ///         nonce must revert the second call, so the B2 keeper cannot
+    ///         observe a spurious `OrderCancelled` event for an already-closed
+    ///         order (would mis-update SSE channel state).
+    function test_M3_DoubleCancel_Reverts() public {
+        vm.prank(alice);
+        executor.cancel(75);
+
+        vm.expectRevert(LimitOrderExecutor.NonceAlreadyUsed.selector);
+        vm.prank(alice);
+        executor.cancel(75);
+    }
+
+    /// @notice Same property after a successful `execute`: cancel on an
+    ///         already-consumed nonce must revert, not silently emit
+    ///         `OrderCancelled`.
+    function test_M3_CancelAfterExecute_Reverts() public {
+        LimitOrderExecutor.Order memory o = _mkOrder(0, 0, 1e18, 76);
+        bytes memory sig = _sign(alicePk, o);
+        _approveExecutorAsAlice(IERC20(address(countryToken)), o.amountIn);
+
+        vm.prank(keeper);
+        executor.execute(o, sig);
+        assertTrue(executor.isNonceUsed(alice, 76));
+
+        vm.expectRevert(LimitOrderExecutor.NonceAlreadyUsed.selector);
+        vm.prank(alice);
+        executor.cancel(76);
     }
 
     // =====================================================================

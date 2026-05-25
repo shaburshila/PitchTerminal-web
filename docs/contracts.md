@@ -217,9 +217,11 @@ constructor-параметры. Поле `Order.venue` (подписанное �
   `acceptOwnership` (двухшаговый).
 
 ### События
-`OrderExecuted(address indexed owner, uint256 indexed nonce, address token,
-uint256 amountIn, uint256 amountOut)`, `OrderCancelled(address indexed owner,
-uint256 indexed nonce)`.
+`OrderExecuted(address indexed owner, uint256 indexed nonce, address indexed token,
+uint8 side, uint256 amountIn, uint256 amountOut, address executor)` — `side`
+(`0` limit-buy / `1` take-profit) и `executor` (= `msg.sender` вызова `execute`)
+полезны индексаторам keeper-сети для атрибуции исполнителя и фильтрации по
+типу ордера. `OrderCancelled(address indexed owner, uint256 indexed nonce)`.
 
 ### Требования безопасности
 - **G. `nonReentrant`** на `execute` — внутри несколько внешних вызовов (включая внешний

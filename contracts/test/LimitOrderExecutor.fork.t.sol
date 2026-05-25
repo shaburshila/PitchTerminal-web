@@ -309,6 +309,58 @@ contract LimitOrderExecutorForkTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // 5/5 — Expiry boundary against real chain state.
+    //       Confirms the strict `>` semantics (`expiry == block.timestamp`
+    //       passes, `expiry == block.timestamp - 1` reverts) on mainnet so the
+    //       only execute-path the four-combo suite leaves uncovered is
+    //       exercised against the real EVM.
+    // ---------------------------------------------------------------------
+
+    function test_Fork_ExpiryBoundary_EqualAcceptsPastRejects() public {
+        uint256 amountIn = 1e16;
+
+        // 1) expiry == block.timestamp — must pass (`> expiry` check is strict).
+        LimitOrderExecutor.Order memory ok = LimitOrderExecutor.Order({
+            owner: alice,
+            token: COUNTRY_TOKEN_MAINNET,
+            quoteToken: PITCH_MAINNET,
+            venue: 1,
+            side: 0,
+            targetPrice: liveCountryPrice * 10,
+            amountIn: amountIn,
+            slippageBps: 1000,
+            expiry: block.timestamp,
+            nonce: uint256(keccak256("expiry.boundary.equal"))
+        });
+        bytes memory sigOk = _sign(ok);
+        _fundAndApprove(pitch, amountIn);
+
+        vm.prank(keeper);
+        executor.execute(ok, sigOk);
+        assertTrue(executor.isNonceUsed(alice, ok.nonce), "boundary-equal accepted");
+
+        // 2) expiry == block.timestamp - 1 — must revert OrderExpired.
+        LimitOrderExecutor.Order memory expired = LimitOrderExecutor.Order({
+            owner: alice,
+            token: COUNTRY_TOKEN_MAINNET,
+            quoteToken: PITCH_MAINNET,
+            venue: 1,
+            side: 0,
+            targetPrice: liveCountryPrice * 10,
+            amountIn: amountIn,
+            slippageBps: 1000,
+            expiry: block.timestamp - 1,
+            nonce: uint256(keccak256("expiry.boundary.past"))
+        });
+        bytes memory sigExp = _sign(expired);
+        // No allowance needed — the bounds check fires before any token movement.
+
+        vm.expectRevert(LimitOrderExecutor.OrderExpired.selector);
+        vm.prank(keeper);
+        executor.execute(expired, sigExp);
+    }
+
+    // ---------------------------------------------------------------------
     // Sanity: real hook returns >0 prices on the fork block.
     // ---------------------------------------------------------------------
 
