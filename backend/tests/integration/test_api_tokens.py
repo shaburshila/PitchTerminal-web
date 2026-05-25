@@ -501,6 +501,137 @@ class TestChartUnit:
         for key in ("open", "high", "low", "close"):
             assert first[key] > 0
 
+    @pytest.fixture()
+    def seeded_historical_rate_change(self):
+        """Seed designed to catch «stale rate» regression: country price changes
+        between two player trades.
+
+        Country: rate=2 PITCH/country at T1, then rate=10 PITCH/country at T5
+        (intervening). Player: constant 1.0 country/player at T2 (between T1
+        and T5) and again at T6 (after T5).
+
+        Correct historical-rate semantics → player[T2] = 1.0 * 2 = 2.0 PITCH,
+        player[T6] = 1.0 * 10 = 10.0 PITCH (different — rising shape).
+
+        Broken «always use latest country rate» → both player events scale by
+        10.0 → both = 10.0 PITCH (flat shape == country-mode shape * const).
+
+        This fixture is necessary because ``seeded_player_with_country_trades``
+        places ALL player events at-or-after the last country event, so any
+        implementation that uses «latest rate» would pass it silently.
+        """
+
+        from shared.config import WEI
+
+        # Distinct addresses so we don't collide with siblings in same file.
+        country = "0x" + "33" * 20
+        player = "0x" + "44" * 20
+        # 5m bucket = 300s. T1..T6 spaced so trades sit in different buckets,
+        # making the OHLC assertion unambiguous.
+        t1 = 1_700_010_000
+        t2 = t1 + 400  # +6.67m  → next 5m bucket after T1
+        t5 = t1 + 1000  # +16.67m → 2 buckets after T2
+        t6 = t1 + 1400  # +23.3m  → 1 bucket after T5
+
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role) "
+                "VALUES (%s, 'Germany', 'GER', 'country', NULL, NULL),"
+                "(%s, 'Mueller', 'MUE', 'player', %s, 'captain')",
+                (country, player, country),
+            )
+
+            def ins(
+                block: int,
+                token: str,
+                side: str,
+                base_value: int,
+                token_value: int,
+                ts: int,
+            ) -> None:
+                tx = "0x" + f"{block:064x}"
+                cur.execute(
+                    "INSERT INTO events "
+                    "(block_number, tx_hash, log_index, token_address, side, "
+                    " trader_address, base_value, token_value, fee, ts) "
+                    "VALUES (%s, %s, 0, %s, %s, %s, %s, %s, 0, to_timestamp(%s))",
+                    (block, tx, token, side, "0x" + "bb" * 20, base_value, token_value, ts),
+                )
+
+            # Country: rate=2 at T1 (10/5), rate=10 at T5 (50/5).
+            ins(100, country, "buy", 10 * WEI, 5 * WEI, t1)
+            ins(102, country, "buy", 50 * WEI, 5 * WEI, t5)
+            # Player: 1.0 country/player at T2 (3/3), and 1.0 again at T6 (3/3).
+            # Same NATIVE price both times — only the country→PITCH rate moves.
+            ins(200, player, "buy", 3 * WEI, 3 * WEI, t2)
+            ins(202, player, "buy", 3 * WEI, 3 * WEI, t6)
+            conn.commit()
+        return {
+            "country": country,
+            "player": player,
+            "t2": t2,
+            "t6": t6,
+        }
+
+    def test_unit_pitch_uses_historical_country_rate_not_latest(
+        self, app, seeded_historical_rate_change
+    ) -> None:
+        """Regression: PITCH conversion MUST use the country rate at each
+        player event's own timestamp, NOT the current/latest country rate.
+
+        If the bug were «apply latest country rate to all historical events»,
+        both player trade-points would equal 10.0 (flat) and the chart shape
+        would be just country-mode × constant. Correct historical-rate
+        lookup yields 2.0 → 10.0 (rising).
+        """
+
+        addr = seeded_historical_rate_change["player"]
+        resp_pitch = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=pitch")
+        resp_country = app.test_client().get(f"/api/v1/tokens/{addr}/chart?tf=5m&unit=country")
+        assert resp_pitch.status_code == 200
+        assert resp_country.status_code == 200
+        body_pitch = resp_pitch.get_json()
+        body_country = resp_country.get_json()
+
+        trade_pts_pitch = [p for p in body_pitch["points"] if p["type"] != "spot"]
+        trade_pts_country = [p for p in body_country["points"] if p["type"] != "spot"]
+        assert len(trade_pts_pitch) == 2
+        assert len(trade_pts_country) == 2
+
+        # Country-mode: both player trades at native price 1.0 (flat).
+        assert trade_pts_country[0]["price"] == pytest.approx(1.0)
+        assert trade_pts_country[1]["price"] == pytest.approx(1.0)
+
+        # PITCH-mode: must be 2.0 then 10.0 — proving historical rates are
+        # used per-event. If broken (latest-only), both would be 10.0.
+        assert trade_pts_pitch[0]["price"] == pytest.approx(2.0)
+        assert trade_pts_pitch[1]["price"] == pytest.approx(10.0)
+
+        # Sanity: shape differs from country-mode * constant. Ratio of the
+        # two PITCH prices (10.0 / 2.0 = 5.0) MUST NOT equal the ratio of the
+        # two country-mode prices (1.0 / 1.0 = 1.0). A broken implementation
+        # would have ratios match exactly.
+        country_ratio = trade_pts_country[1]["price"] / trade_pts_country[0]["price"]
+        pitch_ratio = trade_pts_pitch[1]["price"] / trade_pts_pitch[0]["price"]
+        assert pitch_ratio != pytest.approx(country_ratio)
+
+        # Candles: T2 (bucket A), T6 (bucket B) — distinct 5m buckets thanks
+        # to the +1000s gap. Find the bucket that contains the T2 trade and
+        # the one containing T6; their close prices must differ in PITCH-mode.
+        t2 = seeded_historical_rate_change["t2"]
+        t6 = seeded_historical_rate_change["t6"]
+        bucket_t2 = (t2 // 300) * 300
+        bucket_t6 = (t6 // 300) * 300
+        candles_by_time = {c["time"]: c for c in body_pitch["candles"]}
+        assert bucket_t2 in candles_by_time
+        assert bucket_t6 in candles_by_time
+        # The T2 candle's close should be 2.0 (1.0 country * 2 PITCH/country).
+        # The T6 candle's close should be 10.0 (1.0 country * 10 PITCH/country).
+        # Note: forward-fill may carry the prev close across gap buckets, but
+        # the *trade* buckets themselves must reflect the converted prices.
+        assert candles_by_time[bucket_t2]["close"] == pytest.approx(2.0)
+        assert candles_by_time[bucket_t6]["close"] == pytest.approx(10.0)
+
     def test_unit_pitch_400_when_player_has_no_country_address(
         self, app, seeded_player_with_no_country_address
     ) -> None:
