@@ -402,21 +402,20 @@ viem на фронте даёт **тот же digest**, что hardcoded в те
 
 ---
 
-### C2.6 — Mainnet deploy LimitOrderExecutor + verify
+### C2.6 — Mainnet deploy LimitOrderExecutor + verify ✅ (2026-05-25)
 **Что:** аналогично C0.5, но для executor'а.
 
-**Действия:**
-- `contracts/script/DeployExecutor.s.sol` — параметры из env.
-- Запуск с `--ledger --broadcast --verify`.
-- Экспорт `abis/LimitOrderExecutor.json`.
-- Обновить env vars (координатор передаёт Backend и Frontend).
+**Сделано:**
+- Pre-deploy audit batch: slither (31 findings, 0 true positives) + mythril (clean) + manual SWC walk → F-1 (livePrice==0 guard, M) + F-2/F-3 (NatSpec, L/I) closed (`aff6a72`).
+- Remix + MetaMask deploy (deployer `0x71EC…756F`); runbook — `contracts/deploy-artifacts/LimitOrderExecutor_REMIX.md` (`91e4ddd`).
+- Verify через `forge verify-contract --chain base` → `Pass - Verified` (full match).
+- ABI экспортирован в `abis/LimitOrderExecutor.json`.
+- VPS env rotation: `EXECUTOR_CONTRACT=0xb22f…` пробрашен в `pt-api` + `pt-worker` через `docker compose up -d --force-recreate`. `/api/v1/orders` больше не fail-closed.
 
-**DoD:**
-- Контракт на Base mainnet, верифицирован на Basescan.
-- ABI коммитится в `abis/`.
+**Canonical address:** [`0xb22f38a0c133A32aB9582ACe9E2Da41d1738b9d5`](https://basescan.org/address/0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5#code) на Base mainnet (chainId 8453).
 
 **Integration checkpoint:** IC-2.2 — реальный execute() с маленькой суммой
-(пользователь + координатор делают платный тестовый ордер).
+(пользователь + координатор делают платный тестовый ордер). Заблокирован до B2.3 keeper + F2.x UI.
 
 ---
 

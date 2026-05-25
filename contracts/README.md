@@ -65,10 +65,12 @@ contracts/
 
 ## Deploy
 
-| Контракт | Script | Когда | Runbook |
+| Контракт | Script | Статус | Адрес (Base mainnet) |
 |---|---|---|---|
-| `PitchTerminalAccess` | `script/DeployAccess.s.sol` | фаза 0, mainnet | TBD — см. `../docs/plans/contracts.md` §C0.5 |
-| `LimitOrderExecutor` | `script/DeployExecutor.s.sol` | фаза 2, после аудита | TBD — см. `../docs/plans/contracts.md` §C2.6 |
+| `PitchTerminalAccess` | `script/DeployAccess.s.sol` | ✅ live (C0.5, 2026-05-24) | [`0xA4c416986a1eE95c0c6ECD66aB77DfDA61803527`](https://basescan.org/address/0xA4c416986a1eE95c0c6ECD66aB77DfDA61803527#code) |
+| `LimitOrderExecutor` | `script/DeployExecutor.s.sol` | ✅ live (C2.6, 2026-05-25) | [`0xb22f38a0c133A32aB9582ACe9E2Da41d1738b9d5`](https://basescan.org/address/0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5#code) |
+
+Runbook'и: `deploy-artifacts/REMIX_DEPLOY.md` (Access) и `deploy-artifacts/LimitOrderExecutor_REMIX.md` (Executor). Pre-deploy audit: `../docs/security-checklist.md` (Access) и `../docs/security-checklist-executor.md` (Executor).
 
 Admin/owner-скрипты (whitelist, setPrice, transferOwnership) — см.
 `../docs/plans/contracts.md` §C∞.1. Реальные команды запуска появятся вместе
