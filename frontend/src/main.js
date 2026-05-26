@@ -48,7 +48,7 @@ import { openStream } from './sse.js';
 import { mountWalletChip } from './ui/wallet-chip.js';
 import { showSignInModal } from './ui/signin-modal.js';
 import { ensureSignedIn } from './siwe.js';
-import { onAccountChange, getAccount } from './wallet.js';
+import { onAccountChange, getAccount, tryAutoReconnect } from './wallet.js';
 import { getConfig, getTokens, getPortfolio, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
@@ -321,6 +321,64 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
           });
         }),
     );
+  };
+}
+
+/**
+ * Stale-session cleanup (security fix #6).
+ *
+ * Threat model: user signs in via WalletConnect on a shared/public computer,
+ * gets the `pt_session` httpOnly cookie (TTL 72h), then closes the tab without
+ * clicking Disconnect. The cookie persists in the browser for up to 72h. On
+ * the next visit `tryAutoReconnect()` is intentionally a no-op for WC (mobile
+ * WC pattern — needs a fresh QR scan), so the wallet appears disconnected —
+ * but `/access` still succeeds because the cookie is alive, and any premium
+ * request the browser makes would be authenticated as the previous user.
+ *
+ * Mitigation: on boot, after the injected-wallet reconnect has had a chance
+ * to settle, detect the orphaned-cookie case (backend says authenticated +
+ * wallet is NOT connected) and silently POST `/auth/logout` to clear the
+ * server-side cookie. No UI banner — the user simply lands on an anonymous
+ * session, which is the correct posture when no wallet is attached.
+ *
+ * Edge cases:
+ *   - Wallet connected (any connector): leave session alone — normal flow,
+ *     the cookie matches the live wallet.
+ *   - `/access` returns 401 (cookie already expired/missing): nothing to do.
+ *   - `/access` 5xx or network error: leave session alone (don't punish the
+ *     user for transient backend hiccups; security only degrades for the
+ *     short window the backend is down).
+ *
+ * @param {object} [deps] Injection points for tests.
+ * @param {() => { isConnected: boolean }} [deps.getAccount]
+ * @param {(opts?: object) => Promise<unknown>} [deps.getAccess]
+ * @param {() => Promise<unknown>} [deps.logout]
+ * @returns {() => Promise<void>}
+ */
+export function createStaleSessionCleanup(deps = {}) {
+  const _getAccount = deps.getAccount ?? getAccount;
+  const _getAccess = deps.getAccess ?? getAccess;
+  const _logout = deps.logout ?? logout;
+  return async function cleanupStaleSession() {
+    // Wallet is live — the cookie (if any) belongs to this wallet. Leave it.
+    if (_getAccount().isConnected) return;
+    let authenticated = false;
+    try {
+      await _getAccess();
+      // 200 OK → backend recognises the cookie. With no wallet attached this
+      // means the session is orphaned from a prior tab.
+      authenticated = true;
+    } catch {
+      // 401 / network error / 5xx → nothing to clean up (or can't tell).
+      return;
+    }
+    if (!authenticated) return;
+    try {
+      await _logout();
+    } catch {
+      // Best-effort: if the logout call itself fails the cookie still expires
+      // naturally within 72h. We don't surface this to the user.
+    }
   };
 }
 
@@ -726,6 +784,21 @@ function bootstrap() {
   // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
   // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).
   void ensureSignedIn;
+
+  // Security fix #6 — stale WalletConnect session cleanup. Await the injected
+  // wallet's silent reconnect (idempotent w.r.t. the parallel call from
+  // wallet-chip — wagmi's `reconnect()` is debounced internally) so that
+  // `getAccount().isConnected` is accurate before we decide whether the cookie
+  // is orphaned. See `createStaleSessionCleanup` for the full rationale.
+  // Fire-and-forget — bootstrap doesn't block on this and any failure is
+  // silently swallowed inside the cleanup helper.
+  const cleanupStaleSession = createStaleSessionCleanup();
+  tryAutoReconnect()
+    .catch(() => {
+      /* no prior injected session — that's fine, we still want to run the
+         cleanup (an orphaned cookie can exist without any wagmi state). */
+    })
+    .then(() => cleanupStaleSession());
 
   let streamHandle = null;
   function openOrReopenStream() {

@@ -14,6 +14,12 @@ vi.mock('../src/wallet.js', () => ({
     isConnected: false,
     connectorId: null,
   })),
+  tryAutoReconnect: vi.fn(async () => ({
+    address: null,
+    chainId: null,
+    isConnected: false,
+    connectorId: null,
+  })),
 }));
 
 vi.mock('../src/api.js', () => {
@@ -63,8 +69,13 @@ vi.mock('../src/components/header-actions.js', () => ({ mountHeaderActions: vi.f
 const accessStoreMock = await import('../src/access-store.js');
 const apiMock = await import('../src/api.js');
 const signinMock = await import('../src/ui/signin-modal.js');
-const { createAccountChangeHandler, weiToWhole, createPositionsRefresher, createSparkRerender } =
-  await import('../src/main.js');
+const {
+  createAccountChangeHandler,
+  weiToWhole,
+  createPositionsRefresher,
+  createSparkRerender,
+  createStaleSessionCleanup,
+} = await import('../src/main.js');
 
 const WALLET_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const WALLET_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -385,5 +396,59 @@ describe('createPositionsRefresher (Phase 1.5 follow-up: race + anon guard)', ()
     rejectSlow(new Error('boom'));
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(positionByAddr.has('0xnew')).toBe(true);
+  });
+});
+
+describe('createStaleSessionCleanup (security fix #6 — orphaned WC cookie)', () => {
+  it('clears the server session when cookie is alive but no wallet is connected', async () => {
+    // /access returns 200 (cookie alive) — but getAccount() reports no wallet.
+    // This is the WC-on-shared-computer scenario: previous user closed the tab
+    // without Disconnect, cookie persists for up to 72h.
+    const getAccess = vi.fn(async () => ({ hasAccess: false, source: 'none' }));
+    const logout = vi.fn(async () => null);
+    const getAccount = vi.fn(() => ({
+      address: null,
+      chainId: null,
+      isConnected: false,
+      connectorId: null,
+    }));
+    const cleanup = createStaleSessionCleanup({ getAccount, getAccess, logout });
+    await cleanup();
+    expect(getAccess).toHaveBeenCalledTimes(1);
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the session alone when a wallet IS connected (normal flow)', async () => {
+    // Wallet is live → the cookie matches the wallet → don't touch it.
+    const getAccess = vi.fn(async () => ({ hasAccess: true, source: 'paid' }));
+    const logout = vi.fn(async () => null);
+    const getAccount = vi.fn(() => ({
+      address: WALLET_A,
+      chainId: 8453,
+      isConnected: true,
+      connectorId: 'injected',
+    }));
+    const cleanup = createStaleSessionCleanup({ getAccount, getAccess, logout });
+    await cleanup();
+    // Short-circuit before any API call — we trust the wallet state.
+    expect(getAccess).not.toHaveBeenCalled();
+    expect(logout).not.toHaveBeenCalled();
+  });
+
+  it('does NOT logout when /access throws 401 (no orphaned cookie)', async () => {
+    const getAccess = vi.fn(async () => {
+      throw new apiMock.ApiError('unauthorized', 401);
+    });
+    const logout = vi.fn(async () => null);
+    const getAccount = vi.fn(() => ({
+      address: null,
+      chainId: null,
+      isConnected: false,
+      connectorId: null,
+    }));
+    const cleanup = createStaleSessionCleanup({ getAccount, getAccess, logout });
+    await cleanup();
+    expect(getAccess).toHaveBeenCalledTimes(1);
+    expect(logout).not.toHaveBeenCalled();
   });
 });
