@@ -19,6 +19,7 @@ import os
 from typing import Any
 
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.errors import register_error_handlers
 from app.limits import init_limiter
@@ -51,6 +52,13 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
     # FlaskIntegration can hook request/response signals at app creation time.
     init_sentry("api")
     app = Flask(__name__)
+
+    # ProxyFix: gunicorn sits behind Caddy in the Docker network, so
+    # `request.remote_addr` defaults to the proxy container's internal IP.
+    # Without this, flask-limiter buckets every client under one key and
+    # per-IP limits on /auth/nonce, /auth/verify silently degrade to a shared
+    # bucket. Trust exactly one proxy hop (our own Caddy) for X-Forwarded-*.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[method-assign]
 
     # JSON config (compact + Unicode-safe).
     app.json.compact = True  # type: ignore[attr-defined]
