@@ -432,7 +432,6 @@ async function bootstrapMobile(root) {
   // wallet module's subscriber set and fire into a destroyed sidebar/chart.
   const accountUnsubs = [];
   const walletArea = handle.header?.querySelector?.('[data-zone="wallet-area"]');
-  let bannerContainer = null;
   if (walletArea instanceof HTMLElement) {
     try {
       const cfg = await getConfig().catch(() => null);
@@ -446,14 +445,10 @@ async function bootstrapMobile(root) {
       }
       mountWalletChip(walletArea, { wcProjectId });
 
-      // Off-DOM access banner — Track C will relocate to a visible mobile
-      // surface. We still need the handle so `createAccountChangeHandler`
-      // can call `accessBanner.refresh()` after SIWE / on wallet flips.
-      bannerContainer = document.createElement('div');
-      bannerContainer.hidden = true;
-      bannerContainer.dataset.testId = 'mobile-access-banner';
-      document.body.appendChild(bannerContainer);
-      const accessBanner = mountAccessBanner(bannerContainer, {
+      // Phase 3b-2: visible access banner slot between header and panels.
+      // The banner DOM collapses when empty (anonymous + premium users see
+      // nothing); only free signed-in users get the Pay CTA strip.
+      const accessBanner = mountAccessBanner(handle.banner, {
         // No SSE on mobile yet; once Track C wires `openStream` we'll
         // reopen the stream here so premium `orders` channel attaches.
         onPaid: () => {},
@@ -528,6 +523,14 @@ async function bootstrapMobile(root) {
     }
     if (tradeTabsHandle && typeof tradeTabsHandle.setToken === 'function') {
       tradeTabsHandle.setToken(token);
+    }
+    // Phase 3b-2: also sync the Wallet/Orders sub-page instance. The Wallet
+    // panel caches the latest token even when Orders isn't the active chip,
+    // so the user can switch Markets → Wallet/Orders later and still see the
+    // filtered list immediately. No-op while walletPanelHandle is null
+    // (mount races microscopically with the very first sidebar tap).
+    if (walletPanelHandle && typeof walletPanelHandle.setToken === 'function') {
+      walletPanelHandle.setToken(token);
     }
     navigateTo(TABS.CHART);
   }
@@ -811,9 +814,9 @@ async function bootstrapMobile(root) {
         /* ignore */
       }
     }
-    if (bannerContainer && bannerContainer.parentNode) {
-      bannerContainer.parentNode.removeChild(bannerContainer);
-    }
+    // The banner slot is part of the mobile-layout shell — `originalDestroy`
+    // removes it together with the rest of the shell. No separate cleanup
+    // needed.
     if (typeof originalDestroy === 'function') originalDestroy.call(handle);
   };
   return handle;

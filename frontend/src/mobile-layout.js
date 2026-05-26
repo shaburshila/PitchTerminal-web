@@ -52,6 +52,7 @@ function el(tag, { className, dataset, attrs, text } = {}) {
  *   destroy: () => void,
  *   panels: { markets: HTMLElement, chart: HTMLElement, trade: HTMLElement, wallet: HTMLElement },
  *   header: HTMLElement,
+ *   banner: HTMLElement,
  * }}
  */
 export function mountMobileLayout(root) {
@@ -85,6 +86,17 @@ export function mountMobileLayout(root) {
     }),
   );
   shell.appendChild(header);
+
+  // ── Mobile banner slot ────────────────────────────────────────────────
+  // Visible slot for the access banner (Phase 3b-2). Sits between the header
+  // and the panels area. The banner itself collapses when empty (existing
+  // behaviour in access.js); the slot collapses too via `:empty` in
+  // styles/mobile.css so an unauth/premium user doesn't see a blank strip.
+  const banner = el('div', {
+    className: 'pt-mobile-banner',
+    dataset: { zone: 'mobile-banner', testId: 'mobile-banner' },
+  });
+  shell.appendChild(banner);
 
   // ── Main (panels) ─────────────────────────────────────────────────────
   const main = el('main', { className: 'pt-main' });
@@ -172,5 +184,5 @@ export function mountMobileLayout(root) {
     }
   }
 
-  return { destroy, panels, header };
+  return { destroy, panels, header, banner };
 }

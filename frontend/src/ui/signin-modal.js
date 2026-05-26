@@ -17,6 +17,7 @@
 
 import { showToast } from './toast.js';
 import { signIn as defaultSignIn } from '../siwe.js';
+import { enableBottomSheetDismiss } from '../mobile-modals.js';
 
 let _activeOverlay = null;
 
@@ -169,6 +170,9 @@ export function showSignInModal(opts = {}) {
       : null;
   document.body.appendChild(overlay);
   _activeOverlay = overlay;
+  // Phase 3b-2: drag-to-dismiss on mobile. Routed through `onCancel` so it
+  // respects the in-flight `busy` guard (can't dismiss mid-sign).
+  const dismissCleanup = enableBottomSheetDismiss(overlay, card, () => onCancel());
   signBtn.focus();
 
   let busy = false;
@@ -198,6 +202,11 @@ export function showSignInModal(opts = {}) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onKey);
+    try {
+      dismissCleanup();
+    } catch {
+      /* idempotent */
+    }
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     if (_activeOverlay === overlay) _activeOverlay = null;
     // B5 — restore focus to the trigger element. Guarded against the trigger

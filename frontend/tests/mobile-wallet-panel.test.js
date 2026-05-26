@@ -256,6 +256,60 @@ describe('mountMobileWalletPanel — premium gating', () => {
   });
 });
 
+describe('mountMobileWalletPanel — active-token sync', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    routerSubs.clear();
+    routerState = { tab: 'wallet', subroute: null };
+    navigateToMock.mockClear();
+    mountProfile.mockClear();
+    mountOrdersTab.mockClear();
+    mountProfileReferral.mockClear();
+    mountMyWalletTab.mockClear();
+  });
+
+  it('setToken(token) then chip-switch to Orders forwards token to the fresh orders handle on mount', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    const token = { address: '0xabc', symbol: 'FOO' };
+    handle.setToken(token);
+    // Orders not yet mounted — nothing to forward to yet.
+    expect(mountOrdersTab).not.toHaveBeenCalled();
+    container.querySelector('[data-test-id="mobile-wallet-chip-orders"]').click();
+    expect(mountOrdersTab).toHaveBeenCalledTimes(1);
+    const ordersHandle = mountOrdersTab.mock.results[0].value;
+    expect(ordersHandle.setToken).toHaveBeenCalledWith(token);
+  });
+
+  it('setToken(token) while Orders is active forwards immediately to the live handle', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    container.querySelector('[data-test-id="mobile-wallet-chip-orders"]').click();
+    const ordersHandle = mountOrdersTab.mock.results[0].value;
+    ordersHandle.setToken.mockClear();
+    const token = { address: '0xdef', symbol: 'BAR' };
+    handle.setToken(token);
+    expect(ordersHandle.setToken).toHaveBeenCalledWith(token);
+  });
+
+  it('setToken is a no-op when current sub-page has no setToken surface', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    // Profile is active; mountProfile mock returns no setToken — should not throw.
+    expect(() => handle.setToken({ address: '0xabc' })).not.toThrow();
+  });
+
+  it('null setToken clears the cached selection (no replay on next Orders mount)', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    handle.setToken({ address: '0xabc' });
+    handle.setToken(null);
+    container.querySelector('[data-test-id="mobile-wallet-chip-orders"]').click();
+    const ordersHandle = mountOrdersTab.mock.results[0].value;
+    expect(ordersHandle.setToken).not.toHaveBeenCalled();
+  });
+});
+
 describe('mountMobileWalletPanel — mount failure retry recovery', () => {
   beforeEach(() => {
     document.body.replaceChildren();

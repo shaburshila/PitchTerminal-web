@@ -599,3 +599,84 @@ body.is-mobile .pt-profile__table td {
 body.is-mobile .pt-mywallet__thead {
   display: none;
 }
+
+/* ─── Phase 3b-2 — Onboarding full-screen ────────────────────────────────── */
+
+/* On mobile, the onboarding modal fills the entire screen so the welcome
+ * copy + Free/Pro grid + CTA all fit comfortably on a 360×640 viewport
+ * without horizontal scroll. The grid stacks vertically (Free above Pro). */
+body.is-mobile .pt-modal--onboarding {
+  border-radius: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  overflow-y: auto;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+
+body.is-mobile .pt-onb__grid {
+  grid-template-columns: 1fr; /* stack Free/Pro vertically */
+}
+
+/* ─── Phase 3b-2 — Bottom-sheet modals ───────────────────────────────────── */
+
+/* Every modal except the WC-mobile picker (which already has its own
+ * bottom-sheet styling) and the onboarding modal (which takes the full
+ * screen) renders as a bottom sheet on mobile: pinned to the bottom edge,
+ * full width, slide-up animation, rounded top corners, drag handle on top. */
+body.is-mobile .pt-modal-overlay:not(.pt-modal-overlay--wc-mobile) {
+  align-items: flex-end;
+  padding: 0;
+}
+
+body.is-mobile
+  .pt-modal-overlay:not(.pt-modal-overlay--wc-mobile)
+  > .pt-modal:not(.pt-modal--onboarding) {
+  width: 100%;
+  max-width: none;
+  max-height: 90vh;
+  max-height: 90dvh;
+  margin: 0;
+  border-radius: 16px 16px 0 0;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  animation: pt-mobile-sheet-slide-up 220ms ease-out;
+  overflow-y: auto;
+}
+
+/* Drag handle (visual affordance). Real drag-to-dismiss is wired in
+ * mobile-modals.js — this is just the grab-bar that hints at it. */
+body.is-mobile .pt-modal:not(.pt-modal--onboarding):not(.pt-modal--wc-mobile)::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  margin: 0 auto 12px;
+}
+
+@keyframes pt-mobile-sheet-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ─── Phase 3b-2 — Mobile banner slot ────────────────────────────────────── */
+
+/* The access banner mounts into a visible slot between the header and the
+ * panels area (was off-DOM in Phase 3a — free users couldn't see the Pay
+ * CTA). The banner DOM itself collapses when empty (existing behaviour);
+ * the slot collapses too to avoid a blank strip above the panels. */
+body.is-mobile .pt-mobile-banner {
+  flex-shrink: 0;
+}
+
+body.is-mobile .pt-mobile-banner:empty {
+  display: none;
+}

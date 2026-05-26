@@ -20,7 +20,15 @@
  * (hashchange / `onTabChange` callback) is also wired so deep-links land on
  * the right chip.
  *
- * Returns `{ destroy, setActiveSub, pushOrderUpdate }`.
+ * Returns `{ destroy, setActiveSub, pushOrderUpdate, setToken }`.
+ *
+ * Active-token sync (Phase 3b-2): the Wallet/Orders sub-page needs to track
+ * the token the user picked in Markets. `setToken(token)` stores the latest
+ * selection in a closure and forwards it to the active Orders handle when
+ * present; when the user later switches to the Orders chip, the freshly
+ * mounted instance immediately receives `setToken(activeToken)` so its order
+ * list filters correctly. Without this, the Wallet/Orders instance only saw
+ * "no token" on first mount and never caught up.
  */
 
 import { TABS, navigateTo, onTabChange, getActiveTab } from './mobile-router.js';
@@ -162,6 +170,12 @@ export function mountMobileWalletPanel(container, opts = {}) {
   // ── State + sub-page lifecycle ───────────────────────────────────────────
   let activeSub = null;
   let activeHandle = null;
+  /**
+   * Latest token picked in Markets. Forwarded to a freshly mounted Orders
+   * sub-page so it filters correctly on first paint. Null until the user
+   * makes a selection — Orders mounts with its built-in "Select a token"
+   * placeholder in that case. */
+  let activeToken = null;
   /** Re-entrancy guard for hash<->chip sync. */
   let isInternalNav = false;
 
@@ -243,6 +257,17 @@ export function mountMobileWalletPanel(container, opts = {}) {
       console.error('mountMobileWalletPanel: mountSubpage failed', err);
     }
     activeHandle = handle;
+    // Replay the latest active token when mounting the Orders sub-page so
+    // the list filters by the user's current Markets pick instead of showing
+    // the empty-state placeholder. Other sub-pages don't have a setToken
+    // surface (Profile/Referral/MyWallet are wallet-scoped, not token-scoped).
+    if (next === 'orders' && handle && activeToken && typeof handle.setToken === 'function') {
+      try {
+        handle.setToken(activeToken);
+      } catch (err) {
+        console.error('mountMobileWalletPanel: orders setToken on mount threw', err);
+      }
+    }
     // Only advance activeSub when the mount succeeded; otherwise leave it
     // null so a retry tap on the same chip re-attempts instead of becoming
     // a silent no-op (the `next === activeSub` guard would short-circuit).
@@ -319,6 +344,24 @@ export function mountMobileWalletPanel(container, opts = {}) {
     return activeSub;
   }
 
+  /**
+   * Store the latest token selection and, if the Orders sub-page is currently
+   * mounted, forward it immediately. Null clears the cached selection (so a
+   * later Orders mount does not replay a stale token).
+   *
+   * @param {object|null} token
+   */
+  function setToken(token) {
+    activeToken = token ?? null;
+    if (activeSub !== 'orders' || !activeHandle) return;
+    if (typeof activeHandle.setToken !== 'function') return;
+    try {
+      activeHandle.setToken(activeToken);
+    } catch (err) {
+      console.error('mountMobileWalletPanel: setToken threw', err);
+    }
+  }
+
   function destroy() {
     try {
       unsubRouter();
@@ -334,5 +377,5 @@ export function mountMobileWalletPanel(container, opts = {}) {
     if (root.parentNode === container) container.removeChild(root);
   }
 
-  return { destroy, setActiveSub, pushOrderUpdate, getActiveSub };
+  return { destroy, setActiveSub, pushOrderUpdate, getActiveSub, setToken };
 }

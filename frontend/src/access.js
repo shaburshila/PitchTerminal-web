@@ -38,6 +38,7 @@
  */
 
 import * as defaultApi from './api.js';
+import { enableBottomSheetDismiss } from './mobile-modals.js';
 import { getEffectiveRef } from './referral.js';
 import {
   subscribe as subscribeConfig,
@@ -520,6 +521,12 @@ export function openPayModal(opts = {}) {
   overlay.appendChild(card);
   document.body.appendChild(overlay);
   _activeModal = overlay;
+  // Phase 3b-2: bottom-sheet drag-to-dismiss on mobile. No-op on desktop, so
+  // the desktop centered-modal pay flow stays identical. We route through
+  // `onCancel` (not raw `close`) so the `busy` guard takes effect — a
+  // swipe-down during an in-flight approve/buyAccess tx is rejected just
+  // like Cancel-button and Escape-key, leaving the user with the receipt.
+  const _dismissCleanup = enableBottomSheetDismiss(overlay, card, () => onCancel());
 
   // ── State ──────────────────────────────────────────────────────────────
   /** @type {bigint|null} */
@@ -665,6 +672,11 @@ export function openPayModal(opts = {}) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onKey);
+    try {
+      _dismissCleanup();
+    } catch {
+      /* idempotent */
+    }
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     if (_activeModal === overlay) _activeModal = null;
     if (!paid && !silent && typeof opts.onClose === 'function') {

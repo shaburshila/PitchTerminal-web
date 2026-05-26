@@ -25,6 +25,7 @@
  */
 
 import * as defaultApi from './api.js';
+import { enableBottomSheetDismiss } from './mobile-modals.js';
 
 const HANDLE_RE = /^[a-z0-9_-]{4,32}$/;
 
@@ -392,6 +393,10 @@ export function mountProfileReferral(container, opts = {}) {
     card.appendChild(form);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
+    // Phase 3b-2: drag-to-dismiss on mobile. Routed through closeModal so the
+    // keydown listener is detached + overlay removed via the same path Cancel
+    // takes (no orphan listeners).
+    const dismissCleanup = enableBottomSheetDismiss(overlay, card, () => closeModal());
 
     let busy = false;
 
@@ -495,6 +500,11 @@ export function mountProfileReferral(container, opts = {}) {
 
     modalCleanup = () => {
       document.removeEventListener('keydown', onKey);
+      try {
+        dismissCleanup();
+      } catch {
+        /* idempotent */
+      }
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     };
   }
