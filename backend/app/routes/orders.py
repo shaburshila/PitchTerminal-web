@@ -449,11 +449,32 @@ def create_order() -> Any:
             status=422,
         )
 
-    # 5. Target price not yet met (best-effort; relies on market_state cache)
+    # 5. displayTargetPrice (non-signed) must agree with the signed
+    #    execution-space targetPrice within tolerance. Without this check the
+    #    keeper could be tricked into firing at the wrong MID-space threshold
+    #    via a tampered displayTargetPrice on an otherwise legitimately-signed
+    #    order. ``displayTargetPrice is None`` is allowed (pre-0004 clients).
+    if order.displayTargetPrice is not None and int(order.targetPrice) > 0:
+        side_label = "limit-buy" if int(order.side) == 0 else "take-profit"
+        expected_mid = execution_to_mid_wei(int(order.targetPrice), side_label)
+        provided_mid = int(order.displayTargetPrice)
+        tol = (expected_mid * _TARGET_PRICE_TOLERANCE_BPS) // 10_000
+        if abs(provided_mid - expected_mid) > tol:
+            abort_with_problem(
+                code="orders.display_price_mismatch",
+                title="displayTargetPrice does not match signed targetPrice",
+                status=400,
+                detail=(
+                    "displayTargetPrice must equal MID(targetPrice, side) within "
+                    "0.1% tolerance"
+                ),
+            )
+
+    # 6. Target price not yet met (best-effort; relies on market_state cache)
     market_price = _current_market_price(order.token, venue)
     _ensure_target_price_not_yet_met(order, venue, market_price)
 
-    # 6. Idempotency + race protection on (owner, nonce)
+    # 7. Idempotency + race protection on (owner, nonce)
     existing = _existing_order_for_nonce(order.owner, order.nonce)
     if existing is not None:
         if _same_order(existing, order, signature):
@@ -464,7 +485,7 @@ def create_order() -> Any:
             status=409,
         )
 
-    # 7. Insert
+    # 8. Insert
     expires_at_sql = "to_timestamp(%s)" if order.expiry != 0 else "NULL"
     display_target_param: int | None = (
         int(order.displayTargetPrice) if order.displayTargetPrice is not None else None

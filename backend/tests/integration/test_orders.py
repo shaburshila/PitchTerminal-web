@@ -402,6 +402,49 @@ class TestCreateOrder:
         body = resp.get_json()
         assert body["displayTargetPrice"] is None
 
+    def test_display_target_price_matches_signed_returns_200(self, app) -> None:
+        """displayTargetPrice == MID(targetPrice) within tolerance ⇒ accepted."""
+
+        client = _auth_client(app)
+        mid_target_wei = 4 * 10**18
+        exec_target_wei = (mid_target_wei * 10_000) // 9_500
+        order = _make_order(target_price=exec_target_wei)
+        order["displayTargetPrice"] = str(mid_target_wei)
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 200, resp.get_json()
+
+    def test_display_target_price_mismatch_returns_400(self, app) -> None:
+        """Tampered displayTargetPrice (outside 0.1% tolerance) ⇒ 400."""
+
+        client = _auth_client(app)
+        # Signed execution target derived from MID=4. Provide a wildly off
+        # displayTargetPrice (MID=2) to simulate a tamper attempt.
+        mid_target_wei = 4 * 10**18
+        exec_target_wei = (mid_target_wei * 10_000) // 9_500
+        order = _make_order(target_price=exec_target_wei)
+        order["displayTargetPrice"] = str(2 * 10**18)
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 400
+        assert resp.get_json()["code"] == "orders.display_price_mismatch"
+
+    def test_display_target_price_none_skips_validation(self, app) -> None:
+        """displayTargetPrice = None ⇒ validation skipped (legacy clients OK)."""
+
+        client = _auth_client(app)
+        order = _make_order()  # no displayTargetPrice key at all
+        with _configured_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 200
+        assert resp.get_json()["displayTargetPrice"] is None
+
     def test_target_already_met_uses_mid_space(self, app) -> None:
         """The 'already met' pre-check compares in MID-space.
 
