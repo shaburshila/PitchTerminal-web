@@ -229,13 +229,22 @@ CREATE INDEX limit_orders_expiring_idx
 
 CREATE TABLE auth_nonces (
     nonce       TEXT        PRIMARY KEY,
+    address     CHAR(42)    NULL
+                            CHECK (address IS NULL OR address ~ '^0x[0-9a-f]{40}$'),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX auth_nonces_created_idx ON auth_nonces(created_at);
+CREATE INDEX auth_nonces_address_idx ON auth_nonces(address);
 
 -- Используется как delete-on-use (worker периодически чистит протухшие записи
 -- старше 10 минут — двойной запас).
+--
+-- `address` — wallet address для которого выдан nonce (security #5: anti
+-- pre-harvesting). `_consume_nonce_atomic` матчит и nonce, и address, поэтому
+-- украденный nonce невозможно redeem'ить под чужим адресом через phishing.
+-- Колонка nullable только ради backward-compat одной overlap-минуты при
+-- deploy миграции 0005; application-код всегда populate'ит её при INSERT'е.
 
 -- =============================================================================
 -- user_settings — персональные настройки кошелька

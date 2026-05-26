@@ -178,9 +178,25 @@ export function getPosition(token) {
 // Authentication
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /auth/nonce — one-shot SIWE nonce. See api-spec §2.1. */
-export function getAuthNonce() {
-  return apiFetch('/auth/nonce');
+/**
+ * POST /auth/nonce — one-shot SIWE nonce bound to `address`. See api-spec §2.1.
+ *
+ * Security #5: the server stores the address next to the issued nonce and
+ * `/auth/verify` rejects any SIWE message whose signer differs. The address
+ * must be 0x-prefixed; the server lowercases server-side, but we lowercase
+ * here too for consistency with the rest of the wire format.
+ *
+ * @param {string} address 0x-prefixed 42-char wallet address.
+ */
+export function getAuthNonce(address) {
+  if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    throw new Error('getAuthNonce: address must be a 0x-prefixed 42-char hex string');
+  }
+  return apiFetch('/auth/nonce', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address: address.toLowerCase() }),
+  });
 }
 
 /**

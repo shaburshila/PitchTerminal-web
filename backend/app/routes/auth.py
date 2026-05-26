@@ -2,7 +2,12 @@
 
 Per docs/api-spec.md §2:
 
-* ``GET  /api/v1/auth/nonce``   — issue a single-use SIWE nonce (rate 30/min/IP).
+* ``POST /api/v1/auth/nonce``   — issue a single-use SIWE nonce bound to the
+  caller-declared ``address`` (rate 30/min/IP). Security #5: the body MUST
+  contain ``{"address": "0x..."}`` — the issued nonce is only redeemable by
+  a SIWE message signed for that exact address. This defeats the
+  pre-harvesting attack where an attacker accumulates nonces and re-uses
+  them in a phishing flow against a different victim.
 * ``POST /api/v1/auth/verify``  — verify SIWE message + signature, set
   ``pt_session`` cookie (rate 10/min/IP).
 * ``POST /api/v1/auth/logout``  — clear ``pt_session`` cookie (no rate-limit;
@@ -21,6 +26,7 @@ Cookie spec (§2.4):
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -48,16 +54,39 @@ _COOKIE_MAX_AGE_SEC = 72 * 3600
 
 # ─── /auth/nonce ────────────────────────────────────────────────────────────
 
+_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
-@bp.get("/api/v1/auth/nonce")
+
+@bp.post("/api/v1/auth/nonce")
 @limiter.limit("30 per minute")
-def get_nonce() -> Any:
-    """Issue a fresh SIWE nonce and persist it in ``auth_nonces``.
+def post_nonce() -> Any:
+    """Issue a fresh SIWE nonce bound to the caller-declared ``address``.
 
-    Body per §2.1: ``{ "nonce", "issuedAt", "expiresAt" }``. TTL 5 minutes.
+    Body per §2.1: ``{ "address": "0x..." }``.
+    Response: ``{ "nonce", "issuedAt", "expiresAt" }``. TTL 5 minutes.
+
+    Security #5: the nonce is only redeemable by a SIWE message whose
+    ``address`` field matches the one supplied here. An attacker who
+    pre-harvests nonces (e.g. by spamming this endpoint) cannot redeem them
+    on behalf of a different victim because :func:`shared.siwe._consume_nonce_atomic`
+    matches on ``(nonce, address)``.
     """
 
-    nonce = make_nonce()
+    payload = request.get_json(silent=True) or {}
+    address = payload.get("address")
+
+    if not isinstance(address, str) or not _ADDRESS_RE.match(address):
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad Request",
+            status=400,
+            detail="Body must contain a valid 0x-prefixed 40-hex 'address' field",
+        )
+
+    assert isinstance(address, str)  # for mypy
+    address_lower = address.lower()
+
+    nonce = make_nonce(address_lower)
     issued_at = int(time.time())
     return jsonify(
         {

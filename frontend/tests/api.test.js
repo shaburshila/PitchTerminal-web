@@ -219,10 +219,22 @@ describe('endpoint wrappers — URLs', () => {
     expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/tokens/0xabc/trades`);
   });
 
-  it('getAuthNonce hits /auth/nonce', async () => {
+  it('getAuthNonce POSTs lowercased address to /auth/nonce', async () => {
     fetch.mockResolvedValueOnce(makeResponse({ body: { nonce: 'abc', issuedAt: 1, expiresAt: 2 } }));
-    await getAuthNonce();
-    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/auth/nonce`);
+    await getAuthNonce('0x71ECD1a09380cA46CcA741Bc48d04C556674756F');
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`${API_BASE}/auth/nonce`);
+    expect(init.method).toBe('POST');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual({
+      address: '0x71ecd1a09380ca46cca741bc48d04c556674756f',
+    });
+  });
+
+  it('getAuthNonce throws on missing/invalid address', async () => {
+    expect(() => getAuthNonce()).toThrow(/0x-prefixed/);
+    expect(() => getAuthNonce('not-an-address')).toThrow(/0x-prefixed/);
   });
 
   it('verifySiwe POSTs message+signature as JSON', async () => {

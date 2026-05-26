@@ -168,11 +168,22 @@ JWT передаётся в **httpOnly cookie** `pt_session` (`SameSite=Lax`, `S
 
 ## 2. Аутентификация
 
-### 2.1 `GET /api/v1/auth/nonce`
+### 2.1 `POST /api/v1/auth/nonce`
 
-Выдаёт одноразовый SIWE-nonce.
+Выдаёт одноразовый SIWE-nonce, привязанный к адресу кошелька.
 
-**Запрос:** без параметров.
+**Запрос:**
+```json
+{
+  "address": "0x71ECD1a09380cA46CcA741Bc48d04C556674756F"
+}
+```
+
+- `address` — 0x-префиксированный 42-символьный hex. Сервер lowercase'ит и
+  сохраняет рядом с nonce. На стадии `/auth/verify` сервер делает атомарный
+  `DELETE WHERE nonce = ? AND address = ?` — украденный nonce НЕЛЬЗЯ
+  redeem'ить под чужим адресом (security fix #5: anti pre-harvesting).
+- Невалидный/отсутствующий `address` → 400 `validation.bad_request`.
 
 **Ответ 200:**
 ```json
@@ -1269,7 +1280,7 @@ in-memory конфиг и перерисовывает баннер с цено�
 
 | Эндпоинт | Лимит | Ключ | Заголовок |
 |---|---|---|---|
-| `GET /api/v1/auth/nonce` | 30 / мин | IP | — |
+| `POST /api/v1/auth/nonce` | 30 / мин | IP | — |
 | `POST /api/v1/auth/verify` | 10 / мин | IP | — |
 | `POST /api/v1/auth/logout` | — | — | — |
 | `GET /api/v1/access?fresh=1` | 5 / мин | address | `Retry-After` |

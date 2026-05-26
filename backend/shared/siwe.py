@@ -94,11 +94,22 @@ def _generate_token(length: int = 16) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(length))
 
 
-def make_nonce() -> str:
-    """Generate a fresh nonce and INSERT into ``auth_nonces``.
+def make_nonce(address: str) -> str:
+    """Generate a fresh nonce bound to ``address`` and INSERT into ``auth_nonces``.
 
     Retries on the (astronomically unlikely) PK collision; returns the value
     after a successful insert.
+
+    The nonce is bound to a single ``address`` at issue time to defeat the
+    pre-harvesting attack (security finding #5): an attacker accumulating
+    nonces cannot redeem them under a victim's address because
+    ``_consume_nonce_atomic`` matches on both ``nonce`` and ``address``.
+
+    Args:
+        address: 0x-prefixed lowercase 42-char wallet address. Callers MUST
+            validate + lowercase before passing in; this function does NOT
+            re-validate (it would be redundant with the request-handler
+            ``validation.bad_request`` mapping).
     """
 
     # PK collision in 16-char alnum is ~1 in 62^16; one extra attempt is
@@ -106,8 +117,9 @@ def make_nonce() -> str:
     for _ in range(3):
         nonce = _generate_token(16)
         rows = execute(
-            "INSERT INTO auth_nonces (nonce) VALUES (%s) ON CONFLICT DO NOTHING",
-            (nonce,),
+            "INSERT INTO auth_nonces (nonce, address) VALUES (%s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (nonce, address),
         )
         if rows:
             return nonce
@@ -118,8 +130,9 @@ def make_nonce() -> str:
 # ─── Verification ──────────────────────────────────────────────────────────
 
 
-def _consume_nonce_atomic(nonce: str) -> None:
-    """Atomically consume the nonce if it exists and is <5 min old.
+def _consume_nonce_atomic(nonce: str, address: str) -> None:
+    """Atomically consume the nonce if it exists, is <5 min old, and was
+    issued for ``address``.
 
     Critical (review K, finding C-1): the previous SELECT-then-DELETE pattern
     left a TOCTOU race window where two concurrent ``verify_message`` calls
@@ -128,26 +141,45 @@ def _consume_nonce_atomic(nonce: str) -> None:
     ``DELETE ... RETURNING`` resolves this at the SQL level: exactly one
     transaction wins, the loser sees ``rowcount == 0``.
 
+    Security #5 (pre-harvesting): the DELETE also matches on ``address``, so
+    a nonce issued for wallet A is unredeemable from a signature recovered
+    for wallet B — even if A's nonce was leaked to an attacker who tricked
+    B into signing a phishing message containing it.
+
     We call this **before** signature recovery so an attacker who knows a
     valid nonce can't burn CPU on recovery attempts for a nonce that has
     already been consumed.
 
+    Args:
+        nonce: The nonce string as carried in the SIWE message.
+        address: 0x-prefixed lowercase address recovered from / claimed by
+            the SIWE message. The caller MUST lowercase before passing.
+
     Raises:
-        InvalidNonce: nonce missing, already consumed, or expired.
+        InvalidNonce: nonce missing, already consumed, expired, or issued
+            for a different address.
     """
 
     cutoff = datetime.now(UTC) - timedelta(seconds=NONCE_TTL_SEC)
     row = fetch_one(
-        "DELETE FROM auth_nonces WHERE nonce = %s AND created_at > %s " "RETURNING created_at",
-        (nonce, cutoff),
+        "DELETE FROM auth_nonces "
+        "WHERE nonce = %s AND address = %s AND created_at > %s "
+        "RETURNING created_at",
+        (nonce, address, cutoff),
     )
     if row is None:
         # Either the row was never there, was consumed by a concurrent
-        # request, or is stale. We also clean up stale rows opportunistically
-        # so the table doesn't accumulate noise (the worker has a periodic
-        # cleanup too — this is just a fast-path).
+        # request, is stale, or was issued for a different address. We also
+        # clean up matching stale/wrong-address rows opportunistically so
+        # the table doesn't accumulate noise (the worker has a periodic
+        # cleanup too — this is just a fast-path). We delete by nonce only:
+        # if the row exists but for a different address, that nonce is now
+        # known-compromised (an attacker tried to redeem it for the wrong
+        # signer), so burning it preemptively is correct.
         execute("DELETE FROM auth_nonces WHERE nonce = %s", (nonce,))
-        raise InvalidNonce("Nonce unknown, already consumed, or expired")
+        raise InvalidNonce(
+            "Nonce unknown, already consumed, expired, or issued for a different address"
+        )
 
 
 def _recover_signer(message_text: str, signature: str) -> str | None:
@@ -256,8 +288,10 @@ def verify_message(
     # recovery to close the TOCTOU window. If two concurrent requests carry
     # the same nonce, exactly one wins this DELETE; the other gets
     # InvalidNonce immediately without touching the (expensive) signature
-    # recovery path.
-    _consume_nonce_atomic(parsed.nonce)
+    # recovery path. Security #5: also binds the consume to the claimed
+    # address so a pre-harvested nonce can't be redeemed by a phishing site
+    # tricking a different victim into signing.
+    _consume_nonce_atomic(parsed.nonce, parsed.address.lower())
 
     # 7) Signature — EOA recovery. If this fails, the nonce is already
     # consumed (we could re-issue, but that's the user's responsibility — they

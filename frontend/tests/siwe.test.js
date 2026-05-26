@@ -204,6 +204,14 @@ describe('signIn', () => {
     expect(result.address).toBe('0x71ecd1a09380ca46cca741bc48d04c556674756f');
   });
 
+  it('passes lowercased address to /auth/nonce (security #5 — pre-harvesting fix)', async () => {
+    await siwe.signIn();
+    expect(api.getAuthNonce).toHaveBeenCalledTimes(1);
+    expect(api.getAuthNonce).toHaveBeenCalledWith(
+      '0x71ecd1a09380ca46cca741bc48d04c556674756f',
+    );
+  });
+
   it('uses wagmi signMessage with the connected (lowercase) address', async () => {
     await siwe.signIn();
     expect(wagmiSignState.lastCall).not.toBeNull();

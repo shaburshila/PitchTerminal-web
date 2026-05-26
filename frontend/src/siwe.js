@@ -14,7 +14,8 @@
  *   - `signIn(opts?)`:
  *     1. Read `siwe.domain` + `siwe.uri` from `/api/v1/config` (cached one call
  *        for the lifetime of the module — same-origin same-domain values).
- *     2. `GET /auth/nonce`.
+ *     2. `POST /auth/nonce { address }` — server binds the nonce to this
+ *        address (security #5: defeats the nonce pre-harvesting attack).
  *     3. Build the message with the connected address checksummed via
  *        `viem.getAddress` (server rejects lowercase per spec §1.2 + §2.2).
  *     4. Ask the wallet to sign — wagmi's `signMessage` for injected,
@@ -208,7 +209,13 @@ export async function signIn(opts = {}) {
   }
 
   const checksumAddress = getAddress(rawAddress);
-  const [{ domain, uri }, nonceResp] = await Promise.all([loadSiweConfig(), getAuthNonce()]);
+  // Security #5: bind the issued nonce to this exact address — the server
+  // rejects any /auth/verify whose recovered signer differs from the address
+  // it associated with the nonce at issue-time.
+  const [{ domain, uri }, nonceResp] = await Promise.all([
+    loadSiweConfig(),
+    getAuthNonce(rawAddress.toLowerCase()),
+  ]);
 
   const nonce = nonceResp?.nonce;
   const issuedAtSec = Number(nonceResp?.issuedAt);
