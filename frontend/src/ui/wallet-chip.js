@@ -33,6 +33,8 @@ import {
   CONNECTOR_WALLET_CONNECT,
   tryAutoReconnect,
 } from '../wallet.js';
+import { isMobileBrowser, hasInjectedProvider } from '../wallet-deep-links.js';
+import { openWcMobileModal } from './wallet-connect-modal.js';
 import { showToast } from './toast.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -258,6 +260,20 @@ export function mountWalletChip(container, opts = {}) {
   }
 
   function onConnectClick() {
+    // Mobile browser without an injected provider: skip the desktop picker
+    // and open the WalletConnect bottom-sheet. The deep-link list is the
+    // only UI that makes sense — there is no extension to fall back on, and
+    // a stock `wc:` URI alone doesn't reliably trigger any app on iOS.
+    if (wcEnabled && isMobileBrowser() && !hasInjectedProvider()) {
+      openWcMobileModal({
+        onConnected: () => {
+          // wallet.js state listener will re-render this chip; nothing to
+          // do here. We don't toast — the chip flip is signal enough.
+        },
+        onCancel: () => {},
+      });
+      return;
+    }
     // If only one option is available, skip the picker entirely.
     if (!wcEnabled) {
       void doConnect(CONNECTOR_INJECTED);

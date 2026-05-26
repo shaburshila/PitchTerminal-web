@@ -166,6 +166,7 @@ function ensureWagmiSubscription() {
 
 let _wcProvider = null;
 let _wcProjectId = '';
+let _wcShowQrModal = true;
 
 /**
  * Initialise WalletConnect with a project id pulled from `/config`. Safe to
@@ -188,11 +189,37 @@ export function setWalletConnectProjectId(projectId) {
   }
 }
 
-async function loadWcProvider() {
+/**
+ * Lazily build (or return cached) the WalletConnect provider. By default
+ * `showQrModal: true` — desktop flow renders WC's own QR modal. The mobile
+ * flow (`ui/wallet-connect-modal.js`) overrides this to `false` so it can
+ * intercept the `display_uri` event and render a bottom-sheet wallet picker
+ * instead.
+ *
+ * Exported so the mobile picker can call it directly; the desktop
+ * `connectWallet('walletConnect')` path still calls it internally with the
+ * default options.
+ *
+ * @param {{ showQrModal?: boolean }} [opts]
+ */
+export async function loadWcProvider({ showQrModal = true } = {}) {
   if (!_wcProjectId) {
     throw new Error('walletConnect: projectId not configured');
   }
+  // The cached provider was built with a fixed `showQrModal`. If the caller
+  // now wants the opposite (e.g. desktop QR-flow opened first, then a mobile
+  // path opens with `showQrModal: false`), tear it down and rebuild so the
+  // built-in modal doesn't double-render alongside our own bottom-sheet.
+  if (_wcProvider && _wcShowQrModal !== showQrModal) {
+    try {
+      _wcProvider.disconnect?.();
+    } catch {
+      // ignore — provider may already be torn down
+    }
+    _wcProvider = null;
+  }
   if (_wcProvider) return _wcProvider;
+  _wcShowQrModal = showQrModal;
   // Lazy import — keeps initial bundle small for users who never click the
   // WC button. Vite tree-shakes the import for builds that never call this.
   const mod = await import('@walletconnect/ethereum-provider');
@@ -201,7 +228,7 @@ async function loadWcProvider() {
     projectId: _wcProjectId,
     chains: [BASE_CHAIN_ID],
     optionalChains: [baseSepolia.id],
-    showQrModal: true,
+    showQrModal,
     // metadata kept minimal — full app metadata flows from the page in
     // prod; in dev these defaults suffice to render the modal.
     metadata: {
@@ -240,6 +267,33 @@ async function loadWcProvider() {
  */
 export function getWalletConnectProvider() {
   return state.connectorId === CONNECTOR_WALLET_CONNECT ? _wcProvider : null;
+}
+
+/**
+ * Push WC-provider state into the module-level state machine. The mobile
+ * picker (`ui/wallet-connect-modal.js`) bypasses `connectWallet()` so that
+ * it can own the deep-link UI; without this helper the provider connects
+ * but our state stays `connectorId: null`, `isConnected: false`, and
+ * downstream consumers (wallet chip, SIWE bootstrap, access banner) never
+ * react. Idempotent — repeated calls with the same address are a no-op.
+ *
+ * @param {{ accounts?: string[]; chainId?: number | string }} provider
+ */
+export function setWcConnected(provider) {
+  if (!provider) return;
+  const accounts = provider.accounts ?? [];
+  const addr = accounts[0] ? String(accounts[0]).toLowerCase() : null;
+  if (!addr) return;
+  const rawChain = provider.chainId;
+  const parsedChain =
+    typeof rawChain === 'string' ? Number.parseInt(rawChain, 16) : Number(rawChain);
+  const chainId = Number.isFinite(parsedChain) && parsedChain > 0 ? parsedChain : BASE_CHAIN_ID;
+  setState({
+    address: addr,
+    chainId,
+    isConnected: true,
+    connectorId: CONNECTOR_WALLET_CONNECT,
+  });
 }
 
 // ─── Public actions ─────────────────────────────────────────────────────────
@@ -356,6 +410,7 @@ export function _resetForTests() {
   _wagmiConfig = null;
   _wcProvider = null;
   _wcProjectId = '';
+  _wcShowQrModal = true;
 }
 
 // Unused helper kept for future pay-flow code that needs a read-only client.

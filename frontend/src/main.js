@@ -390,11 +390,22 @@ export function createStaleSessionCleanup(deps = {}) {
 }
 
 async function bootstrapMobile(root) {
-  // Minimal mobile bootstrap for Phase 1 (M-0 + M-1).
-  // Track A will add wallet flow. Track C will mount components into panels.
-  // This phase only proves the shell + router + nav work.
+  // Phase 2 Track A: mounts the shell + wallet chip + SIWE bootstrap.
+  // The wallet flow is identical to desktop — wallet.js drives state, the
+  // chip renders, and `createAccountChangeHandler` runs SIWE on connect.
+  // The mobile-specific picker (bottom-sheet wallet list) lives inside the
+  // chip's click handler and is triggered automatically when the UA is
+  // mobile and there is no injected provider — see
+  // `ui/wallet-connect-modal.js`.
+  //
+  // Track C will mount sidebar/chart/trade/orders into `handle.panels` and
+  // move the access banner into a visible mobile slot. Until then the
+  // banner is mounted into an off-DOM container so its state-driving side
+  // effects (SIWE-modal popup on 401, premium-gating broadcast via
+  // access-store) still run.
   const { mountMobileLayout } = await import('./mobile-layout.js');
   const handle = mountMobileLayout(root);
+
   // Rotate-past-breakpoint reload (B4 decision): if the user rotates a
   // tablet into desktop width we reload so the full desktop bootstrap takes
   // over cleanly. We don't try to live-swap the layout in place.
@@ -409,9 +420,58 @@ async function bootstrapMobile(root) {
       mqCleanup = () => mq.removeEventListener('change', onChange);
     }
   }
+
+  // Mount the wallet chip into the header's wallet-area slot. Same
+  // wcProjectId path as desktop — we read /config first so the picker can
+  // decide whether WC is available. /config failure falls back to
+  // injected-only (which on mobile means "show no picker" — the click does
+  // a no-op connectInjected that will throw "Provider not found"; we accept
+  // that edge case because /config rarely fails in prod).
+  const walletArea = handle.header?.querySelector?.('[data-zone="wallet-area"]');
+  let bannerContainer = null;
+  if (walletArea instanceof HTMLElement) {
+    try {
+      const cfg = await getConfig().catch(() => null);
+      const wcProjectId = cfg?.walletConnect?.projectId ?? '';
+      if (cfg) {
+        mergeConfig({
+          accessPriceWei: cfg.accessPriceWei ?? null,
+          buyerDiscountBps: cfg.buyerDiscountBps ?? null,
+          referralBps: cfg.referralBps ?? null,
+        });
+      }
+      mountWalletChip(walletArea, { wcProjectId });
+
+      // Off-DOM access banner — Track C will relocate to a visible mobile
+      // surface. We still need the handle so `createAccountChangeHandler`
+      // can call `accessBanner.refresh()` after SIWE / on wallet flips.
+      bannerContainer = document.createElement('div');
+      bannerContainer.hidden = true;
+      bannerContainer.dataset.testId = 'mobile-access-banner';
+      document.body.appendChild(bannerContainer);
+      const accessBanner = mountAccessBanner(bannerContainer, {
+        // No SSE on mobile yet; once Track C wires `openStream` we'll
+        // reopen the stream here so premium `orders` channel attaches.
+        onPaid: () => {},
+      });
+      onAccountChange(createAccountChangeHandler({ accessBanner }));
+
+      // Silent re-hydrate for wagmi-injected sessions (MetaMask / Coinbase
+      // Wallet in-app browsers). WC re-hydrate is intentionally NOT here —
+      // mobile WC sessions require a deep-link re-handshake, which the user
+      // initiates by tapping Connect.
+      tryAutoReconnect().catch(() => {});
+    } catch (err) {
+      console.error('bootstrapMobile: wallet/auth bootstrap failed', err);
+    }
+  }
+
   const originalDestroy = handle.destroy;
   handle.destroy = function () {
     mqCleanup();
+    if (bannerContainer && bannerContainer.parentNode) {
+      bannerContainer.parentNode.removeChild(bannerContainer);
+    }
     if (typeof originalDestroy === 'function') originalDestroy.call(handle);
   };
   return handle;
