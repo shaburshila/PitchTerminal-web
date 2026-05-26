@@ -271,3 +271,125 @@ body.is-mobile .pt-header__action[data-test-id='header-help-btn'] {
 .pt-modal--wc-mobile .pt-modal__cancel:active {
   background: var(--bg-2);
 }
+
+/* ─── Phase 3a — Track C component adaptation ────────────────────────────── */
+
+/* Soft-lock cover (Q3): position:fixed between header and bottom-nav so it
+ * stays visible while a scrollable panel scrolls underneath. Uses the CSS
+ * vars Phase 1 already publishes on body.is-mobile. */
+body.is-mobile .pt-soft-lock {
+  position: fixed;
+  top: var(--mobile-header-h, 52px);
+  bottom: var(--mobile-nav-h, 56px);
+  left: 0;
+  right: 0;
+  z-index: 200;
+}
+
+/* Q1 — desktop chart overlay checkboxes (My/Others/Avg/Net pos) hidden on
+ * mobile. Real estate is precious; the overlay menu is a power-user feature
+ * we'll surface differently in a later batch. */
+body.is-mobile .pt-chart__overlays {
+  display: none;
+}
+
+/* ─── Markets panel / sidebar ────────────────────────────────────────────── */
+
+/* The panel container itself owns the scroll (mobile.css sets
+ * `.pt-mobile-panel { overflow-y: auto }` above), so we release the desktop
+ * sidebar's internal overflow lock and let the rows scroll inside the panel. */
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__inner {
+  height: 100%;
+  overflow: visible;
+}
+
+/* Sticky tabs + filters at the top so search/period/role stay reachable
+ * regardless of scroll depth. Background matches the panel so rows can scroll
+ * under the controls cleanly. */
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__tabs,
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__filters {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-0);
+}
+
+/* Filters group needs its own sticky offset under the tabs row. */
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__filters {
+  top: 40px;
+}
+
+/* Touch-friendly row height — Apple HIG 44pt floor + 8px spacing. */
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__row {
+  min-height: 52px;
+}
+
+/* iOS auto-zoom prevention: any input/select <16px font triggers a viewport
+ * zoom on focus. Bumping search + period + role-btn to 16px keeps the page
+ * steady on tap. */
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__search,
+body.is-mobile .pt-mobile-panel--markets .pt-sidebar__period {
+  font-size: 16px;
+}
+
+/* ─── Chart panel ────────────────────────────────────────────────────────── */
+
+/* Sizing: the chart fills the panel vertically; toolbar wraps if it overflows;
+ * stats become a horizontal scroller; canvas takes the remaining height. */
+body.is-mobile .pt-chart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+body.is-mobile .pt-chart__toolbar {
+  flex-wrap: wrap;
+}
+
+body.is-mobile .pt-chart__stats {
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.is-mobile .pt-chart__canvas {
+  /* `pan-y pinch-zoom`: browser handles vertical scroll, but pinch sequences
+   * still reach the chart so lightweight-charts' `handleScale.pinch:true`
+   * works on iOS Safari. Bare `pan-y` (without `pinch-zoom`) can cause
+   * Safari to suppress two-finger gestures on this element. */
+  touch-action: pan-y pinch-zoom;
+  flex: 1;
+  min-height: 280px;
+}
+
+/* OHLC card repositioned to bottom-left so it doesn't cover the tap point
+ * (D5: single-tap shows OHLC; the user just tapped somewhere on the chart
+ * — the card must not occlude that area). Spans the chart width minus a
+ * small inset on each side. */
+body.is-mobile .pt-chart__ohlc {
+  top: auto;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
+/* Mobile "Trade this token" sticky CTA below the canvas. Sticks to bottom
+ * of the chart panel so it's always reachable; hidden until a token is set. */
+body.is-mobile .pt-chart__mobile-cta {
+  position: sticky;
+  bottom: 0;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 0;
+  background: var(--accent);
+  color: var(--bg-0);
+  font: 600 14px var(--font-ui);
+  cursor: pointer;
+}
+
+body.is-mobile .pt-chart__mobile-cta[hidden] {
+  display: none;
+}

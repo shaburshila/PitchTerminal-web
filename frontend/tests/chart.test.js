@@ -44,6 +44,22 @@ function makeChartLib() {
 
   const lib = {
     createChart: vi.fn((container, opts) => {
+      // Per-chart timeScale stub — captures the visibleTimeRangeChange
+      // subscribers (Phase 3a mobile uses this for auto-hide on pan/zoom)
+      // and lets tests stub coordinateToTime for the tap-OHLC path.
+      const timeScaleStub = {
+        visibleRangeHandlers: [],
+        coordinateToTime: vi.fn(() => null),
+        subscribeVisibleTimeRangeChange: vi.fn(function (handler) {
+          this.visibleRangeHandlers.push(handler);
+          return () => {
+            this.visibleRangeHandlers = this.visibleRangeHandlers.filter((h) => h !== handler);
+          };
+        }),
+        _emitVisibleRangeChange(range) {
+          for (const h of this.visibleRangeHandlers) h(range);
+        },
+      };
       const chart = {
         container,
         opts,
@@ -51,6 +67,8 @@ function makeChartLib() {
         removed: false,
         resizes: [],
         crosshairHandlers: [],
+        timeScaleStub,
+        timeScale: vi.fn(() => timeScaleStub),
         addCandlestickSeries: vi.fn(function () {
           const s = makeSeries('candle');
           this.seriesList.push(s);
@@ -848,13 +866,17 @@ describe('mountChart', () => {
       container2.querySelector('[data-test-id="chart-overlay-my"]').getAttribute('aria-checked'),
     ).toBe('false');
     expect(
-      container2.querySelector('[data-test-id="chart-overlay-others"]').getAttribute('aria-checked'),
+      container2
+        .querySelector('[data-test-id="chart-overlay-others"]')
+        .getAttribute('aria-checked'),
     ).toBe('true');
     expect(
       container2.querySelector('[data-test-id="chart-overlay-avg"]').getAttribute('aria-checked'),
     ).toBe('true');
     expect(
-      container2.querySelector('[data-test-id="chart-overlay-netPos"]').getAttribute('aria-checked'),
+      container2
+        .querySelector('[data-test-id="chart-overlay-netPos"]')
+        .getAttribute('aria-checked'),
     ).toBe('false');
   });
 
@@ -1032,7 +1054,9 @@ describe('mountChart', () => {
       expect(container.querySelector('[data-test-id="chart-ohlc-open"]').textContent).toBe('10.50');
       expect(container.querySelector('[data-test-id="chart-ohlc-high"]').textContent).toBe('12.00');
       expect(container.querySelector('[data-test-id="chart-ohlc-low"]').textContent).toBe('10.40');
-      expect(container.querySelector('[data-test-id="chart-ohlc-close"]').textContent).toBe('11.80');
+      expect(container.querySelector('[data-test-id="chart-ohlc-close"]').textContent).toBe(
+        '11.80',
+      );
       // close (11.8) > open (10.5) → close cell flagged as up.
       const closeEl = container.querySelector('[data-test-id="chart-ohlc-close"]');
       expect(closeEl.classList.contains('is-up')).toBe(true);
@@ -1069,9 +1093,7 @@ describe('mountChart', () => {
       const { lib, created } = makeChartLib();
       const api = makeApi(
         makeChartPayload({
-          candles: [
-            { time: 1709000000, open: 11, high: 11.2, low: 9.5, close: 9.6, volume: 100 },
-          ],
+          candles: [{ time: 1709000000, open: 11, high: 11.2, low: 9.5, close: 9.6, volume: 100 }],
         }),
       );
       const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
@@ -1150,13 +1172,10 @@ describe('mountChart', () => {
 
     // Drain microtasks → rebuild completes, new series is in place.
     await flush();
-    const seriesAfter =
-      created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    const seriesAfter = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
     expect(seriesAfter).not.toBe(seriesBefore);
     // Post-rebuild renderNetPosLine ran against the FRESH series.
-    expect(
-      seriesAfter.priceLines.filter((l) => l.opts?.title === 'Pos').length,
-    ).toBe(1);
+    expect(seriesAfter.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
   });
 
   it('setOwnBalance ignores wei-magnitude inputs and warns (issue #6 guard)', async () => {
@@ -1180,5 +1199,187 @@ describe('mountChart', () => {
     expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+// ── Phase 3a Track C — mobile-mode additions ─────────────────────────────
+describe('mountChart (isMobile: true)', () => {
+  let container;
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    container = document.createElement('section');
+    document.body.appendChild(container);
+    try {
+      localStorage.removeItem('pt:chart:overlays');
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('passes touch-friendly handleScroll / handleScale / kineticScroll to createChart', async () => {
+    const { lib, created } = makeChartLib();
+    const api = makeApi();
+    const chart = mountChart(container, {
+      apiClient: api,
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    // setToken triggers the lazy ensureChartInstance() path which calls
+    // createChart. Without it the lib factory is never invoked.
+    chart.setToken(makePlayer());
+    await flush();
+
+    expect(created.charts.length).toBe(1);
+    const opts = created.charts[0].opts;
+    expect(opts.handleScroll).toMatchObject({
+      mouseWheel: false,
+      pressedMouseMove: false,
+      horzTouchDrag: true,
+      vertTouchDrag: false,
+    });
+    expect(opts.handleScale).toMatchObject({ mouseWheel: false, pinch: true });
+    expect(opts.kineticScroll).toMatchObject({ touch: true, mouse: false });
+  });
+
+  it('renders the mobile CTA hidden until setToken supplies a token', async () => {
+    const { lib } = makeChartLib();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    const cta = container.querySelector('[data-test-id="chart-mobile-trade-cta"]');
+    expect(cta).not.toBeNull();
+    expect(cta.hidden).toBe(true);
+
+    chart.setToken(makePlayer());
+    await flush();
+    expect(cta.hidden).toBe(false);
+
+    chart.setToken(null);
+    await flush();
+    expect(cta.hidden).toBe(true);
+  });
+
+  it('mobile CTA click forwards the active token to onTradeRequest', async () => {
+    const { lib } = makeChartLib();
+    const onTradeRequest = vi.fn();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+      isMobile: true,
+      onTradeRequest,
+    });
+    const player = makePlayer();
+    chart.setToken(player);
+    await flush();
+
+    const cta = container.querySelector('[data-test-id="chart-mobile-trade-cta"]');
+    cta.click();
+
+    expect(onTradeRequest).toHaveBeenCalledTimes(1);
+    expect(onTradeRequest).toHaveBeenCalledWith(player);
+  });
+
+  it('tap on canvas host shows OHLC card via coordinateToTime + candle lookup', async () => {
+    const { lib, created } = makeChartLib();
+    const candles = [
+      { time: 1709000000, open: 10, high: 11, low: 9.5, close: 10.5, volume: 100 },
+      { time: 1709000300, open: 10.5, high: 12, low: 10.4, close: 11.8, volume: 80 },
+    ];
+    const chart = mountChart(container, {
+      apiClient: makeApi(makeChartPayload({ candles })),
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    chart.setToken(makePlayer());
+    await flush();
+
+    const ts = created.charts[0].timeScaleStub;
+    ts.coordinateToTime.mockReturnValue(1709000300);
+
+    const ohlcCard = container.querySelector('[data-test-id="chart-ohlc"]');
+    const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+    expect(ohlcCard.hidden).toBe(true);
+
+    // Dispatch a click — the chart's mobile path reads e.clientX, runs it
+    // through coordinateToTime and looks up the matching candle.
+    canvas.dispatchEvent(new MouseEvent('click', { clientX: 100, bubbles: true }));
+    expect(ohlcCard.hidden).toBe(false);
+    // Close cell text reflects the tapped candle.
+    const close = container.querySelector('[data-test-id="chart-ohlc-close"]');
+    expect(close.textContent).not.toBe('—');
+  });
+
+  it('second tap on canvas host toggles OHLC card off', async () => {
+    const { lib, created } = makeChartLib();
+    const candles = [{ time: 1709000000, open: 10, high: 11, low: 9.5, close: 10.5, volume: 100 }];
+    const chart = mountChart(container, {
+      apiClient: makeApi(makeChartPayload({ candles })),
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    chart.setToken(makePlayer());
+    await flush();
+
+    const ts = created.charts[0].timeScaleStub;
+    ts.coordinateToTime.mockReturnValue(1709000000);
+    const ohlcCard = container.querySelector('[data-test-id="chart-ohlc"]');
+    const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+
+    canvas.dispatchEvent(new MouseEvent('click', { clientX: 10, bubbles: true }));
+    expect(ohlcCard.hidden).toBe(false);
+
+    canvas.dispatchEvent(new MouseEvent('click', { clientX: 20, bubbles: true }));
+    expect(ohlcCard.hidden).toBe(true);
+  });
+
+  it('visibleTimeRangeChange auto-hides the OHLC card (D5: any pan/zoom dismisses)', async () => {
+    const { lib, created } = makeChartLib();
+    const candles = [{ time: 1709000000, open: 10, high: 11, low: 9.5, close: 10.5, volume: 100 }];
+    const chart = mountChart(container, {
+      apiClient: makeApi(makeChartPayload({ candles })),
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    chart.setToken(makePlayer());
+    await flush();
+
+    const ts = created.charts[0].timeScaleStub;
+    ts.coordinateToTime.mockReturnValue(1709000000);
+    const ohlcCard = container.querySelector('[data-test-id="chart-ohlc"]');
+    const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+    canvas.dispatchEvent(new MouseEvent('click', { clientX: 10, bubbles: true }));
+    expect(ohlcCard.hidden).toBe(false);
+
+    // Simulate a pan/zoom: lightweight-charts fires visibleTimeRangeChange
+    // with a range payload. The chart subscribes hideOhlcCard.
+    ts._emitVisibleRangeChange({ from: 1709000000, to: 1709001000 });
+    expect(ohlcCard.hidden).toBe(true);
+    expect(ts.subscribeVisibleTimeRangeChange).toHaveBeenCalled();
+  });
+
+  it('does NOT subscribe crosshairMove on mobile (touch devices have no hover)', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+      isMobile: true,
+    });
+    chart.setToken(makePlayer());
+    await flush();
+    expect(created.charts[0].subscribeCrosshairMove).not.toHaveBeenCalled();
+  });
+
+  it('desktop mode still subscribes crosshairMove (regression guard)', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setToken(makePlayer());
+    await flush();
+    expect(created.charts[0].subscribeCrosshairMove).toHaveBeenCalled();
   });
 });

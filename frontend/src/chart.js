@@ -259,6 +259,13 @@ export function mountChart(container, options = {}) {
 
   const apiClient = options.apiClient ?? defaultApi;
   const chartLibFactory = options.chartLibFactory ?? defaultChartLibFactory;
+  // Mobile mode (Phase 3a Track C) — swap to touch-friendly handleScroll /
+  // handleScale options on the lightweight-charts factory, replace the
+  // crosshair-driven OHLC card with a tap-to-show pattern (D5), and append
+  // a sticky "Trade this token" CTA below the canvas.
+  const isMobile = options.isMobile === true;
+  const onTradeRequest =
+    typeof options.onTradeRequest === 'function' ? options.onTradeRequest : null;
 
   container.replaceChildren();
 
@@ -499,6 +506,22 @@ export function mountChart(container, options = {}) {
   wrapper.appendChild(statsBar);
   wrapper.appendChild(canvasHost);
   wrapper.appendChild(status);
+
+  // Mobile "Trade this token" sticky CTA. Hidden until setToken supplies a
+  // token; click forwards to options.onTradeRequest with the active token.
+  // Sticky positioning + styling live in styles/mobile.css under
+  // `body.is-mobile .pt-chart__mobile-cta`.
+  let mobileCta = null;
+  if (isMobile) {
+    mobileCta = el('button', {
+      className: 'pt-chart__mobile-cta',
+      dataset: { testId: 'chart-mobile-trade-cta' },
+      attrs: { type: 'button', hidden: '' },
+      text: 'Trade this token',
+    });
+    wrapper.appendChild(mobileCta);
+  }
+
   container.appendChild(wrapper);
 
   // ── Chart lib (lazy) ────────────────────────────────────────────────────
@@ -526,6 +549,14 @@ export function mountChart(container, options = {}) {
         /* ignore */
       }
       crosshairUnsub = null;
+    }
+    if (visibleRangeUnsub) {
+      try {
+        visibleRangeUnsub();
+      } catch {
+        /* ignore */
+      }
+      visibleRangeUnsub = null;
     }
     if (chartInstance && typeof chartInstance.remove === 'function') {
       try {
@@ -607,6 +638,7 @@ export function mountChart(container, options = {}) {
   let avgPriceLine = null;
   let netPosPriceLine = null;
   let crosshairUnsub = null;
+  let visibleRangeUnsub = null;
   // Phase 1.5 follow-up: between ensureChartInstance() awaiting and the
   // subsequent removeSeries call in rebuildSeries(), an SSE price tick can
   // race in and call applyPrice() → renderNetPosLine() against the OLD
@@ -782,7 +814,7 @@ export function mountChart(container, options = {}) {
     if (!mod || typeof mod.createChart !== 'function') {
       throw new Error('mountChart: chart library missing createChart');
     }
-    chartInstance = mod.createChart(canvasHost, {
+    const chartOpts = {
       layout: {
         background: { color: '#0a0f0d' },
         textColor: '#e8efe9',
@@ -793,13 +825,41 @@ export function mountChart(container, options = {}) {
       },
       timeScale: { timeVisible: true, secondsVisible: false },
       autoSize: true,
-    });
+    };
+    if (isMobile) {
+      // Mobile gesture mapping (Phase 3a Track C):
+      // - horizontal touch-drag pans the time axis (chart scroll)
+      // - vertical touch-drag is left alone so the surrounding panel can scroll
+      // - pinch zooms; mousewheel + pressed-mouse drag are disabled (no mouse
+      //   on mobile, and mouseWheel:true would intercept vertical scroll wheel
+      //   events on hybrid devices)
+      // - kineticScroll on touch keeps momentum after a flick
+      chartOpts.handleScroll = {
+        mouseWheel: false,
+        pressedMouseMove: false,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      };
+      chartOpts.handleScale = {
+        mouseWheel: false,
+        pinch: true,
+        axisPressedMouseMove: false,
+      };
+      chartOpts.kineticScroll = { touch: true, mouse: false };
+    }
+    chartInstance = mod.createChart(canvasHost, chartOpts);
 
     // Batch 4.5 — wire crosshair handler for the OHLC floating card.
     // lightweight-charts returns an unsubscribe callback from v4; older
     // builds expect unsubscribeCrosshairMove(handler) instead. Capture
     // both shapes so destroyChart can clean up reliably.
-    if (chartInstance && typeof chartInstance.subscribeCrosshairMove === 'function') {
+    //
+    // Mobile (D5): crosshairMove is mouse-only on touch devices and would
+    // never fire anyway. We skip the subscription entirely so we don't
+    // accidentally drive the OHLC card from a synthetic crosshair event
+    // (e.g. a stylus). The mobile flow is tap → showOhlcCardForCandle and
+    // visibleTimeRangeChange → hideOhlcCard (wired below).
+    if (!isMobile && chartInstance && typeof chartInstance.subscribeCrosshairMove === 'function') {
       try {
         const ret = chartInstance.subscribeCrosshairMove(onCrosshairMove);
         if (typeof ret === 'function') {
@@ -815,6 +875,31 @@ export function mountChart(container, options = {}) {
         }
       } catch {
         crosshairUnsub = null;
+      }
+    }
+
+    // Mobile (D5): tap on canvas → toggle OHLC card. visibleTimeRangeChange
+    // (fires on pan / pinch-zoom / programmatic move) → hide. No auto-dismiss
+    // timer; user's next gesture dismisses.
+    if (isMobile && chartInstance && typeof chartInstance.timeScale === 'function') {
+      try {
+        const ts = chartInstance.timeScale();
+        if (ts && typeof ts.subscribeVisibleTimeRangeChange === 'function') {
+          const ret = ts.subscribeVisibleTimeRangeChange(hideOhlcCard);
+          if (typeof ret === 'function') {
+            visibleRangeUnsub = ret;
+          } else if (typeof ts.unsubscribeVisibleTimeRangeChange === 'function') {
+            visibleRangeUnsub = () => {
+              try {
+                ts.unsubscribeVisibleTimeRangeChange(hideOhlcCard);
+              } catch {
+                /* ignore */
+              }
+            };
+          }
+        }
+      } catch {
+        visibleRangeUnsub = null;
       }
     }
 
@@ -1050,6 +1135,66 @@ export function mountChart(container, options = {}) {
   unitGroup.addEventListener('click', onUnitClick);
   overlayGroup.addEventListener('click', onOverlayClick);
 
+  // ── Mobile-only handlers (D5) ───────────────────────────────────────────
+  // Single tap on the canvas → show the OHLC card for the candle under the
+  // tap point. Tapping again hides (toggle). The card is also hidden on any
+  // pan/zoom via the visibleTimeRangeChange subscription.
+  function onCanvasTap(e) {
+    if (!chartInstance || !state.candles.length) return;
+    // Toggle off when already visible — saves a second tap to dismiss when
+    // the user just wants to clear the card.
+    if (!ohlcCard.hidden) {
+      hideOhlcCard();
+      return;
+    }
+    const ts = typeof chartInstance.timeScale === 'function' ? chartInstance.timeScale() : null;
+    if (!ts || typeof ts.coordinateToTime !== 'function') return;
+    // happy-dom doesn't compute layout, so getBoundingClientRect returns
+    // zeros under test — fall back to clientX directly. Real browsers report
+    // a non-zero rect.
+    const rect = canvasHost.getBoundingClientRect();
+    const x = (e?.clientX ?? 0) - (rect?.left ?? 0);
+    let time;
+    try {
+      time = ts.coordinateToTime(x);
+    } catch {
+      return;
+    }
+    if (typeof time !== 'number' || !Number.isFinite(time)) return;
+    // coordinateToTime returns the exact bucket boundary when the cursor is
+    // between candles, but our candles[] is keyed on exact `time`. Try exact
+    // match first, then nearest-neighbour.
+    let candle = findCandleByTime(time);
+    if (!candle) {
+      // Nearest-candle fallback — useful when the tap lands between buckets.
+      let best = null;
+      let bestDelta = Infinity;
+      for (const c of state.candles) {
+        const d = Math.abs((c?.time ?? 0) - time);
+        if (d < bestDelta) {
+          best = c;
+          bestDelta = d;
+        }
+      }
+      candle = best;
+    }
+    showOhlcCardForCandle(candle);
+  }
+
+  function onMobileCtaClick() {
+    if (!state.token || !onTradeRequest) return;
+    try {
+      onTradeRequest(state.token);
+    } catch (err) {
+      console.error('mountChart: onTradeRequest threw', err);
+    }
+  }
+
+  if (isMobile) {
+    canvasHost.addEventListener('click', onCanvasTap);
+    if (mobileCta) mobileCta.addEventListener('click', onMobileCtaClick);
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────
   function setToken(token) {
     state.token = token || null;
@@ -1066,6 +1211,8 @@ export function mountChart(container, options = {}) {
     // Previous candles are about to be replaced — drop stale OHLC text so
     // the floating card doesn't flash old data before the next hover.
     hideOhlcCard();
+    // Mobile CTA visibility tracks whether a token is set.
+    if (mobileCta) mobileCta.hidden = !state.token;
     renderStats();
     loadChart();
   }
@@ -1181,6 +1328,10 @@ export function mountChart(container, options = {}) {
     typeGroup.removeEventListener('click', onTypeClick);
     unitGroup.removeEventListener('click', onUnitClick);
     overlayGroup.removeEventListener('click', onOverlayClick);
+    if (isMobile) {
+      canvasHost.removeEventListener('click', onCanvasTap);
+      if (mobileCta) mobileCta.removeEventListener('click', onMobileCtaClick);
+    }
     destroyChart();
     container.replaceChildren();
   }

@@ -427,6 +427,10 @@ async function bootstrapMobile(root) {
   // injected-only (which on mobile means "show no picker" — the click does
   // a no-op connectInjected that will throw "Provider not found"; we accept
   // that edge case because /config rarely fails in prod).
+  // Collect unsubscribe functions from every onAccountChange we register so
+  // `handle.destroy` can detach them. Without this, listeners persist on the
+  // wallet module's subscriber set and fire into a destroyed sidebar/chart.
+  const accountUnsubs = [];
   const walletArea = handle.header?.querySelector?.('[data-zone="wallet-area"]');
   let bannerContainer = null;
   if (walletArea instanceof HTMLElement) {
@@ -454,7 +458,7 @@ async function bootstrapMobile(root) {
         // reopen the stream here so premium `orders` channel attaches.
         onPaid: () => {},
       });
-      onAccountChange(createAccountChangeHandler({ accessBanner }));
+      accountUnsubs.push(onAccountChange(createAccountChangeHandler({ accessBanner })));
 
       // Silent re-hydrate for wagmi-injected sessions (MetaMask / Coinbase
       // Wallet in-app browsers). WC re-hydrate is intentionally NOT here —
@@ -466,9 +470,224 @@ async function bootstrapMobile(root) {
     }
   }
 
+  // ── Phase 3a Track C — sidebar + chart + SSE ────────────────────────────
+  //
+  // Minimum desktop bootstrap path replicated for the mobile shell. We mount
+  // sidebar into the Markets panel and chart into the Chart panel; tapping a
+  // token in the sidebar selects it and switches to the Chart tab. SSE feeds
+  // sidebar sparklines + chart price ticks identically to desktop.
+  //
+  // OUT OF SCOPE (Phase 3b): trade panel, wallet sub-router, orders,
+  // bottom-tabs trade history. The chart's "Trade this token" CTA navigates
+  // to the (currently empty) Trade tab for now.
+  //
+  // mountSidebar / mountChart / openStream are statically imported at the
+  // top of this file (desktop also uses them) — reusing the references here
+  // keeps Rollup from splitting them into a separate chunk that's loaded
+  // twice.
+  const { navigateTo, TABS } = await import('./mobile-router.js');
+
+  // Sparkline ring-buffer + position cache — same shape + thresholds as the
+  // desktop bootstrap (see comments around `SPARK_MAX` in bootstrap()).
+  const SPARK_MAX = 16;
+  const SPARK_RERENDER_MS = 5000;
+  /** @type {Map<string, number[]>} address (lc) → recent prices, oldest first. */
+  const priceSeries = new Map();
+  /** @type {Map<string, number>} address (lc) → balance (whole tokens). */
+  const positionByAddr = new Map();
+  function pushPrice(addrLc, price) {
+    if (typeof price !== 'number' || !Number.isFinite(price)) return;
+    let series = priceSeries.get(addrLc);
+    if (!series) {
+      series = [];
+      priceSeries.set(addrLc, series);
+    }
+    if (series.length > 0 && series[series.length - 1] === price) return;
+    series.push(price);
+    if (series.length > SPARK_MAX) series.shift();
+  }
+
+  // The mounted chart handle — populated once mountChart resolves. We declare
+  // it here so the closure-scoped `selectTokenMobile` can call setToken
+  // without TDZ issues; sidebar mount runs first and selectTokenMobile is
+  // only invoked on user tap (well after chart is wired).
+  let chartHandle = null;
+  let activeToken = null;
+  function selectTokenMobile(token) {
+    if (!token || typeof token.address !== 'string') return;
+    activeToken = token;
+    if (chartHandle && typeof chartHandle.setToken === 'function') {
+      chartHandle.setToken(token);
+    }
+    navigateTo(TABS.CHART);
+  }
+
+  let sidebarHandle = null;
+  let sparkRerender = null;
+  try {
+    sidebarHandle = mountSidebar(handle.panels.markets, {
+      onTokenSelect: selectTokenMobile,
+      getSparkline: (addr) => {
+        if (typeof addr !== 'string' || !addr) return null;
+        const series = priceSeries.get(addr.toLowerCase());
+        return series && series.length >= 2 ? series : null;
+      },
+      getPosition: (addr) => {
+        if (typeof addr !== 'string' || !addr) return null;
+        const bal = positionByAddr.get(addr.toLowerCase());
+        return typeof bal === 'number' && bal > 0 ? { balance: bal } : null;
+      },
+    });
+
+    // Trailing-edge throttle for sparkline-driven re-renders. Mirrors desktop.
+    sparkRerender = createSparkRerender(sidebarHandle, SPARK_RERENDER_MS);
+    const originalSidebarDestroy = sidebarHandle.destroy;
+    sidebarHandle.destroy = function patchedSidebarDestroy() {
+      sparkRerender.cleanup();
+      if (typeof originalSidebarDestroy === 'function') originalSidebarDestroy.call(sidebarHandle);
+    };
+
+    // Position-dots refresher — Wave 2B /portfolio source (multi-token).
+    const refreshPositions = createPositionsRefresher({
+      getAccount,
+      getPortfolio,
+      positionByAddr,
+      sidebar: sidebarHandle,
+    });
+    // Each wallet flip re-fetches positions. Independent of the SIWE/access
+    // listener already attached by bootstrapMobile above (intentional, same
+    // pattern as desktop).
+    accountUnsubs.push(
+      onAccountChange(() => {
+        refreshPositions();
+      }),
+    );
+    // Kick once on boot so a returning user (cookie still valid) sees dots
+    // immediately, not after the next wallet event.
+    refreshPositions();
+  } catch (err) {
+    console.error('bootstrapMobile: sidebar mount failed', err);
+  }
+
+  // Chart mount. Touch-mode createChart options are wired inside chart.js
+  // when `isMobile: true`. onTradeRequest navigates to the Trade tab; in
+  // Phase 3b a real trade panel will mount there.
+  try {
+    chartHandle = mountChart(handle.panels.chart, {
+      isMobile: true,
+      onTradeRequest: () => {
+        navigateTo(TABS.TRADE);
+      },
+    });
+    // If the user managed to tap a sidebar row while chartHandle was still
+    // resolving (race window is microscopic — both mounts are synchronous
+    // after their dynamic imports — but be defensive), replay the selection.
+    if (activeToken && typeof chartHandle.setToken === 'function') {
+      chartHandle.setToken(activeToken);
+    }
+    // Keep chart's `ownAddress` in sync with the connected wallet. Without
+    // this, the My/Others marker classification and Avg-buy price line never
+    // get an owner address on mobile — silently disabling those overlays.
+    // Mirrors the desktop bootstrap wire.
+    accountUnsubs.push(
+      onAccountChange((acc) => {
+        if (chartHandle && typeof chartHandle.setOwnAddress === 'function') {
+          chartHandle.setOwnAddress(acc?.address ?? null);
+        }
+      }),
+    );
+    // Seed the initial value in case the wallet was already connected by
+    // the time this listener registered (auto-reconnect path).
+    if (chartHandle && typeof chartHandle.setOwnAddress === 'function') {
+      const acc = getAccount();
+      chartHandle.setOwnAddress(acc?.address ?? null);
+    }
+  } catch (err) {
+    console.error('bootstrapMobile: chart mount failed', err);
+  }
+
+  // SSE stream — same handler set as desktop, minus the bottom-tabs / orders
+  // forwarders (no bottom tabs on mobile; orders panel arrives in Phase 3b).
+  // Reuses the existing `streamHandle` channel logic (single connection, the
+  // worker dedupes price ticks across tokens).
+  let streamHandle = null;
+  function openOrReopenStream() {
+    if (typeof globalThis.EventSource !== 'function') return;
+    streamHandle = openStream({
+      onPrices: (payload) => {
+        let touched = false;
+        for (const t of payload?.tokens ?? []) {
+          if (t?.address && t.pricePitch != null) {
+            const price = Number(t.pricePitch);
+            const priceCountry = t.priceCountry != null ? Number(t.priceCountry) : undefined;
+            if (chartHandle && typeof chartHandle.applyPrice === 'function') {
+              chartHandle.applyPrice(t.address, { pricePitch: price, priceCountry });
+            }
+            if (Number.isFinite(price) && price > 0) {
+              pushPrice(t.address.toLowerCase(), price);
+              touched = true;
+            }
+          }
+        }
+        if (touched && sparkRerender) sparkRerender.schedule();
+      },
+      onEvents: (payload) => {
+        const trades = payload?.newTrades ?? [];
+        if (trades.length === 0 || !chartHandle) return;
+        for (const trade of trades) chartHandle.applyTrade(trade);
+      },
+      onReconnect: () => {
+        // Worker may have emitted `event: config` while we were disconnected;
+        // re-fetch and merge. Dedup happens inside config-store.
+        getConfig()
+          .then((cfg) => {
+            if (!cfg) return;
+            mergeConfig({
+              accessPriceWei: cfg.accessPriceWei ?? null,
+              buyerDiscountBps: cfg.buyerDiscountBps ?? null,
+              referralBps: cfg.referralBps ?? null,
+            });
+          })
+          .catch(() => {});
+      },
+    });
+  }
+  openOrReopenStream();
+
   const originalDestroy = handle.destroy;
   handle.destroy = function () {
     mqCleanup();
+    for (const unsub of accountUnsubs) {
+      if (typeof unsub === 'function') {
+        try {
+          unsub();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    accountUnsubs.length = 0;
+    if (streamHandle && typeof streamHandle.close === 'function') {
+      try {
+        streamHandle.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (sidebarHandle && typeof sidebarHandle.destroy === 'function') {
+      try {
+        sidebarHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (chartHandle && typeof chartHandle.destroy === 'function') {
+      try {
+        chartHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
     if (bannerContainer && bannerContainer.parentNode) {
       bannerContainer.parentNode.removeChild(bannerContainer);
     }
