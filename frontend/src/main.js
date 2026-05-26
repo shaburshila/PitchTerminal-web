@@ -1,3 +1,8 @@
+// Sentry init runs first so uncaught errors thrown during module evaluation
+// of the heavier imports below still get captured.
+import { initSentry } from './sentry.js';
+initSentry();
+
 // Phase 1.5 batch 1: tokens.css loads before styles.css so the redesign
 // CSS variables (--bg-0/1/2/3, --line, --up, --down, --font-ui, --font-mono…)
 // are defined as the existing component styles cascade in. Subsequent

@@ -35,6 +35,7 @@ from app.routes import stream as stream_routes
 from app.routes import tokens as tokens_routes
 from shared.db import init_pool
 from shared.log import configure as configure_logger
+from shared.sentry import init as init_sentry
 
 
 def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
@@ -46,6 +47,9 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
     """
 
     configure_logger()
+    # Sentry must be initialised before the Flask app is constructed so the
+    # FlaskIntegration can hook request/response signals at app creation time.
+    init_sentry("api")
     app = Flask(__name__)
 
     # JSON config (compact + Unicode-safe).

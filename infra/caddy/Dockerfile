@@ -15,6 +15,16 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 # Остальной фронт.
 COPY frontend/ ./
+# Sentry DSN — build-time, читается Vite при `pnpm build` и инлайнится в
+# bundle. .env из проекта в build-контекст не попадает (.dockerignore),
+# поэтому пробрасываем через ARG. Пустое значение → Sentry init становится
+# no-op (см. frontend/src/sentry.js).
+ARG VITE_SENTRY_DSN=
+ARG VITE_SENTRY_ENVIRONMENT=production
+ARG VITE_APP_VERSION=
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+ENV VITE_SENTRY_ENVIRONMENT=$VITE_SENTRY_ENVIRONMENT
+ENV VITE_APP_VERSION=$VITE_APP_VERSION
 RUN pnpm build
 
 # ---------- caddy builder ----------

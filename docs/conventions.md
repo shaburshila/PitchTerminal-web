@@ -353,6 +353,35 @@ processor, обходящий event-dict и применяющий redaction п�
 Тест: специальный `tests/unit/test_log_redaction.py` логирует фиксированные
 структуры → проверяет, что чувствительные значения не появились в выводе.
 
+### 8.1 Error tracking (Sentry)
+
+Опционально; включается заполнением DSN в `.env`. Без DSN init становится
+no-op — приложение работает как обычно, ничего не отправляется наружу.
+
+**Включить на проде:**
+1. Регистрация на sentry.io (free tier: 5k errors/мес).
+2. Создать два проекта: `pitchterminal-backend` (python-flask) и
+   `pitchterminal-web` (browser-javascript).
+3. Скопировать DSN в `infra/.env`:
+   ```
+   SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<backend-project-id>
+   VITE_SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<frontend-project-id>
+   SENTRY_ENVIRONMENT=production
+   ```
+4. Backend подхватит на старте:
+   `docker compose --env-file ../.env -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate api worker`.
+5. Frontend требует **rebuild** (DSN инлайнится в bundle на стадии `pnpm build`):
+   `docker compose --env-file ../.env -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate caddy`.
+
+**Что ловится:**
+- Backend (Flask + worker): необработанные исключения, через `FlaskIntegration`
+  + scrub-hook в `shared/sentry.py` (применяет ту же redaction-политику,
+  что и structlog).
+- Frontend: uncaught errors, unhandled promise rejections; user-rejected
+  wallet signatures фильтруются как not-a-bug.
+- APM/tracing/replays **выключены** (`tracesSampleRate=0`) — чтобы умещаться
+  в free tier и не плодить шум.
+
 ## 9. Конфигурация и env vars
 
 Полный список `.env` (на VPS, никогда в git):
@@ -387,6 +416,9 @@ processor, обходящий event-dict и применяющий redaction п�
 | `REORG_LAG_BLOCKS` | worker | default 5 (Base finality быстрая) |
 | `DOMAIN` | caddy (prod) | Домен для site-блока + Let's Encrypt (`infra/docker-compose.prod.yml`) |
 | `ACME_EMAIL` | caddy (prod) | Email для Let's Encrypt expiry-нотификаций |
+| `SENTRY_DSN` | api, worker | Опциональный Sentry DSN; пусто → no-op. См. §8.1. |
+| `VITE_SENTRY_DSN` | caddy (build-arg) | Опциональный Sentry DSN для frontend bundle; инлайнится при `pnpm build`. См. §8.1. |
+| `SENTRY_ENVIRONMENT` | api, worker, caddy | Тег окружения для Sentry events (для caddy маппится в build-arg `VITE_SENTRY_ENVIRONMENT` через compose); default `production`. |
 
 **Hardcoded константы** (не env — меняются только при ре-деплое pitchwc):
 - `HOOK_DEPLOY_BLOCK = 46167000` в `backend/shared/config.py` — стартовый блок

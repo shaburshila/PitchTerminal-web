@@ -94,6 +94,12 @@ services:
     build:
       context: ..
       dockerfile: infra/caddy/Dockerfile
+      args:
+        # Sentry DSN инлайнится в SPA-bundle на стадии `pnpm build` внутри
+        # frontend-builder. Пустое значение → Sentry no-op (см. sentry.js).
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+        VITE_APP_VERSION: ${APP_VERSION:-dev}
     image: pt-caddy:latest
     container_name: pt-caddy
     depends_on:

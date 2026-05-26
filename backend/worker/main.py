@@ -33,6 +33,7 @@ import time
 from types import FrameType
 
 from shared.log import get_logger
+from shared.sentry import init as init_sentry
 from worker import (
     access_bootstrap,
     access_event_loop,
@@ -77,6 +78,7 @@ def _install_signal_handlers() -> None:
 def run() -> None:
     """Main worker entry point — returns on SIGTERM/SIGINT, else loops forever."""
 
+    init_sentry("worker")
     log.info("worker.start")
     _install_signal_handlers()
 
