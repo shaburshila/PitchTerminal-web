@@ -65,6 +65,14 @@ function buildHeader() {
   );
   left.appendChild(logo);
 
+  // Center: mount point for the version-check "update available" banner.
+  // Empty by default — `version-check.js` populates it on backend↔bundle
+  // SHA mismatch, hiding via CSS `:empty` selector when in sync.
+  const center = el('div', {
+    className: 'pt-header__center',
+    dataset: { testId: 'header-center' },
+  });
+
   // Right side cluster — [Profile] [Referral] [wallet-area]. The cluster
   // itself is a flex container; the wallet-area is the placeholder that
   // `mountWalletChip` populates (kept on the same `[data-test-id="wallet-area"]`
@@ -147,6 +155,7 @@ function buildHeader() {
   right.appendChild(walletArea);
 
   header.appendChild(left);
+  header.appendChild(center);
   header.appendChild(right);
   return header;
 }

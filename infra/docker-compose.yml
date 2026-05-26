@@ -49,6 +49,10 @@ services:
     environment:
       # Переопределяем хост — внутри docker network postgres доступен по DNS-имени.
       DATABASE_URL: ${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}
+      # Git SHA деплоя — отдаётся в /api/v1/config.version, фронт сравнивает
+      # со своим VITE_APP_VERSION (build-arg ниже) и при mismatch показывает
+      # update-banner. Дефолт "dev" — для локальной разработки.
+      APP_VERSION: ${APP_VERSION:-dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,6 +79,7 @@ services:
         required: false
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}
+      APP_VERSION: ${APP_VERSION:-dev}
     depends_on:
       postgres:
         condition: service_healthy

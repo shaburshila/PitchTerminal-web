@@ -91,6 +91,14 @@ jobs:
             git fetch origin main
             git reset --hard "${DEPLOY_SHA}"
 
+            # APP_VERSION — short git SHA. Прокидываем в compose как для
+            # backend (env api/worker → /config?.version), так и для frontend
+            # (build-arg → инлайнится в SPA bundle как VITE_APP_VERSION).
+            # Совпадение этих двух значений = единая версия деплоя; mismatch
+            # детектится фронтом и показывает "Update available" баннер.
+            export APP_VERSION="$(git rev-parse --short HEAD)"
+            echo "APP_VERSION: ${APP_VERSION}"
+
             cd infra
 
             # Образы Backend/worker/caddy собираются локально на VPS
@@ -125,6 +133,15 @@ jobs:
               cd /home/deploy/pitchterminal
               bash scripts/rollback.sh "${PREVIOUS_SHA}"
               exit 1
+            fi
+
+            # Sanity check: /config.version должен совпадать с APP_VERSION,
+            # иначе фронт не сможет показывать update-banner и юзеры будут
+            # ловить stale-bundle ошибки тихо. Не блокирующий fail —
+            # деплой считается успешным, но мы шумим в логах workflow.
+            DEPLOYED_VERSION="$(docker exec pt-api curl -fsS --max-time 5 http://localhost:8000/api/v1/config | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' || echo "")"
+            if [ "${DEPLOYED_VERSION}" != "${APP_VERSION}" ]; then
+              echo "::warning::/config.version='${DEPLOYED_VERSION}' != APP_VERSION='${APP_VERSION}' — version-check banner will not function correctly"
             fi
         env:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}

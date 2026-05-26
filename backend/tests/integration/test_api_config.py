@@ -27,6 +27,7 @@ class TestConfigShape:
         body = resp.get_json()
         # Required top-level keys per api-spec §3.2.
         for key in (
+            "version",
             "chainId",
             "chainName",
             "contracts",
@@ -41,6 +42,8 @@ class TestConfigShape:
             assert key in body, f"missing key: {key}"
         assert body["chainId"] == 8453
         assert body["chainName"] == "Base"
+        # `version` is git SHA (production) or "dev" (local) — string either way.
+        assert isinstance(body["version"], str) and body["version"]
 
     def test_defaults_when_no_snapshot(self, app) -> None:
         # The integration conftest truncates `tokens` (not app_state), so

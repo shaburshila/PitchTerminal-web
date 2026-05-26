@@ -14,6 +14,7 @@ Per docs/api-spec.md §3.2:
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -63,6 +64,7 @@ def _build_payload() -> dict[str, Any]:
 
     access = _read_access_snapshot()
     return {
+        "version": os.environ.get("APP_VERSION", "dev"),
         "chainId": 8453,
         "chainName": "Base",
         "contracts": {

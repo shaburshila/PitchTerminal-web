@@ -1,0 +1,85 @@
+/* Version-check banner — mounts in the header's empty center slot when the
+ * backend version (returned from /api/v1/config) drifts from the frontend
+ * bundle's baked-in VITE_APP_VERSION. Modelled on the access-banner pill so
+ * users recognise it as a "tap to act" affordance, but uses the --warn
+ * (amber) ramp instead of --accent (green) so it does not get confused with
+ * the "buy premium" CTA.
+ *
+ * When the slot has no content the parent header's `grid-template-columns:
+ * 1fr auto 1fr` keeps the center `auto` column at 0px width, so the empty
+ * slot does not push left/right siblings around.
+ */
+
+.pt-version-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px 5px 14px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--warn, #e0a93a);
+  background: var(--warn-dim, rgba(224, 169, 58, 0.12));
+  border: 1px solid var(--warn, #e0a93a);
+  border-radius: 999px;
+  line-height: 1;
+  /* Subtle attention pulse — slow, never strobing. */
+  animation: pt-version-check-pulse 2.8s ease-in-out infinite;
+}
+
+@keyframes pt-version-check-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 169, 58, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(224, 169, 58, 0.18);
+  }
+}
+
+.pt-version-check__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn, #e0a93a);
+  flex: 0 0 auto;
+}
+
+.pt-version-check__text {
+  white-space: nowrap;
+}
+
+.pt-version-check__btn {
+  appearance: none;
+  border: none;
+  background: var(--warn, #e0a93a);
+  color: #1a1305;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 120ms ease;
+}
+
+.pt-version-check__btn:hover {
+  background: #f0c057;
+}
+
+.pt-version-check__btn:focus-visible {
+  outline: 2px solid var(--warn, #e0a93a);
+  outline-offset: 2px;
+}
+
+/* Mobile sub-1024 viewports render the mobile-stub instead, so we don't
+ * need a tablet/mobile variant. If header crowding becomes a problem in the
+ * 1024-1280 range, hide the text and keep just the dot + button.
+ */
+@media (max-width: 1280px) {
+  .pt-version-check__text {
+    display: none;
+  }
+}

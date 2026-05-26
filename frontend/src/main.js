@@ -37,6 +37,9 @@ import './styles/onboarding.css';
 // fallback, see mobile-stub.js for rationale). Loaded eagerly because
 // bootstrap() decides whether to mount the stub vs the full app synchronously.
 import './styles/mobile-stub.css';
+// Version-check banner — shown in header center on backend↔bundle SHA
+// mismatch (see version-check.js for the trigger logic + threat model).
+import './styles/version-check.css';
 import { isMobileViewport, mountMobileStub } from './mobile-stub.js';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
@@ -59,6 +62,7 @@ import { mountSoftLock } from './soft-lock.js';
 import { showToast } from './ui/toast.js';
 import { mountHeaderActions } from './components/header-actions.js';
 import { showOnboardingModal, maybeShowOnboarding } from './onboarding.js';
+import { mountVersionCheck } from './version-check.js';
 
 /**
  * Convert a backend wei decimal-string into a whole-token Number.
@@ -407,6 +411,14 @@ function bootstrap() {
     /* already swallowed inside, but guard against future refactors */
   });
   const layout = mountLayout(root);
+
+  // Version-check banner: mounts into the header's center slot on
+  // backend↔bundle SHA mismatch. No-op when running a "dev" bundle (local
+  // builds without a real APP_VERSION).
+  const headerCenter = layout.header.querySelector('[data-test-id="header-center"]');
+  if (headerCenter) {
+    mountVersionCheck(headerCenter, { getConfig });
+  }
 
   const chartZone = document.createElement('div');
   chartZone.className = 'pt-center__chart';
