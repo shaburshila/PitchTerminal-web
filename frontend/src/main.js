@@ -404,6 +404,10 @@ async function bootstrapMobile(root) {
   // effects (SIWE-modal popup on 401, premium-gating broadcast via
   // access-store) still run.
   const { mountMobileLayout } = await import('./mobile-layout.js');
+  // Pull the router exports up here so the wallet-chip's `onViewProfile`
+  // callback (registered below) closes over an already-initialised binding,
+  // not a temporal-dead-zone reference resolved later in this function.
+  const { navigateTo, TABS } = await import('./mobile-router.js');
   const handle = mountMobileLayout(root);
 
   // Rotate-past-breakpoint reload (B4 decision): if the user rotates a
@@ -443,22 +447,47 @@ async function bootstrapMobile(root) {
           referralBps: cfg.referralBps ?? null,
         });
       }
-      mountWalletChip(walletArea, { wcProjectId });
+      // `autoReconnect: false` — bootstrapMobile owns the single reconnect
+      // attempt below. The chip's own auto-reconnect would race wagmi's
+      // `reconnect()` and could clobber the wagmi-state watcher mid-flight,
+      // leaving the chip stuck on a stale "disconnected" view for users with
+      // a prior session.
+      // `onViewProfile` — the chip's dropdown "Profile" item navigates to
+      // the Wallet tab's Profile sub-page (the desktop activates the Profile
+      // mode; on mobile that lives in `#/wallet/profile`).
+      mountWalletChip(walletArea, {
+        wcProjectId,
+        autoReconnect: false,
+        onViewProfile: () => navigateTo(TABS.WALLET, 'profile'),
+      });
 
       // Phase 3b-2: visible access banner slot between header and panels.
       // The banner DOM collapses when empty (anonymous + premium users see
       // nothing); only free signed-in users get the Pay CTA strip.
       const accessBanner = mountAccessBanner(handle.banner, {
-        // No SSE on mobile yet; once Track C wires `openStream` we'll
-        // reopen the stream here so premium `orders` channel attaches.
-        onPaid: () => {},
+        // After a successful pay, drop and re-open the SSE stream so the
+        // newly-elevated session picks up the premium `orders` channel.
+        // The desktop bootstrap has the same pattern (`reopenStream`).
+        // Without this, a paid mobile user wouldn't receive live order
+        // events until a hard reload.
+        onPaid: () => {
+          if (streamHandle && typeof streamHandle.close === 'function') {
+            try {
+              streamHandle.close();
+            } catch {
+              /* idempotent */
+            }
+          }
+          openOrReopenStream();
+        },
       });
       accountUnsubs.push(onAccountChange(createAccountChangeHandler({ accessBanner })));
 
       // Silent re-hydrate for wagmi-injected sessions (MetaMask / Coinbase
       // Wallet in-app browsers). WC re-hydrate is intentionally NOT here —
       // mobile WC sessions require a deep-link re-handshake, which the user
-      // initiates by tapping Connect.
+      // initiates by tapping Connect. Single call site — wallet-chip's own
+      // auto-reconnect is disabled via the option above.
       tryAutoReconnect().catch(() => {});
     } catch (err) {
       console.error('bootstrapMobile: wallet/auth bootstrap failed', err);
@@ -479,8 +508,8 @@ async function bootstrapMobile(root) {
   // mountSidebar / mountChart / openStream are statically imported at the
   // top of this file (desktop also uses them) — reusing the references here
   // keeps Rollup from splitting them into a separate chunk that's loaded
-  // twice.
-  const { navigateTo, TABS } = await import('./mobile-router.js');
+  // twice. (`navigateTo` / `TABS` are imported earlier in this function so
+  // the wallet-chip's `onViewProfile` callback can close over them safely.)
 
   // Sparkline ring-buffer + position cache — same shape + thresholds as the
   // desktop bootstrap (see comments around `SPARK_MAX` in bootstrap()).
