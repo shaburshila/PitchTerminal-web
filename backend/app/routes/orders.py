@@ -465,8 +465,7 @@ def create_order() -> Any:
                 title="displayTargetPrice does not match signed targetPrice",
                 status=400,
                 detail=(
-                    "displayTargetPrice must equal MID(targetPrice, side) within "
-                    "0.1% tolerance"
+                    "displayTargetPrice must equal MID(targetPrice, side) within " "0.1% tolerance"
                 ),
             )
 

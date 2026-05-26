@@ -117,8 +117,7 @@ def make_nonce(address: str) -> str:
     for _ in range(3):
         nonce = _generate_token(16)
         rows = execute(
-            "INSERT INTO auth_nonces (nonce, address) VALUES (%s, %s) "
-            "ON CONFLICT DO NOTHING",
+            "INSERT INTO auth_nonces (nonce, address) VALUES (%s, %s) " "ON CONFLICT DO NOTHING",
             (nonce, address),
         )
         if rows:

@@ -65,8 +65,7 @@ def test_nonce_persisted_with_lowercased_address(app) -> None:
 def test_nonce_is_unique_per_call(app) -> None:
     client = app.test_client()
     seen = {
-        client.post("/api/v1/auth/nonce", json={"address": _VALID_ADDR})
-        .get_json()["nonce"]
+        client.post("/api/v1/auth/nonce", json={"address": _VALID_ADDR}).get_json()["nonce"]
         for _ in range(5)
     }
     assert len(seen) == 5
@@ -98,7 +97,5 @@ def test_rate_limit_enforced_at_30_per_min() -> None:
     client = app.test_client()
     last_status = None
     for _ in range(35):
-        last_status = client.post(
-            "/api/v1/auth/nonce", json={"address": _VALID_ADDR}
-        ).status_code
+        last_status = client.post("/api/v1/auth/nonce", json={"address": _VALID_ADDR}).status_code
     assert last_status == 429

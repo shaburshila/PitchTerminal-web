@@ -31,7 +31,9 @@ _JWT_RE = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
 
 def _scrub(value: Any) -> Any:
     if isinstance(value, dict):
-        return {k: ("<redacted>" if _SENSITIVE_KEY.search(k) else _scrub(v)) for k, v in value.items()}
+        return {
+            k: ("<redacted>" if _SENSITIVE_KEY.search(k) else _scrub(v)) for k, v in value.items()
+        }
     if isinstance(value, list):
         return [_scrub(item) for item in value]
     if isinstance(value, str):

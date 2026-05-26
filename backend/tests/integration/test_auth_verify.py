@@ -51,8 +51,7 @@ def _seed_stale_nonce(nonce: str, address: str, age_minutes: int = 10) -> None:
         conn.cursor() as cur,
     ):
         cur.execute(
-            "INSERT INTO auth_nonces (nonce, address, created_at) "
-            "VALUES (%s, %s, now() - %s)",
+            "INSERT INTO auth_nonces (nonce, address, created_at) " "VALUES (%s, %s, now() - %s)",
             (nonce, address.lower(), timedelta(minutes=age_minutes)),
         )
         conn.commit()
@@ -228,9 +227,7 @@ def test_nonce_bound_to_address_at_issue_time(app) -> None:
     msg = _build_siwe(address=victim.address, nonce=nonce)
     sig = _sign(msg, victim.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 401
     assert _problem_body(resp)["code"] == "auth.siwe.invalid_nonce"
 
@@ -252,8 +249,6 @@ def test_nonce_redeemable_by_originally_declared_address(app) -> None:
     msg = _build_siwe(address=acct.address, nonce=nonce)
     sig = _sign(msg, acct.key.hex())
 
-    resp = app.test_client().post(
-        "/api/v1/auth/verify", json={"message": msg, "signature": sig}
-    )
+    resp = app.test_client().post("/api/v1/auth/verify", json={"message": msg, "signature": sig})
     assert resp.status_code == 200
     assert resp.get_json()["address"] == acct.address.lower()
