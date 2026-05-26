@@ -53,6 +53,10 @@ services:
       # со своим VITE_APP_VERSION (build-arg ниже) и при mismatch показывает
       # update-banner. Дефолт "dev" — для локальной разработки.
       APP_VERSION: ${APP_VERSION:-dev}
+      # entrypoint.sh: api единственный запускает `alembic upgrade head`,
+      # worker ждёт пока миграция дойдёт до head. См. scripts/entrypoint.sh
+      # для контракта и incident-rationale (54b1744 race).
+      ROLE: api
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,7 +66,10 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 15s
+      # Поднято с 15s до 60s: миграции могут занять время на cold-start,
+      # plus daddy-driven `up -d --remove-orphans` failed when api wasn't
+      # healthy in time. 60s даёт запас на длинные ALTER TABLE / index builds.
+      start_period: 60s
     restart: unless-stopped
 
   # ── Background worker (price/event poller, limit-order executor) ────────
@@ -80,6 +87,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://pt:pt@postgres:5432/pt}
       APP_VERSION: ${APP_VERSION:-dev}
+      # Worker не запускает `alembic upgrade head` — ждёт пока api закончит.
+      # См. scripts/entrypoint.sh.
+      ROLE: worker
     depends_on:
       postgres:
         condition: service_healthy

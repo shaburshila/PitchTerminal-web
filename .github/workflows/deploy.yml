@@ -114,22 +114,33 @@ jobs:
             docker compose --env-file ../.env \
               -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Cold-start пауза: миграции (backend ENTRYPOINT — scripts/
-            # entrypoint.sh — вызывает alembic upgrade head перед api/worker
-            # стартом; идемпотентно, Postgres сериализует параллельные
-            # попытки через alembic_version row lock), healthcheck окно
-            # (start_period: 15s), Caddy ACME renewal.
-            echo "Waiting 30s for cold-start..."
-            sleep 30
+            # Cold-start пауза: миграции (api контейнер запускает alembic;
+            # worker ждёт пока схема дойдёт до head — см. scripts/entrypoint.sh),
+            # healthcheck окно (start_period: 60s), Caddy ACME renewal.
+            # 60s = больше с запасом чем start_period, чтобы health-check
+            # уже успел дать первый зелёный сигнал до того как мы делаем
+            # docker exec curl ниже.
+            echo "Waiting 60s for cold-start..."
+            sleep 60
 
             # Health check изнутри VPS — bypass'ит Caddy/TLS, проверяем
-            # api healthcheck endpoint. Caddy сам прокинет наружу при success.
-            # Используем docker exec — гарантирует, что мы смотрим именно
-            # на наш свежий контейнер.
-            if docker exec pt-api curl -fsS --max-time 5 http://localhost:8000/api/v1/health > /dev/null; then
-              echo "Health check passed."
-            else
-              echo "Health check FAILED — rolling back to ${PREVIOUS_SHA}"
+            # api healthcheck endpoint. Каждая попытка — `docker exec curl` к
+            # api контейнеру (гарантирует что мы смотрим на свежий контейнер).
+            # Ретраи нужны потому что 60s sleep выше = граница start_period;
+            # медленная миграция или cold-start могут продлить становление
+            # healthy ещё на 30-40s сверх. 5 × 15s = 75s дополнительного запаса.
+            HEALTH_OK=0
+            for attempt in 1 2 3 4 5; do
+              if docker exec pt-api curl -fsS --max-time 5 http://localhost:8000/api/v1/health > /dev/null 2>&1; then
+                echo "Health check passed (attempt ${attempt})."
+                HEALTH_OK=1
+                break
+              fi
+              echo "Health check attempt ${attempt} failed, retrying in 15s..."
+              sleep 15
+            done
+            if [ "$HEALTH_OK" -ne 1 ]; then
+              echo "Health check FAILED after 5 attempts — rolling back to ${PREVIOUS_SHA}"
               cd /home/deploy/pitchterminal
               bash scripts/rollback.sh "${PREVIOUS_SHA}"
               exit 1

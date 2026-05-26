@@ -59,9 +59,10 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-# ENTRYPOINT runs `alembic upgrade head` then execs CMD. Both api and worker
-# go through this — migrations are idempotent and Postgres serializes parallel
-# attempts via the alembic_version row lock. See scripts/entrypoint.sh.
+# ENTRYPOINT gates migration on ROLE env: api runs `alembic upgrade head`,
+# worker waits until current==head before exec'ing its CMD. ROLE unset →
+# legacy single-process behaviour (runs migration). See scripts/entrypoint.sh
+# for the full rationale (54b1744 race incident).
 #
 # Default CMD is API via gunicorn (gevent worker — psycogreen.gevent
 # monkey-patches psycopg in shared/db.py so DB calls are cooperatively
