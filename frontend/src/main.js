@@ -512,12 +512,22 @@ async function bootstrapMobile(root) {
   // without TDZ issues; sidebar mount runs first and selectTokenMobile is
   // only invoked on user tap (well after chart is wired).
   let chartHandle = null;
+  let tradeTabsHandle = null;
+  let walletPanelHandle = null;
   let activeToken = null;
+  // Country + player token registry — populated by a single getTokens()
+  // fetch below. Used by the trade panel's "Buy country" CTA: panel hands
+  // us a lowercase address; we look up the full registry row.
+  /** @type {Map<string, object>} */
+  const countryTokensByAddr = new Map();
   function selectTokenMobile(token) {
     if (!token || typeof token.address !== 'string') return;
     activeToken = token;
     if (chartHandle && typeof chartHandle.setToken === 'function') {
       chartHandle.setToken(token);
+    }
+    if (tradeTabsHandle && typeof tradeTabsHandle.setToken === 'function') {
+      tradeTabsHandle.setToken(token);
     }
     navigateTo(TABS.CHART);
   }
@@ -606,6 +616,94 @@ async function bootstrapMobile(root) {
     console.error('bootstrapMobile: chart mount failed', err);
   }
 
+  // ── Phase 3b-1 Track C — trade tabs + wallet sub-router ─────────────────
+  //
+  // Trade panel + Orders sub-tab live inside the Trade bottom-nav tab (D2).
+  // Wallet bottom-nav tab hosts a chip-row sub-router for
+  // Profile/Orders/Referral/MyWallet (D3). Q2 accepts the two Orders-tab
+  // instances (one in Trade, one in Wallet) both consuming SSE pushes.
+  //
+  // Country-token registry is populated for the trade panel's "Buy country"
+  // CTA (F1.3). Player-token registry is intentionally NOT built here —
+  // mobile doesn't yet surface a my-wallet row-click path that needs it.
+  const { mountMobileTradeTabs } = await import('./mobile-trade-tabs.js');
+  const { mountMobileWalletPanel } = await import('./mobile-wallet-panel.js');
+
+  getTokens()
+    .then((data) => {
+      const countries = Array.isArray(data?.countries) ? data.countries : [];
+      for (const c of countries) {
+        if (c && typeof c.address === 'string' && c.address) {
+          countryTokensByAddr.set(c.address.toLowerCase(), c);
+        }
+      }
+    })
+    .catch(() => {
+      /* Silent — CTA degrades to no-op if registry never loads. */
+    });
+
+  try {
+    tradeTabsHandle = mountMobileTradeTabs(handle.panels.trade, {
+      navigateToMarkets: () => navigateTo(TABS.MARKETS),
+      tradePanelOpts: {
+        onCountrySwitch: (addr) => {
+          const row = countryTokensByAddr.get((addr || '').toLowerCase());
+          if (!row) {
+            try {
+              showToast('Country token not found. Please reload the page.', { kind: 'error' });
+            } catch {
+              /* toast may not be ready */
+            }
+            return;
+          }
+          selectTokenMobile(row);
+        },
+      },
+      ordersTabOpts: {
+        // No host-driven count badge on mobile (Q2 — two instances each
+        // emitting would race). Mobile shows the Orders sub-tab label only.
+      },
+    });
+    // Replay any token selected before mount completed (microscopic race —
+    // sidebar mount runs synchronously above, but be defensive).
+    if (activeToken && typeof tradeTabsHandle.setToken === 'function') {
+      tradeTabsHandle.setToken(activeToken);
+    }
+  } catch (err) {
+    console.error('bootstrapMobile: trade tabs mount failed', err);
+  }
+
+  try {
+    walletPanelHandle = mountMobileWalletPanel(handle.panels.wallet, {
+      profileOpts: {
+        onTokenSelect: (token) => {
+          // Profile row-click → switch to Chart with that token.
+          if (!token?.address) return;
+          // Use the registry if we have it; otherwise pass through the
+          // partial row (chart.setToken tolerates address-only meta).
+          const row = countryTokensByAddr.get(token.address.toLowerCase()) || token;
+          selectTokenMobile(row);
+        },
+      },
+      ordersTabOpts: {
+        // Token-scoped via setActiveToken below; without it the Wallet/Orders
+        // sub-page shows "Select a token" placeholder until the user picks
+        // one from Markets. Acceptable for batch 3b-1.
+      },
+      referralOpts: {},
+      myWalletOpts: {
+        onTokenSelect: (item) => {
+          if (!item?.token) return;
+          const row = countryTokensByAddr.get(item.token.toLowerCase());
+          if (!row) return;
+          selectTokenMobile(row);
+        },
+      },
+    });
+  } catch (err) {
+    console.error('bootstrapMobile: wallet panel mount failed', err);
+  }
+
   // SSE stream — same handler set as desktop, minus the bottom-tabs / orders
   // forwarders (no bottom tabs on mobile; orders panel arrives in Phase 3b).
   // Reuses the existing `streamHandle` channel logic (single connection, the
@@ -635,6 +733,17 @@ async function bootstrapMobile(root) {
         const trades = payload?.newTrades ?? [];
         if (trades.length === 0 || !chartHandle) return;
         for (const trade of trades) chartHandle.applyTrade(trade);
+      },
+      // Premium `orders` channel — fan out to BOTH Orders-tab instances on
+      // mobile (Q2). Each instance filters by its currently-active token so
+      // there's no UI duplication.
+      onOrders: (payload) => {
+        if (tradeTabsHandle && typeof tradeTabsHandle.pushOrderUpdate === 'function') {
+          tradeTabsHandle.pushOrderUpdate(payload);
+        }
+        if (walletPanelHandle && typeof walletPanelHandle.pushOrderUpdate === 'function') {
+          walletPanelHandle.pushOrderUpdate(payload);
+        }
       },
       onReconnect: () => {
         // Worker may have emitted `event: config` while we were disconnected;
@@ -684,6 +793,20 @@ async function bootstrapMobile(root) {
     if (chartHandle && typeof chartHandle.destroy === 'function') {
       try {
         chartHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (tradeTabsHandle && typeof tradeTabsHandle.destroy === 'function') {
+      try {
+        tradeTabsHandle.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (walletPanelHandle && typeof walletPanelHandle.destroy === 'function') {
+      try {
+        walletPanelHandle.destroy();
       } catch {
         /* ignore */
       }
