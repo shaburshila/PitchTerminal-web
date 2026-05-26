@@ -795,6 +795,16 @@ async function bootstrapMobile(root) {
   }
   openOrReopenStream();
 
+  // First-visit onboarding modal — same gate as desktop (`pt:onboarded:v1`
+  // localStorage key). On mobile the modal CSS makes it full-screen (Phase
+  // 3b-2 mobile.css). Without this wire, mobile users never see the Welcome
+  // / Free vs Pro explainer.
+  try {
+    maybeShowOnboarding();
+  } catch (err) {
+    console.error('bootstrapMobile: maybeShowOnboarding failed', err);
+  }
+
   const originalDestroy = handle.destroy;
   handle.destroy = function () {
     mqCleanup();
