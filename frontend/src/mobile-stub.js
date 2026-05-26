@@ -28,25 +28,39 @@
 export const MOBILE_BREAKPOINT_PX = 1024;
 
 /**
- * Returns true when the current viewport should render the mobile stub
- * instead of the full app. Safe to call in non-DOM contexts (returns false
- * — there's no viewport to be "mobile" in).
+ * Returns true when the current viewport is narrower than
+ * `MOBILE_BREAKPOINT_PX`. This is now a viewport-only check — the
+ * "no injected EVM provider" branch has moved to `needsDesktopStub` so
+ * the mobile layout (Track A WalletConnect) can claim the small-viewport
+ * case directly. Safe to call in non-DOM contexts (returns false — there's
+ * no viewport to be "mobile" in).
  *
- * Also returns true on ANY viewport when there is no injected EVM provider
- * (`window.ethereum` absent). Without this, an iPad-landscape (≥1024px) or
- * desktop-Chromebook user with no browser-extension wallet would fall
- * through into wagmi's `injected()` connector and see the original red
- * "Provider not found" banner — the exact regression this stub exists to
- * prevent. The stub copy ("desktop browser with a browser-extension
- * wallet") covers both cases accurately.
- *
- * @param {{ innerWidth?: number, ethereum?: unknown }} [win] Override for tests.
+ * @param {{ innerWidth?: number }} [win] Override for tests.
  */
 export function isMobileViewport(win) {
   const w = win ?? (typeof window !== 'undefined' ? window : null);
   if (!w || typeof w.innerWidth !== 'number') return false;
-  if (w.innerWidth < MOBILE_BREAKPOINT_PX) return true;
-  if (typeof w.ethereum === 'undefined') return true;
+  return w.innerWidth < MOBILE_BREAKPOINT_PX;
+  // NOTE: window.ethereum branch REMOVED — that case is handled by needsDesktopStub
+}
+
+/**
+ * Returns true when the viewport is wide (>= MOBILE_BREAKPOINT_PX) but the
+ * page is running without an injected EVM provider (`window.ethereum`
+ * absent). This is the desktop-Chromebook / iPad-landscape case where
+ * wagmi's `injected()` connector would otherwise throw "Provider not
+ * found." and surface as a red banner. Mobile viewport callers should NOT
+ * see this stub — they get the mobile layout (Track A WalletConnect)
+ * instead.
+ *
+ * @param {{ innerWidth?: number, ethereum?: unknown }} [win] Override for tests.
+ */
+export function needsDesktopStub(win) {
+  const w = win ?? (typeof window !== 'undefined' ? window : null);
+  if (!w || typeof w.innerWidth !== 'number') return false;
+  // Desktop viewport with no injected wallet — show stub.
+  // Mobile case is handled by the mobile layout via WalletConnect (Track A).
+  if (w.innerWidth >= MOBILE_BREAKPOINT_PX && typeof w.ethereum === 'undefined') return true;
   return false;
 }
 
@@ -106,8 +120,8 @@ export function mountMobileStub(root) {
     el('p', {
       className: 'pt-mobile-stub__body',
       text:
-        'Please open this page on a desktop browser with a browser-extension wallet ' +
-        '(MetaMask, Rabby, Coinbase Wallet, etc.) to access charts and trading.',
+        'Please open this page on a desktop browser with a wallet extension, or on a ' +
+        'mobile device with a supported wallet app.',
     }),
   );
 

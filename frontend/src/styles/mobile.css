@@ -1,0 +1,147 @@
+/* mobile.css — mobile layout overrides
+ *
+ * All rules are scoped under `body.is-mobile` (JS adds this class at bootstrap
+ * when isMobileViewport() is true) or inside @media (max-width: 1023px).
+ *
+ * This file is loaded after all component stylesheets in main.js so its
+ * specificity wins for body.is-mobile selectors.
+ */
+
+/* ─── Shell layout ──────────────────────────────────────────────────────── */
+
+body.is-mobile {
+  /* CSS custom properties Track C will read */
+  --mobile-header-h: 52px;
+  --mobile-nav-h: 56px;
+}
+
+body.is-mobile .pt-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+body.is-mobile .pt-main {
+  display: block;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  padding-bottom: calc(var(--mobile-nav-h) + env(safe-area-inset-bottom));
+}
+
+/* ─── Bottom nav ─────────────────────────────────────────────────────────── */
+
+.pt-mobile-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: stretch;
+  height: var(--mobile-nav-h, 56px);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  z-index: 100;
+}
+
+.pt-mobile-nav__tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-3);
+  font: 500 10px var(--font-ui);
+  cursor: pointer;
+  position: relative;
+  min-height: 44px;
+}
+
+.pt-mobile-nav__tab.is-active {
+  color: var(--accent);
+}
+
+.pt-mobile-nav__tab.is-active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 2px 2px;
+}
+
+.pt-mobile-nav__tab.is-locked {
+  opacity: 0.6;
+}
+
+.pt-mobile-nav__tab-icon {
+  font: 600 18px var(--font-mono);
+  line-height: 1;
+}
+
+.pt-mobile-nav__tab-lock {
+  position: absolute;
+  top: 8px;
+  right: calc(50% - 22px);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: var(--bg-0);
+  font-size: 8px;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+
+/* ─── Panel container ────────────────────────────────────────────────────── */
+
+.pt-mobile-panel {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: none;
+}
+
+.pt-mobile-panel.is-active {
+  display: block;
+}
+
+/* Chart panel exception: stays "mounted" via visibility, not display, so the
+ * chart's ResizeObserver keeps measuring valid dimensions. Track C will need
+ * to call chart.resize() on tab-activate (we expose forceResize). */
+.pt-mobile-panel--chart {
+  display: flex;
+  flex-direction: column;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pt-mobile-panel--chart.is-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* ─── Header on mobile ───────────────────────────────────────────────────── */
+
+body.is-mobile .pt-header {
+  height: var(--mobile-header-h);
+}
+
+/* Hide desktop-only header buttons on mobile (Profile/Referral/Help move into
+ * Wallet tab and onboarding respectively). Track C will refine these. */
+body.is-mobile .pt-header__action[data-test-id='header-profile-btn'],
+body.is-mobile .pt-header__action[data-test-id='header-referral-btn'],
+body.is-mobile .pt-header__action[data-test-id='header-help-btn'] {
+  display: none;
+}

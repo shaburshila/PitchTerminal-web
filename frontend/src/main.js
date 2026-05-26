@@ -40,7 +40,10 @@ import './styles/mobile-stub.css';
 // Version-check banner — shown in header center on backend↔bundle SHA
 // mismatch (see version-check.js for the trigger logic + threat model).
 import './styles/version-check.css';
-import { isMobileViewport, mountMobileStub } from './mobile-stub.js';
+// Mobile layout overrides — must load LAST among style imports so its
+// `body.is-mobile` selectors win the cascade against component stylesheets.
+import './styles/mobile.css';
+import { isMobileViewport, mountMobileStub, needsDesktopStub } from './mobile-stub.js';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
@@ -386,20 +389,51 @@ export function createStaleSessionCleanup(deps = {}) {
   };
 }
 
-function bootstrap() {
+async function bootstrapMobile(root) {
+  // Minimal mobile bootstrap for Phase 1 (M-0 + M-1).
+  // Track A will add wallet flow. Track C will mount components into panels.
+  // This phase only proves the shell + router + nav work.
+  const { mountMobileLayout } = await import('./mobile-layout.js');
+  const handle = mountMobileLayout(root);
+  // Rotate-past-breakpoint reload (B4 decision): if the user rotates a
+  // tablet into desktop width we reload so the full desktop bootstrap takes
+  // over cleanly. We don't try to live-swap the layout in place.
+  let mqCleanup = () => {};
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const onChange = (e) => {
+      if (!e.matches) window.location.reload();
+    };
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+      mqCleanup = () => mq.removeEventListener('change', onChange);
+    }
+  }
+  const originalDestroy = handle.destroy;
+  handle.destroy = function () {
+    mqCleanup();
+    if (typeof originalDestroy === 'function') originalDestroy.call(handle);
+  };
+  return handle;
+}
+
+async function bootstrap() {
   const root = document.getElementById('app');
   if (!root) {
     console.error('PitchTerminal: #app root element not found');
     return;
   }
-  // Mobile viewport (or wide viewport without an injected wallet provider)
-  // — render the desktop-only stub and bail out BEFORE any wallet / wagmi /
-  // SSE init. wagmi's `injected()` connector throws "Provider not found." on
-  // contexts without `window.ethereum`, which would otherwise surface as a
-  // red banner. We also skip layout mount so the broken 3-col grid never
-  // paints. See mobile-stub.js for the breakpoint + provider-check
-  // rationale.
+  // Mobile viewport — hand off to the mobile layout (Track A WalletConnect +
+  // Track C component mounts). Bails BEFORE any desktop wallet / wagmi / SSE
+  // init.
   if (isMobileViewport()) {
+    return bootstrapMobile(root);
+  }
+  // Desktop viewport WITHOUT an injected wallet provider — render the
+  // desktop-only stub. wagmi's `injected()` connector throws "Provider not
+  // found." on contexts without `window.ethereum`, which would otherwise
+  // surface as a red banner. See mobile-stub.js for the rationale.
+  if (needsDesktopStub()) {
     mountMobileStub(root);
     return;
   }

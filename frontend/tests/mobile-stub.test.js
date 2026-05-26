@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isMobileViewport, mountMobileStub, MOBILE_BREAKPOINT_PX } from '../src/mobile-stub.js';
+import {
+  isMobileViewport,
+  needsDesktopStub,
+  mountMobileStub,
+  MOBILE_BREAKPOINT_PX,
+} from '../src/mobile-stub.js';
 
 function setViewportWidth(px) {
   // happy-dom respects assignment to window.innerWidth.
@@ -17,42 +22,76 @@ const DESKTOP = (innerWidth) => ({ innerWidth, ethereum: {} });
 
 describe('isMobileViewport', () => {
   it('returns true at common mobile widths (390 / 414 / 768)', () => {
-    expect(isMobileViewport({ innerWidth: 390, ethereum: {} })).toBe(true);
-    expect(isMobileViewport({ innerWidth: 414, ethereum: {} })).toBe(true);
-    // iPad portrait — intentionally falls into the stub bucket.
-    expect(isMobileViewport({ innerWidth: 768, ethereum: {} })).toBe(true);
+    expect(isMobileViewport({ innerWidth: 390 })).toBe(true);
+    expect(isMobileViewport({ innerWidth: 414 })).toBe(true);
+    // iPad portrait — still below 1024 breakpoint, mobile layout owns it.
+    expect(isMobileViewport({ innerWidth: 768 })).toBe(true);
   });
 
-  it('returns false at the breakpoint and above (1024 / 1280 / 1920) when a provider is injected', () => {
-    expect(isMobileViewport(DESKTOP(MOBILE_BREAKPOINT_PX))).toBe(false);
-    expect(isMobileViewport(DESKTOP(1280))).toBe(false);
-    expect(isMobileViewport(DESKTOP(1920))).toBe(false);
-  });
-
-  it('returns true on wide viewports without an injected provider (tablet / Chromebook)', () => {
-    // iPad landscape / Android tablet / desktop Chromebook with no extension
-    // wallet — falls into the stub bucket so the wagmi "Provider not found"
-    // banner doesn't surface.
-    expect(isMobileViewport({ innerWidth: 1024 })).toBe(true);
-    expect(isMobileViewport({ innerWidth: 1280 })).toBe(true);
+  it('returns false at the breakpoint and above (1024 / 1280 / 1920)', () => {
+    // Note: isMobileViewport is now a viewport-only check. The
+    // "no injected provider on a wide viewport" case has moved to
+    // needsDesktopStub — see those tests below.
+    expect(isMobileViewport({ innerWidth: MOBILE_BREAKPOINT_PX })).toBe(false);
+    expect(isMobileViewport({ innerWidth: 1280 })).toBe(false);
+    expect(isMobileViewport({ innerWidth: 1920 })).toBe(false);
+    // Also false on a wide viewport even WITHOUT an injected provider —
+    // that case is now needsDesktopStub's responsibility.
+    expect(isMobileViewport({ innerWidth: 1024 })).toBe(false);
+    expect(isMobileViewport({ innerWidth: 1280 })).toBe(false);
   });
 
   it('reads from window when no override is supplied', () => {
     setViewportWidth(400);
     expect(isMobileViewport()).toBe(true);
     setViewportWidth(1440);
-    // happy-dom has no `window.ethereum`, so a wide viewport alone still
-    // routes to the stub. Inject one to assert the desktop path.
+    expect(isMobileViewport()).toBe(false);
+  });
+
+  it('returns false in non-DOM environments (no window)', () => {
+    expect(isMobileViewport({})).toBe(false);
+  });
+});
+
+describe('needsDesktopStub', () => {
+  it('returns true on a wide viewport with no injected provider', () => {
+    // iPad landscape / Android tablet / desktop Chromebook without an
+    // extension wallet — the wagmi "Provider not found" case we still
+    // want to short-circuit before bootstrap.
+    expect(needsDesktopStub({ innerWidth: 1024 })).toBe(true);
+    expect(needsDesktopStub({ innerWidth: 1280 })).toBe(true);
+    expect(needsDesktopStub({ innerWidth: 1920 })).toBe(true);
+  });
+
+  it('returns false on a wide viewport WITH an injected provider', () => {
+    expect(needsDesktopStub(DESKTOP(1024))).toBe(false);
+    expect(needsDesktopStub(DESKTOP(1280))).toBe(false);
+    expect(needsDesktopStub(DESKTOP(1920))).toBe(false);
+  });
+
+  it('returns false at mobile widths — the mobile layout handles that case', () => {
+    // Mobile case is handled by isMobileViewport → bootstrapMobile → WalletConnect.
+    expect(needsDesktopStub({ innerWidth: 390 })).toBe(false);
+    expect(needsDesktopStub({ innerWidth: 768 })).toBe(false);
+    expect(needsDesktopStub({ innerWidth: 1023 })).toBe(false);
+    // Also false on mobile widths regardless of provider state.
+    expect(needsDesktopStub({ innerWidth: 390, ethereum: {} })).toBe(false);
+  });
+
+  it('reads from window when no override is supplied', () => {
+    setViewportWidth(1440);
+    // happy-dom has no window.ethereum by default.
+    expect(needsDesktopStub()).toBe(true);
     window.ethereum = {};
     try {
-      expect(isMobileViewport()).toBe(false);
+      expect(needsDesktopStub()).toBe(false);
     } finally {
       delete window.ethereum;
     }
   });
 
   it('returns false in non-DOM environments (no window)', () => {
-    expect(isMobileViewport({})).toBe(false);
+    expect(needsDesktopStub({})).toBe(false);
   });
 });
 
@@ -71,7 +110,9 @@ describe('mountMobileStub', () => {
     expect(overlay).not.toBeNull();
     expect(overlay.textContent).toContain('PitchTerminal');
     expect(overlay.textContent).toContain('Desktop-only');
-    expect(overlay.textContent).toContain('MetaMask');
+    // Copy now mentions both desktop-extension and mobile-app paths.
+    expect(overlay.textContent).toMatch(/wallet extension/);
+    expect(overlay.textContent).toMatch(/mobile device/);
     const soon = root.querySelector('[data-test-id="mobile-stub-soon"]');
     expect(soon).not.toBeNull();
     expect(soon.textContent).toMatch(/coming soon/i);
@@ -107,7 +148,7 @@ describe('mountMobileStub', () => {
   });
 });
 
-describe('bootstrap integration — wagmi suppression on mobile', () => {
+describe('bootstrap integration — mobile viewport mounts mobile layout', () => {
   // We import main.js dynamically per-test so the bootstrap() flow runs
   // against whatever viewport width we set first. main.js auto-runs bootstrap
   // when imported into a document whose readyState is not 'loading' (happy-dom
@@ -119,11 +160,8 @@ describe('bootstrap integration — wagmi suppression on mobile', () => {
     document.body.appendChild(root);
   });
 
-  it('mounts ONLY the mobile stub when viewport is narrow (no wallet / layout init)', async () => {
+  it('mounts ONLY the mobile shell when viewport is narrow (no wallet / layout init)', async () => {
     setViewportWidth(390);
-    // Stub every heavy import so a stray bootstrap branch can't accidentally
-    // touch the real wagmi / SSE code. If the mobile-guard works, none of
-    // these should be called.
     const { vi } = await import('vitest');
     vi.resetModules();
     const layoutMock = vi.fn();
@@ -139,6 +177,7 @@ describe('bootstrap integration — wagmi suppression on mobile', () => {
     vi.doMock('../src/wallet.js', () => ({
       onAccountChange: vi.fn(),
       getAccount: vi.fn(() => ({ address: null, isConnected: false })),
+      tryAutoReconnect: vi.fn(async () => undefined),
     }));
     vi.doMock('../src/api.js', () => ({
       ApiError: class extends Error {},
@@ -166,11 +205,22 @@ describe('bootstrap integration — wagmi suppression on mobile', () => {
     vi.doMock('../src/styles/modals-batch7.css', () => ({}), { virtual: true });
     vi.doMock('../src/styles/trade-panel-batch5.css', () => ({}), { virtual: true });
     vi.doMock('../src/styles/mobile-stub.css', () => ({}), { virtual: true });
+    vi.doMock('../src/styles/mobile.css', () => ({}), { virtual: true });
 
     await import('../src/main.js');
+    // bootstrap() is now async — let microtasks settle so the dynamic
+    // import of mobile-layout.js resolves before we assert the DOM. We
+    // poll on the DOM rather than guessing a fixed timeout so the test
+    // is robust to slow module resolution under happy-dom.
+    const deadline = Date.now() + 2000;
+    while (!document.querySelector('[data-test-id="mobile-shell"]') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
 
-    // Stub painted, no wallet/sse/layout init.
-    expect(document.querySelector('[data-test-id="mobile-stub"]')).not.toBeNull();
+    // Mobile shell painted, no desktop wallet/sse/layout init.
+    expect(document.querySelector('[data-test-id="mobile-shell"]')).not.toBeNull();
+    expect(document.querySelector('[data-test-id="mobile-nav"]')).not.toBeNull();
+    expect(document.querySelector('[data-test-id="mobile-stub"]')).toBeNull();
     expect(layoutMock).not.toHaveBeenCalled();
     expect(walletInit).not.toHaveBeenCalled();
     vi.resetModules();

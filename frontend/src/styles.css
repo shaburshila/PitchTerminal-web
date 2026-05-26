@@ -515,23 +515,6 @@ body.mode-dashboard .pt-profile {
   border-color: var(--accent-hover);
 }
 
-/* Degrade on narrow viewports — keep usable, not pretty. */
-@media (max-width: 1024px) {
-  .pt-main {
-    grid-template-columns: 200px 1fr 260px;
-  }
-}
-
-@media (max-width: 768px) {
-  .pt-main {
-    grid-template-columns: 1fr;
-  }
-  .pt-sidebar,
-  .pt-right {
-    display: none;
-  }
-}
-
 /* Sidebar token lists (F0.5) ------------------------------------------- */
 
 .pt-sidebar__inner {
