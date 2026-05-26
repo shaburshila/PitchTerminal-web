@@ -44,7 +44,10 @@ gevent compatibility:
 
 Rate limits (api-spec §11):
 
-* 5 connections / IP. Per-address (2) requires SIWE — added in B0.10.
+* 2 concurrent connections / IP (process-local; with --workers 2 that's a
+  hard ceiling of 4/IP per host). Caddy front additionally caps stream-open
+  rate to 3/min per IP — see infra/Caddyfile.prod. Per-address (2) requires
+  SIWE — added in B0.10.
 """
 
 from __future__ import annotations
@@ -456,7 +459,15 @@ def _stream_generator(premium_owner: str | None = None) -> Iterator[str]:
 # connections in a process-local counter under a lock. The counter is best-
 # effort across multi-worker setups (each gunicorn worker has its own); the
 # real per-deployment cap is enforced by Caddy in front (see infra/Caddyfile).
-_MAX_CONNECTIONS_PER_IP = 5
+#
+# Security #3 hardening (2026-05-26): lowered from 5 → 2 because gunicorn
+# runs with --workers 2 (see backend/Dockerfile) and this counter is
+# process-local, so the actual per-IP ceiling was 5x2 = 10 dedicated psycopg
+# connections per IP. Each SSE client holds a Postgres connection for its
+# lifetime, and Postgres default max_connections=100 means a single attacker
+# IP could exhaust the DB. Hard ceiling now = 2x2 = 4. Caddy enforces a
+# coarser open-rate cap on /api/v1/stream as the real first-line defence.
+_MAX_CONNECTIONS_PER_IP = 2
 _live_connections: dict[str, int] = {}
 _live_lock = threading.Lock()
 
@@ -488,10 +499,13 @@ def stream() -> Response:
     Anonymous clients receive ``prices``, ``events``, ``config`` (FREE);
     the ``orders`` channel requires premium and ships in phase 2.
 
-    Connection-limit (review I, H-1): max 5 concurrent connections per IP
-    enforced in this process. EventSource auto-reconnects every 3s on
-    transient failures, so a fixed-window rate-limit would lock clients out
-    after a few flaps — concurrent-gauge fits the workload.
+    Connection-limit (review I, H-1; tightened for security #3 2026-05-26):
+    max 2 concurrent connections per IP enforced in this process. With
+    gunicorn --workers 2 the absolute ceiling is 4 conn/IP per host;
+    Caddy front-end additionally caps stream-open rate to 3/min per IP.
+    EventSource auto-reconnects every 3s on transient failures, so a fixed-
+    window app-level rate-limit would lock clients out after a few flaps —
+    concurrent-gauge fits the workload.
 
     Premium-gating (B2.2): if the request carries a valid ``pt_session``
     cookie AND :func:`shared.access.is_premium` returns ``has_access=True``,

@@ -45,6 +45,39 @@ www.{$DOMAIN} {
 		-Server
 	}
 
+	# ── SSE endpoint — отдельный (более строгий) rate-limit ───────────────
+	# /api/v1/stream держит dedicated Postgres-коннект на каждого клиента
+	# (см. backend/app/routes/stream.py). Application-level cap
+	# (_MAX_CONNECTIONS_PER_IP=2) — process-local; при gunicorn --workers 2
+	# реальный потолок 4 conn/IP. Caddy-level cap на ОТКРЫТИЕ stream'а
+	# защищает Postgres от DoS-выжимания: 3 попытки/минуту на IP более чем
+	# достаточно для normal UX (один open + 1-2 EventSource reconnect),
+	# но обрезает атакующего, пытающегося спамить connection-open'ами.
+	# ВАЖНО: handle /api/v1/stream должен идти ДО handle /api/*, иначе
+	# Caddy выберет более общий matcher по правилу longest-path-wins.
+	handle /api/v1/stream {
+		rate_limit {
+			# 5 events/min/IP — bumped from 3 because legitimate SSE
+			# reconnect (sse.js backoff 3s/6s/12s/24s on flap) can burn
+			# through 3 quickly on unstable mobile/wifi.
+			zone sse_per_ip {
+				key {remote_host}
+				events 5
+				window 1m
+			}
+		}
+
+		reverse_proxy api:8000 {
+			# SSE-friendly.
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				read_buffer 4KB
+			}
+		}
+	}
+
 	# ── API под /api/* ─────────────────────────────────────────────────────
 	handle /api/* {
 		rate_limit {

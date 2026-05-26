@@ -24,6 +24,31 @@
 }
 
 :80 {
+	# ── SSE endpoint — отдельный (более строгий) rate-limit ───────────────
+	# Mirror prod-конфига: SSE-открытия лимитируем 3/мин на IP, иначе
+	# атакующий из одного IP выжирает Postgres-коннекты (каждый SSE-клиент
+	# держит dedicated psycopg.Connection). Должен идти ДО handle /api/*.
+	handle /api/v1/stream {
+		rate_limit {
+			# 5 events/min/IP — sse.js backoff на flap может расходовать
+			# быстрее. Подняли с 3 чтобы не отбивать legitimate reconnect.
+			zone sse_per_ip {
+				key {remote_host}
+				events 5
+				window 1m
+			}
+		}
+
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				read_buffer 4KB
+			}
+		}
+	}
+
 	# ── API под /api/* ─────────────────────────────────────────────────────
 	handle /api/* {
 		# Глобальный rate-limit (600/мин на IP) — действует только для /api/*.
