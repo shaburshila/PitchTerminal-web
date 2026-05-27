@@ -110,7 +110,7 @@ const DEFAULT_CONFIG = {
  *   Price string. Defaults to "1 PITCH".
  * @property {string} [buttonText]
  *   CTA button label. Defaults to "★ Upgrade to Pro".
- * @property {(s:'unknown'|'anon'|'free'|'premium') => boolean} [isLocked]
+ * @property {(s:'unknown'|'anon'|'connecting'|'free'|'premium') => boolean} [isLocked]
  *   Override the lock predicate. By default, anything other than `'premium'`
  *   locks. Tests can pass an explicit function to assert specific transitions.
  * @property {(opts?:object) => unknown} [openPayModal]
@@ -254,9 +254,21 @@ export function mountSoftLock(target, opts = {}) {
     if (locked) {
       target.classList.add(TARGET_CLASS);
       overlay.hidden = false;
+      // Mobile race fix (2026-05-27): while the user's wallet is still
+      // resolving access (post-connect, pre-SIWE / pre-/access response),
+      // keep the lock VISUAL (blur + click-block) but suppress the
+      // "Upgrade to Pro" upsell card content — flashing the upsell at a
+      // user who actually owns premium during the 5-15s mobile WC SIWE
+      // round-trip is the bug we're fixing. A small `.is-checking` class
+      // on the overlay lets CSS swap the card contents for a skeleton /
+      // spinner (style is in modals-batch7.css; minimal default is just
+      // hiding the upsell card body — still better than the misleading
+      // "no premium" pitch).
+      overlay.classList.toggle('is-checking', stateValue === 'connecting');
     } else {
       target.classList.remove(TARGET_CLASS);
       overlay.hidden = true;
+      overlay.classList.remove('is-checking');
     }
     if (typeof opts.onStateChange === 'function') {
       try {
