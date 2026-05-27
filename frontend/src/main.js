@@ -1,3 +1,10 @@
+// MUST be first — sets globalThis.Buffer/global/process before any other
+// module-init runs (ESM hoists imports top-down; deep deps like @reown/appkit
+// may touch Buffer during their own module-init phase, so a side-effect block
+// down in main.js after other imports would be too late). See polyfills.js
+// docstring for full rationale (iOS Safari + Reown sideEffects:false bug).
+import './polyfills.js';
+
 // Sentry init runs first so uncaught errors thrown during module evaluation
 // of the heavier imports below still get captured.
 import { initSentry } from './sentry.js';
