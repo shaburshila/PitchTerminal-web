@@ -2,6 +2,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mountMobileLayout } from '../src/mobile-layout.js';
+import {
+  set as setAccessState,
+  _resetForTests as resetAccessStore,
+} from '../src/access-store.js';
 
 describe('mountMobileLayout', () => {
   let root;
@@ -12,6 +16,7 @@ describe('mountMobileLayout', () => {
     if (typeof window !== 'undefined' && window.location) {
       window.location.hash = '';
     }
+    resetAccessStore();
     root = document.createElement('div');
     document.body.appendChild(root);
   });
@@ -50,5 +55,66 @@ describe('mountMobileLayout', () => {
     handle.destroy();
     expect(root.querySelector('[data-test-id="mobile-banner"]')).toBeNull();
     expect(document.body.classList.contains('is-mobile')).toBe(false);
+  });
+
+  it('Trade + Wallet tabs render is-locked when access-state is not premium', () => {
+    // Default access-store state is `'unknown'` after _resetForTests.
+    const handle = mountMobileLayout(root);
+    const trade = root.querySelector('[data-test-id="mobile-nav-trade"]');
+    const wallet = root.querySelector('[data-test-id="mobile-nav-wallet"]');
+    const markets = root.querySelector('[data-test-id="mobile-nav-markets"]');
+    const chart = root.querySelector('[data-test-id="mobile-nav-chart"]');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    expect(wallet.classList.contains('is-locked')).toBe(true);
+    // Markets + Chart never lock.
+    expect(markets.classList.contains('is-locked')).toBe(false);
+    expect(chart.classList.contains('is-locked')).toBe(false);
+    // Lock badge present in DOM for premium-gated tabs only.
+    expect(trade.querySelector('.pt-mobile-nav__tab-lock')).not.toBeNull();
+    expect(wallet.querySelector('.pt-mobile-nav__tab-lock')).not.toBeNull();
+    expect(markets.querySelector('.pt-mobile-nav__tab-lock')).toBeNull();
+    expect(chart.querySelector('.pt-mobile-nav__tab-lock')).toBeNull();
+    handle.destroy();
+  });
+
+  it('access-store → premium removes is-locked live; revert → anon restores it', () => {
+    const handle = mountMobileLayout(root);
+    const trade = root.querySelector('[data-test-id="mobile-nav-trade"]');
+    const wallet = root.querySelector('[data-test-id="mobile-nav-wallet"]');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    expect(wallet.classList.contains('is-locked')).toBe(true);
+
+    setAccessState('premium');
+    expect(trade.classList.contains('is-locked')).toBe(false);
+    expect(wallet.classList.contains('is-locked')).toBe(false);
+
+    setAccessState('anon');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    expect(wallet.classList.contains('is-locked')).toBe(true);
+
+    handle.destroy();
+  });
+
+  it('non-premium states (connecting / free) keep the lock', () => {
+    const handle = mountMobileLayout(root);
+    const trade = root.querySelector('[data-test-id="mobile-nav-trade"]');
+    setAccessState('connecting');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    setAccessState('free');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    setAccessState('premium');
+    expect(trade.classList.contains('is-locked')).toBe(false);
+    handle.destroy();
+  });
+
+  it('destroy unsubscribes — later access-state changes do not touch DOM', () => {
+    const handle = mountMobileLayout(root);
+    // Snapshot is-mobile-shell while alive; after destroy buttons are detached.
+    const trade = root.querySelector('[data-test-id="mobile-nav-trade"]');
+    expect(trade.classList.contains('is-locked')).toBe(true);
+    handle.destroy();
+    // Mutate state — must not throw and the detached button class stays.
+    expect(() => setAccessState('premium')).not.toThrow();
+    expect(trade.classList.contains('is-locked')).toBe(true);
   });
 });

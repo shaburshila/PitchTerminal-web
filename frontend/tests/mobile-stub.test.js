@@ -189,7 +189,13 @@ describe('bootstrap integration — mobile viewport mounts mobile layout', () =>
     }));
     vi.doMock('../src/referral.js', () => ({ bootstrapReferral: vi.fn(async () => {}) }));
     vi.doMock('../src/config-store.js', () => ({ merge: vi.fn() }));
-    vi.doMock('../src/access-store.js', () => ({ set: vi.fn() }));
+    vi.doMock('../src/access-store.js', () => ({
+      set: vi.fn(),
+      get: vi.fn(() => 'unknown'),
+      subscribe: vi.fn(() => () => {}),
+      isPremium: vi.fn(() => false),
+      isConnecting: vi.fn(() => false),
+    }));
     vi.doMock('../src/profile.js', () => ({ mountProfile: vi.fn() }));
     vi.doMock('../src/access.js', () => ({ mountAccessBanner: vi.fn() }));
     vi.doMock('../src/soft-lock.js', () => ({ mountSoftLock: vi.fn() }));

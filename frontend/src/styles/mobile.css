@@ -98,9 +98,15 @@ body.is-mobile .pt-main {
   background: var(--warn);
   color: var(--bg-0);
   font-size: 8px;
-  display: grid;
+  /* Hidden by default; shown only when the parent button has `.is-locked`.
+     The lock badge is always present in the DOM (see mobile-layout.js) so the
+     class toggle drives visibility without re-creating nodes. */
+  display: none;
   place-items: center;
   line-height: 1;
+}
+.pt-mobile-nav__tab.is-locked .pt-mobile-nav__tab-lock {
+  display: grid;
 }
 
 /* ─── Panel container ────────────────────────────────────────────────────── */

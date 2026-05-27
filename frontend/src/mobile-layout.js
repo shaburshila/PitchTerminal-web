@@ -9,23 +9,33 @@
  * `panels.trade`, `panels.wallet` so the next phase can mount components
  * directly into the empty containers.
  *
- * Locking: Trade + Wallet tabs render with `is-locked` class — purely
- * cosmetic at this phase (no cover overlay; Track C will render the upsell).
- * The tap behavior is unchanged from a free tab — navigate into the panel.
+ * Locking: Trade + Wallet tabs are premium-gated. The `is-locked` class is
+ * toggled dynamically based on the access-store state — anything other than
+ * `'premium'` (i.e. `'unknown'`, `'connecting'`, `'anon'`, `'free'`) renders
+ * the lock badge. After the user pays, the access-store flips to `'premium'`
+ * and the badge disappears live; on wallet disconnect the store reverts to
+ * `'anon'` and the badge returns.
+ * The tap behavior is unchanged from a free tab — navigate into the panel
+ * (the panel itself owns the soft-lock cover / upsell).
  */
 
 import { TABS, navigateTo, onTabChange, initFromHash, getActiveTab } from './mobile-router.js';
+import { get as getAccessState, subscribe as subscribeAccess } from './access-store.js';
 
 /**
  * Tab spec — order here is the visual order in the bottom-nav.
- * `locked: true` only adds the `is-locked` class for now.
+ * The lock state is dynamic (see `applyLockState` below); the spec only lists
+ * which tabs are premium-gated via `premiumGated: true`.
  */
 const TAB_SPEC = [
-  { id: TABS.MARKETS, label: 'Markets', icon: '☰', locked: false }, // ☰
-  { id: TABS.CHART, label: 'Chart', icon: '▦', locked: false }, // ▦
-  { id: TABS.TRADE, label: 'Trade', icon: '⇄', locked: true }, // ⇄
-  { id: TABS.WALLET, label: 'Wallet', icon: '◉', locked: true }, // ◉
+  { id: TABS.MARKETS, label: 'Markets', icon: '☰', premiumGated: false }, // ☰
+  { id: TABS.CHART, label: 'Chart', icon: '▦', premiumGated: false }, // ▦
+  { id: TABS.TRADE, label: 'Trade', icon: '⇄', premiumGated: true }, // ⇄
+  { id: TABS.WALLET, label: 'Wallet', icon: '◉', premiumGated: true }, // ◉
 ];
+
+/** Set of tab IDs that require premium to unlock (mirrors `TAB_SPEC.premiumGated`). */
+const PREMIUM_GATED_TABS = new Set([TABS.TRADE, TABS.WALLET]);
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -124,7 +134,7 @@ export function mountMobileLayout(root) {
   const tabButtons = {};
   for (const spec of TAB_SPEC) {
     const btn = el('button', {
-      className: 'pt-mobile-nav__tab' + (spec.locked ? ' is-locked' : ''),
+      className: 'pt-mobile-nav__tab',
       dataset: { tab: spec.id, testId: `mobile-nav-${spec.id}` },
       attrs: { type: 'button', role: 'tab', 'aria-label': spec.label },
     });
@@ -136,7 +146,10 @@ export function mountMobileLayout(root) {
       }),
     );
     btn.appendChild(el('span', { className: 'pt-mobile-nav__tab-label', text: spec.label }));
-    if (spec.locked) {
+    // Lock badge — always present in the DOM for premium-gated tabs so
+    // `applyLockState` only needs to toggle the parent `.is-locked` class.
+    // The badge is hidden via CSS (`:not(.is-locked) .pt-mobile-nav__tab-lock`).
+    if (spec.premiumGated) {
       btn.appendChild(
         el('span', {
           className: 'pt-mobile-nav__tab-lock',
@@ -152,6 +165,22 @@ export function mountMobileLayout(root) {
     nav.appendChild(btn);
   }
   shell.appendChild(nav);
+
+  // ── Premium lock-state sync ───────────────────────────────────────────
+  // Trade + Wallet tabs render `.is-locked` whenever the access-store is
+  // anything other than `'premium'` (covers `'unknown'`, `'connecting'`,
+  // `'anon'`, `'free'`). The class is toggled live so onPaid → 'premium'
+  // unlocks the badge without remount, and disconnect → 'anon' re-locks it.
+  function applyLockState() {
+    const locked = getAccessState() !== 'premium';
+    for (const tabId of PREMIUM_GATED_TABS) {
+      const btn = tabButtons[tabId];
+      if (!btn) continue;
+      btn.classList.toggle('is-locked', locked);
+    }
+  }
+  applyLockState();
+  const unsubscribeAccess = subscribeAccess(applyLockState);
 
   root.appendChild(shell);
 
@@ -175,6 +204,11 @@ export function mountMobileLayout(root) {
   function destroy() {
     try {
       unsubscribe();
+    } catch {
+      /* idempotent */
+    }
+    try {
+      unsubscribeAccess();
     } catch {
       /* idempotent */
     }
