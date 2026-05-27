@@ -108,26 +108,38 @@ describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
     // Drain microtasks so getAccess() → catch → showSignInModal runs.
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(signinMock.showSignInModal).toHaveBeenCalledTimes(1);
-    // setAccessState('unknown') was called once on the initial connect
-    // (wallet-switch branch).
-    expect(accessStoreMock.set).toHaveBeenCalledWith('unknown');
-    const initialUnknownCalls = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'unknown',
+    // setAccessState('connecting') was called once on the initial connect
+    // (wallet-switch branch — mobile race fix, replaces the previous
+    // 'unknown' write so soft-locks render a loading placeholder, not the
+    // upsell, during the SIWE round-trip).
+    expect(accessStoreMock.set).toHaveBeenCalledWith('connecting');
+    const initialConnectingCalls = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
     ).length;
 
     // SIWE modal stays open (we never invoke onSuccess/onCancel). Now wallet-B
     // arrives mid-flight. The handler MUST synchronously publish 'unknown' so
     // any premium UI bound to access-store flips to lock before any await.
+    // (The mid-modal switch branch still uses 'unknown' because the prior
+    // wallet's SIWE attempt is being abandoned — semantically different from
+    // a fresh connect.)
     handler(connected(WALLET_B));
     const afterSwitchUnknownCalls = accessStoreMock.set.mock.calls.filter(
       ([s]) => s === 'unknown',
     ).length;
-    expect(afterSwitchUnknownCalls).toBe(initialUnknownCalls + 1);
+    expect(afterSwitchUnknownCalls).toBe(1);
+    // 'connecting' count is unchanged — the mid-modal branch does NOT
+    // republish 'connecting' (the existing SIWE modal is still tied to
+    // wallet-A; until it resolves we keep the UI synchronously locked).
+    const afterSwitchConnectingCalls = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
+    ).length;
+    expect(afterSwitchConnectingCalls).toBe(initialConnectingCalls);
     // And we must NOT start a second SIWE modal — modalOpen guard still wins.
     expect(signinMock.showSignInModal).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT republish unknown when the same address re-fires after a clean sign-in (no flicker)', async () => {
+  it('does NOT republish connecting/unknown when the same address re-fires after a clean sign-in (no flicker)', async () => {
     // /access succeeds → handler sets lastSignedInAddress and modalOpen=false.
     apiMock.getAccess.mockResolvedValue({ hasAccess: true, source: 'paid' });
     const banner = makeBanner();
@@ -135,16 +147,23 @@ describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
 
     handler(connected(WALLET_A));
     for (let i = 0; i < 10; i++) await Promise.resolve();
+    const baselineConnecting = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
+    ).length;
     const baselineUnknowns = accessStoreMock.set.mock.calls.filter(
       ([s]) => s === 'unknown',
     ).length;
 
     // Same wallet-A re-fires (e.g. chain switch). address === lastSignedInAddress
-    // — must NOT call setAccessState again (no premium → unknown flicker).
+    // — must NOT call setAccessState again (no premium → loading flicker).
     handler(connected(WALLET_A));
+    const afterConnecting = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
+    ).length;
     const afterUnknowns = accessStoreMock.set.mock.calls.filter(
       ([s]) => s === 'unknown',
     ).length;
+    expect(afterConnecting).toBe(baselineConnecting);
     expect(afterUnknowns).toBe(baselineUnknowns);
   });
 });

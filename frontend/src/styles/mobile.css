@@ -680,3 +680,22 @@ body.is-mobile .pt-mobile-banner {
 body.is-mobile .pt-mobile-banner:empty {
   display: none;
 }
+
+/* ─── Wallet chip dropdown overflow fix (2026-05-27) ─────────────────────
+ *
+ * The connected-wallet dropdown is anchored to the chip with
+ * `position: absolute; right: 0; top: calc(100% + 8px)` (see
+ * modals-batch7.css). On narrow viewports the chip sits close to the right
+ * edge of the header, so the dropdown's `min-width: 280px` pushed it off
+ * the right edge of the screen (no horizontal clipping on body, so the
+ * page would scroll sideways).
+ *
+ * Fix: on mobile we drop the `min-width` to fit the (now single) item and
+ * cap the dropdown width to the viewport with a small inset. We keep the
+ * absolute positioning + right-anchor so it still hangs off the chip — we
+ * just stop the popover from extending past the viewport edge.
+ */
+body.is-mobile .pt-wallet-dropdown--connected {
+  min-width: 0;
+  max-width: calc(100vw - 16px);
+}

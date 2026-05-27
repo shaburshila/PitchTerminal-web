@@ -117,6 +117,35 @@ describe('signin-modal', () => {
     expect(document.querySelectorAll('[data-test-id="signin-overlay"]').length).toBe(1);
   });
 
+  // Mobile race fix (2026-05-27): on iOS Safari the second WC RPC
+  // (personal_sign) doesn't auto-foreground the wallet app. The modal
+  // surfaces an "Open wallet app" CTA so the user can manually re-trigger.
+  describe('mobile "Open wallet app" CTA', () => {
+    it('renders the CTA but keeps it hidden by default', () => {
+      showSignInModal({});
+      const hint = document.querySelector('[data-test-id="signin-mobile-hint"]');
+      const openBtn = document.querySelector('[data-test-id="signin-open-wallet"]');
+      expect(hint).not.toBeNull();
+      expect(openBtn).not.toBeNull();
+      // Hidden initially — only revealed after Sign tap on mobile UA.
+      expect(hint.hidden).toBe(true);
+    });
+
+    it('open-wallet click toasts a generic instruction when no wallet id is cached', () => {
+      try {
+        localStorage.removeItem('pt:lastWalletId');
+      } catch {
+        /* ignore */
+      }
+      showSignInModal({});
+      document.querySelector('[data-test-id="signin-open-wallet"]').click();
+      // Toast surfaces the manual switch instruction.
+      const toast = document.querySelector('[data-test-id="toast"]');
+      expect(toast).not.toBeNull();
+      expect(toast.textContent).toMatch(/wallet app/i);
+    });
+  });
+
   // B5 — Focus trap (WCAG 2.4.3 + 2.1.2). Tab must cycle within the overlay
   // so keyboard users can't reach the dim background app while the modal is
   // open. Focus also restores to the element that opened the modal on close.

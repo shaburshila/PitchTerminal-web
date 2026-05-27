@@ -152,16 +152,21 @@ export async function signMessageWithWallet(message, address) {
   }
   if (account.connectorId === CONNECTOR_WALLET_CONNECT) {
     const provider = getWalletConnectProvider();
-    if (!provider) {
-      throw new Error('signMessageWithWallet: WalletConnect provider missing');
+    if (provider && typeof provider.request === 'function') {
+      // EIP-191 personal_sign — params order is `[message, address]`. WC
+      // clients expect a UTF-8 string or hex; sending the raw string is the
+      // documented path used by viem's `signMessage` internally.
+      return provider.request({
+        method: 'personal_sign',
+        params: [message, address],
+      });
     }
-    // EIP-191 personal_sign — params order is `[message, address]`. WC clients
-    // expect a UTF-8 string or hex; sending the raw string is the documented
-    // path used by viem's `signMessage` internally.
-    return provider.request({
-      method: 'personal_sign',
-      params: [message, address],
-    });
+    // Belt-and-braces fallback: if the WC provider isn't ready (race against
+    // `head.connector.getProvider()` resolving), fall through to wagmi's
+    // `signMessage` action. wagmi internally calls the WC connector's
+    // provider too — same on-the-wire request, just goes via the connector
+    // abstraction. This avoids the user-visible "WalletConnect provider
+    // missing" error if Sign is tapped before the provider is warm.
   }
   // Injected (MetaMask, Coinbase wallet extension, Rabby…) — wagmi handles
   // the JSON-RPC plumbing and returns a 0x-signature.

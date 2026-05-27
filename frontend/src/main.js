@@ -285,7 +285,17 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
     // Wallet switched (or first connect): synchronously force-lock + drop the
     // previous JWT before any /access call. The store will be re-published by
     // refresh()/getAccess(); during the gap the UI shows the lock.
-    _setAccessState('unknown');
+    //
+    // Mobile race fix (2026-05-27): publish 'connecting' (not 'unknown' or
+    // 'anon') as soon as the wallet appears. Without this, the soft-lock
+    // overlays observe a transient 'anon' (when /access below 401s and the
+    // banner publishes anon) and flash the "no premium" upsell at a user who
+    // actually OWNS premium — the misleading screen they then see for the
+    // 5-15 seconds it takes mobile WalletConnect to surface the SIWE
+    // personal_sign popup. 'connecting' is treated as locked for the gate
+    // predicate (same as 'unknown'/'anon') but lets subscribers render a
+    // loading placeholder instead of the upsell. See access-store.js docs.
+    _setAccessState('connecting');
     const swap = lastSignedInAddress !== null && lastSignedInAddress !== acc.address;
     modalOpen = true;
     const proceed = swap
@@ -302,6 +312,8 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
         .then(() => {
           modalOpen = false;
           lastSignedInAddress = acc.address;
+          // Banner refresh re-publishes 'premium'/'free' from /access,
+          // overwriting the transient 'connecting' we set above.
           accessBanner.refresh().catch(() => {
             /* surfaced via state */
           });
@@ -309,11 +321,20 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
         .catch((err) => {
           if (!(err instanceof _ApiError) || err.status !== 401) {
             modalOpen = false;
+            // Non-401 (5xx / network): let banner.refresh figure it out.
+            // It may republish 'anon' on transient error — acceptable, the
+            // next user action will retry. State is NOT left at 'connecting'
+            // indefinitely.
             accessBanner.refresh().catch(() => {
               /* surfaced via state */
             });
             return;
           }
+          // 401 → SIWE required. KEEP state at 'connecting' while the modal
+          // is open so soft-locks show the loading placeholder, NOT the
+          // upsell. Only flip to 'anon' if the user actively cancels SIWE
+          // (declined to sign). On success we refresh() which republishes
+          // 'premium'/'free' authoritatively.
           _showSignInModal({
             onSuccess: () => {
               modalOpen = false;
@@ -324,6 +345,9 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
             },
             onCancel: () => {
               modalOpen = false;
+              // User declined SIWE — they remain anonymous from the backend's
+              // POV. Publish 'anon' so the upsell shows again.
+              _setAccessState('anon');
             },
           });
         }),
@@ -393,10 +417,8 @@ async function bootstrapMobile(root) {
   // Phase 2 Track A: mounts the shell + wallet chip + SIWE bootstrap.
   // The wallet flow is identical to desktop — wallet.js drives state, the
   // chip renders, and `createAccountChangeHandler` runs SIWE on connect.
-  // The mobile-specific picker (bottom-sheet wallet list) lives inside the
-  // chip's click handler and is triggered automatically when the UA is
-  // mobile and there is no injected provider — see
-  // `ui/wallet-connect-modal.js`.
+  // The wallet picker UX (desktop QR, mobile deep-links, injected detection)
+  // is owned by the AppKit modal — see `wallet.js`.
   //
   // Track C will mount sidebar/chart/trade/orders into `handle.panels` and
   // move the access banner into a visible mobile slot. Until then the
@@ -404,9 +426,8 @@ async function bootstrapMobile(root) {
   // effects (SIWE-modal popup on 401, premium-gating broadcast via
   // access-store) still run.
   const { mountMobileLayout } = await import('./mobile-layout.js');
-  // Pull the router exports up here so the wallet-chip's `onViewProfile`
-  // callback (registered below) closes over an already-initialised binding,
-  // not a temporal-dead-zone reference resolved later in this function.
+  // Router bindings are used below to drive sub-page navigation from various
+  // UI hooks (chart-from-markets, trade-from-chart, sidebar back-to-markets).
   const { navigateTo, TABS } = await import('./mobile-router.js');
   const handle = mountMobileLayout(root);
 
@@ -452,13 +473,9 @@ async function bootstrapMobile(root) {
       // `reconnect()` and could clobber the wagmi-state watcher mid-flight,
       // leaving the chip stuck on a stale "disconnected" view for users with
       // a prior session.
-      // `onViewProfile` — the chip's dropdown "Profile" item navigates to
-      // the Wallet tab's Profile sub-page (the desktop activates the Profile
-      // mode; on mobile that lives in `#/wallet/profile`).
       mountWalletChip(walletArea, {
         wcProjectId,
         autoReconnect: false,
-        onViewProfile: () => navigateTo(TABS.WALLET, 'profile'),
       });
 
       // Phase 3b-2: visible access banner slot between header and panels.
@@ -508,8 +525,8 @@ async function bootstrapMobile(root) {
   // mountSidebar / mountChart / openStream are statically imported at the
   // top of this file (desktop also uses them) — reusing the references here
   // keeps Rollup from splitting them into a separate chunk that's loaded
-  // twice. (`navigateTo` / `TABS` are imported earlier in this function so
-  // the wallet-chip's `onViewProfile` callback can close over them safely.)
+  // twice. `navigateTo` / `TABS` are imported earlier in this function and
+  // drive sub-page navigation from UI hooks below.
 
   // Sparkline ring-buffer + position cache — same shape + thresholds as the
   // desktop bootstrap (see comments around `SPARK_MAX` in bootstrap()).
@@ -1226,9 +1243,15 @@ async function bootstrap() {
             referralBps: cfg.referralBps ?? null,
           });
         }
+        // `autoReconnect: false` — desktop bootstrap owns the single reconnect
+        // call (`tryAutoReconnect()` below, ordered before the stale-session
+        // cleanup so cookie-vs-wallet state is consistent). Letting the chip
+        // ALSO call `tryAutoReconnect()` raced wagmi's internal debounce on
+        // slow networks and occasionally left the chip stuck on "disconnected"
+        // for users with a prior injected session.
         mountWalletChip(walletArea, {
           wcProjectId,
-          onViewProfile: activateProfile,
+          autoReconnect: false,
         });
       });
   }

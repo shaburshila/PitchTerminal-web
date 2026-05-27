@@ -299,6 +299,70 @@
   flex-shrink: 0;
 }
 
+/* Soft-lock & trade-cover "checking access" state (mobile race fix
+ * 2026-05-27). When the access-store is in 'connecting' (post-connect,
+ * pre-/access response or pre-SIWE), the soft-lock overlay carries
+ * `.is-checking` so we suppress the misleading "Upgrade to Pro" upsell
+ * card while still keeping the underlying content blurred + click-blocked.
+ * We replace the card with a minimal "Checking access…" line so a user who
+ * actually owns premium doesn't see the no-premium pitch during the 5-15s
+ * mobile WC SIWE round-trip. */
+.pt-soft-lock.is-checking .pt-soft-lock__card > *,
+.pt-trade__cover.is-checking > *:not(.pt-pro-checking) {
+  visibility: hidden;
+}
+.pt-soft-lock.is-checking .pt-soft-lock__card::before,
+.pt-trade__cover.is-checking::before {
+  content: 'Checking access…';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2, var(--text-muted));
+  font-family: var(--font-ui);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  visibility: visible;
+  pointer-events: none;
+}
+.pt-soft-lock.is-checking .pt-soft-lock__card {
+  position: relative;
+}
+.pt-trade__cover.is-checking {
+  position: absolute;
+}
+
+/* Mobile-only "Open wallet app" hint shown below the Sign CTA after the
+ * user taps Sign on iOS Safari. On iOS the second WC RPC (personal_sign)
+ * does not auto-foreground the wallet, so we surface a manual switch-CTA.
+ * Hidden by default; signin-modal.js flips `hidden=false` after Sign click
+ * on mobile UA. Pure addition — does not touch any `.pt-wallet-*` rules
+ * (Agent B territory). */
+.pt-modal__mobile-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 6px);
+  text-align: center;
+}
+.pt-modal__mobile-hint-text {
+  color: var(--text-2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pt-modal__mobile-open {
+  align-self: stretch;
+  /* Borrow the secondary-CTA palette already defined in modal actions —
+   * no new colour tokens introduced. */
+}
+
 /* Inline spinner shown when busy = signing in. */
 .pt-modal__spinner {
   width: 14px;
@@ -946,50 +1010,6 @@
 
 .pt-wallet-dropdown--connected {
   min-width: 280px;
-  padding-top: 0;
-}
-
-.pt-wallet-dropdown__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--bg-3);
-  border-bottom: 1px solid var(--line);
-}
-
-.pt-wallet-dropdown__addr {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 11.5px;
-  color: var(--text);
-  font-weight: 500;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pt-wallet-dropdown__copy {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--text-3);
-  border-radius: var(--radius-sm, 5px);
-  padding: 3px 8px;
-  font-size: 10.5px;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  flex-shrink: 0;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  transition:
-    color 120ms ease,
-    border-color 120ms ease;
-}
-.pt-wallet-dropdown__copy:hover {
-  color: var(--accent);
-  border-color: var(--accent);
 }
 
 /* The chevron next to the wallet address. */
