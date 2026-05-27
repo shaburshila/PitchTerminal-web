@@ -10,10 +10,11 @@
  *
  * Wire-up points:
  *   - Backend endpoints `/auth/nonce` + `/auth/verify` + `/auth/logout` are
- *     reused as-is. The nonce endpoint binds the issued nonce to a specific
- *     address (server security guard), so we read the connected address from
- *     wagmi inside `getNonce` rather than letting AppKit issue an
- *     address-less nonce.
+ *     reused as-is. The nonce endpoint is now address-less — AppKit and the
+ *     WalletConnect SIWE driver invoke `getNonce` *before* pairing completes,
+ *     so the address is not yet known at that point. Signer binding is
+ *     enforced server-side at /auth/verify via EIP-191 recovery + the
+ *     `parsed.address` match in `shared.siwe.verify_message`.
  *   - `getSession` consults `/access` so AppKit can tell whether the user is
  *     already signed in (page reload with a live cookie); if 401 we return
  *     null and AppKit triggers the sign-in flow on next connect.
@@ -80,7 +81,6 @@ let _hooks = {
   onSignIn: null,
   onSignOut: null,
   getWagmiConfig: null,
-  getAppKitAddress: null,
 };
 
 /**
@@ -95,66 +95,6 @@ export function setSiweHooks(hooks) {
   if (typeof hooks.onSignIn === 'function') _hooks.onSignIn = hooks.onSignIn;
   if (typeof hooks.onSignOut === 'function') _hooks.onSignOut = hooks.onSignOut;
   if (typeof hooks.getWagmiConfig === 'function') _hooks.getWagmiConfig = hooks.getWagmiConfig;
-  if (typeof hooks.getAppKitAddress === 'function')
-    _hooks.getAppKitAddress = hooks.getAppKitAddress;
-}
-
-/**
- * Try every known source synchronously; return lowercase hex or null.
- *
- * Order: AppKit instance → wagmi state. AppKit's own state often lights up
- * before wagmi's because our `syncFromWagmi()` awaits
- * `connector.getProvider()` on the WC path (mobile pairing can take seconds).
- */
-function readAddressBestEffort() {
-  if (typeof _hooks.getAppKitAddress === 'function') {
-    try {
-      const a = _hooks.getAppKitAddress();
-      if (typeof a === 'string' && a) return a.toLowerCase();
-    } catch {
-      /* fall through */
-    }
-  }
-  if (typeof _hooks.getWagmiConfig === 'function') {
-    try {
-      const cfg = _hooks.getWagmiConfig();
-      const acc = getAccount(cfg);
-      if (acc?.address) return acc.address.toLowerCase();
-    } catch {
-      /* fall through */
-    }
-  }
-  return null;
-}
-
-/**
- * Poll address sources every 100ms up to `maxMs`. Report to Sentry on timeout
- * so we can see in production how often we actually hit the ceiling and tune.
- *
- * AppKit on mobile WalletConnect triggers SIWE callbacks immediately after
- * its modal advances past the wallet picker, sometimes BEFORE our
- * `syncFromWagmi()` (which awaits `connector.getProvider()`) writes the
- * address into wagmi state. The observed symptom is an error banner
- * "SIWE: no connected wallet" at the top of the AppKit modal. Polling both
- * AppKit's own state AND wagmi state for up to 10s smooths this out.
- */
-async function waitForAddress(maxMs = 10000) {
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const addr = readAddressBestEffort();
-    if (addr) return addr;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const err = new Error(`SIWE: no connected wallet after ${maxMs}ms wait`);
-  try {
-    Sentry.captureException(err, {
-      tags: { component: 'siwe-config', step: 'waitForAddress' },
-      extra: { waitedMs: Date.now() - start },
-    });
-  } catch {
-    /* sentry no-op in dev */
-  }
-  throw err;
 }
 
 /**
@@ -185,17 +125,13 @@ export function buildSiweConfig() {
     // EIP-4361 message body — the backend matches the same template so the
     // signature verifies on the server side.
     createMessage: ({ address, ...args }) => formatMessage(args, address),
-    // Backend binds the nonce to a specific address (security #5). AppKit
-    // calls this with the connected `address` as an argument — prefer it
-    // over reading wagmi state, because on a fast WalletConnect connect
-    // AppKit has the address before `syncFromWagmi`/`getAccount` settles
-    // (race observed on mobile). Fall back to live wagmi state for
-    // belt-and-braces.
-    getNonce: async (address) => {
+    // Backend issues address-less nonces — the WalletConnect SIWE driver
+    // calls `getNonce` *before* pairing completes, when no address exists.
+    // Signer binding is enforced at verify-time via EIP-191 recovery + the
+    // `parsed.address` match in `shared.siwe.verify_message`.
+    getNonce: async () => {
       try {
-        const addr =
-          typeof address === 'string' && address ? address.toLowerCase() : await waitForAddress();
-        const resp = await getAuthNonce(addr);
+        const resp = await getAuthNonce();
         const nonce = resp?.nonce;
         if (typeof nonce !== 'string' || !nonce) {
           throw new Error('SIWE: malformed /auth/nonce response');
@@ -204,7 +140,7 @@ export function buildSiweConfig() {
       } catch (err) {
         // AppKit swallows the throw into its modal UI and our Sentry global
         // handler never sees it. Capture explicitly so we can debug what's
-        // actually failing in prod (no-connected-wallet vs nonce 5xx etc).
+        // actually failing in prod (network blip vs 5xx etc).
         try {
           Sentry.captureException(err, { tags: { component: 'siwe-config', step: 'getNonce' } });
         } catch {

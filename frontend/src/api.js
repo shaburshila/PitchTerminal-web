@@ -179,23 +179,32 @@ export function getPosition(token) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * POST /auth/nonce — one-shot SIWE nonce bound to `address`. See api-spec §2.1.
+ * POST /auth/nonce — one-shot SIWE nonce. See api-spec §2.1.
  *
- * Security #5: the server stores the address next to the issued nonce and
- * `/auth/verify` rejects any SIWE message whose signer differs. The address
- * must be 0x-prefixed; the server lowercases server-side, but we lowercase
- * here too for consistency with the rest of the wire format.
+ * Address-less by design: AppKit / WalletConnect SIWE drivers invoke
+ * `getNonce` *before* wallet pairing completes, so the caller has no address
+ * to declare at issue time. The server now issues nonces without an address
+ * binding and enforces signer-binding at /auth/verify via EIP-191 recovery.
  *
- * @param {string} address 0x-prefixed 42-char wallet address.
+ * The optional `address` arg is accepted for backward compatibility — if
+ * passed it is validated for shape and forwarded; the server ignores it but
+ * we keep validation so a caller typo surfaces here rather than at /verify.
+ *
+ * @param {string} [address] Optional 0x-prefixed 42-char wallet address.
  */
 export function getAuthNonce(address) {
-  if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
-    throw new Error('getAuthNonce: address must be a 0x-prefixed 42-char hex string');
+  /** @type {Record<string, string> | undefined} */
+  let body;
+  if (address !== undefined && address !== null) {
+    if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      throw new Error('getAuthNonce: address (when provided) must be a 0x-prefixed 42-char hex');
+    }
+    body = { address: address.toLowerCase() };
   }
   return apiFetch('/auth/nonce', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address: address.toLowerCase() }),
+    body: body ? JSON.stringify(body) : '{}',
   });
 }
 

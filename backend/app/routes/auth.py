@@ -2,12 +2,13 @@
 
 Per docs/api-spec.md §2:
 
-* ``POST /api/v1/auth/nonce``   — issue a single-use SIWE nonce bound to the
-  caller-declared ``address`` (rate 30/min/IP). Security #5: the body MUST
-  contain ``{"address": "0x..."}`` — the issued nonce is only redeemable by
-  a SIWE message signed for that exact address. This defeats the
-  pre-harvesting attack where an attacker accumulates nonces and re-uses
-  them in a phishing flow against a different victim.
+* ``POST /api/v1/auth/nonce``   — issue a single-use SIWE nonce
+  (rate 30/min/IP). Address-less: AppKit / WalletConnect SIWE drivers call
+  ``getNonce`` *before* wallet pairing completes, so no address is known at
+  issue time. The signer is bound at verify-time via EIP-191 recovery + the
+  ``parsed.address`` match in :func:`shared.siwe.verify_message`. The body
+  may be empty or omitted; an optional ``{"address": "0x..."}`` is accepted
+  for backward compatibility but ignored (validated for shape if present).
 * ``POST /api/v1/auth/verify``  — verify SIWE message + signature, set
   ``pt_session`` cookie (rate 10/min/IP).
 * ``POST /api/v1/auth/logout``  — clear ``pt_session`` cookie (no rate-limit;
@@ -60,33 +61,34 @@ _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 @bp.post("/api/v1/auth/nonce")
 @limiter.limit("30 per minute")
 def post_nonce() -> Any:
-    """Issue a fresh SIWE nonce bound to the caller-declared ``address``.
+    """Issue a fresh SIWE nonce.
 
-    Body per §2.1: ``{ "address": "0x..." }``.
+    Body: empty / omitted (preferred), or an optional
+    ``{"address": "0x..."}`` for backward compatibility. The address, if
+    present, is validated for shape but ignored — AppKit/WC drivers cannot
+    know the address until pairing completes (which happens *after*
+    ``getNonce``). Address binding is enforced at verify-time via EIP-191
+    recovery + the ``parsed.address`` match in
+    :func:`shared.siwe.verify_message`.
+
     Response: ``{ "nonce", "issuedAt", "expiresAt" }``. TTL 5 minutes.
-
-    Security #5: the nonce is only redeemable by a SIWE message whose
-    ``address`` field matches the one supplied here. An attacker who
-    pre-harvests nonces (e.g. by spamming this endpoint) cannot redeem them
-    on behalf of a different victim because :func:`shared.siwe._consume_nonce_atomic`
-    matches on ``(nonce, address)``.
     """
 
     payload = request.get_json(silent=True) or {}
     address = payload.get("address")
 
-    if not isinstance(address, str) or not _ADDRESS_RE.match(address):
+    # Backward compat: if a caller still sends an address, validate its
+    # shape (so we don't silently accept garbage and confuse callers), but
+    # do NOT bind the nonce to it.
+    if address is not None and (not isinstance(address, str) or not _ADDRESS_RE.match(address)):
         abort_with_problem(
             code="validation.bad_request",
             title="Bad Request",
             status=400,
-            detail="Body must contain a valid 0x-prefixed 40-hex 'address' field",
+            detail="Optional 'address' field, when present, must be 0x-prefixed 40-hex",
         )
 
-    assert isinstance(address, str)  # for mypy
-    address_lower = address.lower()
-
-    nonce = make_nonce(address_lower)
+    nonce = make_nonce()
     issued_at = int(time.time())
     return jsonify(
         {
