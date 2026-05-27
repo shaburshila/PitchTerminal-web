@@ -119,17 +119,24 @@ jobs:
       - name: Setup SSH key for rsync
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_HOST_RAW: ${{ secrets.VPS_HOST }}
+          VPS_PORT_RAW: ${{ secrets.VPS_PORT }}
         run: |
+          # Тримим secrets — GitHub UI иногда вставляет trailing newline/space
+          # из буфера обмена, ssh выдаёт "hostname contains invalid characters"
+          # на raw $VPS_HOST. appleboy/ssh-action делает это сам внутри;
+          # для shell ssh приходится явно.
+          VPS_HOST=$(printf '%s' "$VPS_HOST_RAW" | tr -d '[:space:]')
+          VPS_PORT=$(printf '%s' "$VPS_PORT_RAW" | tr -d '[:space:]')
+          echo "VPS_HOST=$VPS_HOST" >> "$GITHUB_ENV"
+          echo "VPS_PORT=$VPS_PORT" >> "$GITHUB_ENV"
+
           mkdir -p ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           # ssh-keyscan: явно перечисляем типы ключей (-t) — без этого на
           # некоторых хостах keyscan возвращает пусто. -T 10 ставит timeout.
           # НЕ глотаем stderr — увидим в логе если keyscan фейлится.
-          # Verify: если known_hosts пустой — fail step с ясным сообщением,
-          # иначе следующий step упадёт криптично "Host key verification failed".
           ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 -p "$VPS_PORT" "$VPS_HOST" \
             >> ~/.ssh/known_hosts
           if ! grep -q "$VPS_HOST" ~/.ssh/known_hosts; then
@@ -143,10 +150,8 @@ jobs:
       # сработает (без бэкапа rollback откатил бы только backend, а bundle
       # остался бы новый = mismatch). `cp -al` мгновенный, не дублирует диск.
       # На first-time deploy frontend-dist может не существовать → `|| true`.
+      # VPS_HOST/VPS_PORT приходят из $GITHUB_ENV (уже триммированы выше).
       - name: Backup current frontend dist on VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
           ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" \
             -o StrictHostKeyChecking=accept-new \
@@ -156,9 +161,6 @@ jobs:
              cp -al frontend-dist frontend-dist.bak 2>/dev/null || true'
 
       - name: Rsync frontend dist to VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
           rsync -az --delete --delay-updates \
             -e "ssh -i ~/.ssh/deploy_key -p $VPS_PORT -o StrictHostKeyChecking=accept-new" \
