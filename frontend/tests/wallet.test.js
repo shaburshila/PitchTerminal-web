@@ -78,6 +78,15 @@ vi.mock('@reown/appkit-adapter-wagmi', () => ({
   }),
 }));
 
+// @reown/appkit-siwe is imported by `src/siwe-config.js` (which `wallet.js`
+// pulls in at module-eval time). The real module touches WC + crypto deps
+// that aren't worth dragging into the happy-dom sandbox — stub the two named
+// exports the wallet path uses.
+vi.mock('@reown/appkit-siwe', () => ({
+  createSIWEConfig: vi.fn((opts) => ({ __siwe: true, opts })),
+  formatMessage: vi.fn((args, address) => `siwe-msg:${address}:${JSON.stringify(args)}`),
+}));
+
 // Import SUT AFTER mocks so they take effect.
 const wallet = await import('../src/wallet.js');
 

@@ -20,6 +20,7 @@ vi.mock('../src/wallet.js', () => ({
     isConnected: false,
     connectorId: null,
   })),
+  setSiweHooks: vi.fn(),
 }));
 
 vi.mock('../src/api.js', () => {
@@ -39,10 +40,6 @@ vi.mock('../src/api.js', () => {
   };
 });
 
-vi.mock('../src/ui/signin-modal.js', () => ({
-  showSignInModal: vi.fn(),
-}));
-
 vi.mock('../src/access-store.js', () => ({
   set: vi.fn(),
 }));
@@ -56,7 +53,6 @@ vi.mock('../src/components/bottom/index.js', () => ({ mountBottomTabs: vi.fn() }
 vi.mock('../src/trade-panel.js', () => ({ mountTradePanel: vi.fn() }));
 vi.mock('../src/sse.js', () => ({ openStream: vi.fn() }));
 vi.mock('../src/ui/wallet-chip.js', () => ({ mountWalletChip: vi.fn() }));
-vi.mock('../src/siwe.js', () => ({ ensureSignedIn: vi.fn() }));
 vi.mock('../src/referral.js', () => ({ bootstrapReferral: vi.fn(async () => {}) }));
 vi.mock('../src/config-store.js', () => ({ merge: vi.fn() }));
 vi.mock('../src/profile.js', () => ({ mountProfile: vi.fn() }));
@@ -68,7 +64,6 @@ vi.mock('../src/components/header-actions.js', () => ({ mountHeaderActions: vi.f
 
 const accessStoreMock = await import('../src/access-store.js');
 const apiMock = await import('../src/api.js');
-const signinMock = await import('../src/ui/signin-modal.js');
 const {
   createAccountChangeHandler,
   weiToWhole,
@@ -92,10 +87,12 @@ function makeBanner() {
   return { refresh: vi.fn(async () => {}) };
 }
 
-describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
-  it('synchronously force-locks the access store when wallet switches while the SIWE modal is open', async () => {
-    // /access throws 401 for wallet-A so the SIWE modal opens and modalOpen
-    // stays true (we never resolve onSuccess/onCancel).
+describe('createAccountChangeHandler — AppKit-managed SIWE', () => {
+  it('publishes connecting on a fresh wallet connect and never opens a custom signin modal', async () => {
+    // /access throws 401 for wallet-A — under the new flow there is no
+    // signin-modal popup; AppKit handles the prompt inside its own modal,
+    // and we just keep the access-store at 'connecting' until the
+    // markSignedIn() hook fires.
     apiMock.getAccess.mockImplementation(async () => {
       const e = new apiMock.ApiError('unauthorized', 401);
       throw e;
@@ -103,44 +100,17 @@ describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
     const banner = makeBanner();
     const handler = createAccountChangeHandler({ accessBanner: banner });
 
-    // Wallet-A connects.
     handler(connected(WALLET_A));
-    // Drain microtasks so getAccess() → catch → showSignInModal runs.
     for (let i = 0; i < 10; i++) await Promise.resolve();
-    expect(signinMock.showSignInModal).toHaveBeenCalledTimes(1);
-    // setAccessState('connecting') was called once on the initial connect
-    // (wallet-switch branch — mobile race fix, replaces the previous
-    // 'unknown' write so soft-locks render a loading placeholder, not the
-    // upsell, during the SIWE round-trip).
     expect(accessStoreMock.set).toHaveBeenCalledWith('connecting');
-    const initialConnectingCalls = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'connecting',
-    ).length;
-
-    // SIWE modal stays open (we never invoke onSuccess/onCancel). Now wallet-B
-    // arrives mid-flight. The handler MUST synchronously publish 'unknown' so
-    // any premium UI bound to access-store flips to lock before any await.
-    // (The mid-modal switch branch still uses 'unknown' because the prior
-    // wallet's SIWE attempt is being abandoned — semantically different from
-    // a fresh connect.)
-    handler(connected(WALLET_B));
-    const afterSwitchUnknownCalls = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'unknown',
-    ).length;
-    expect(afterSwitchUnknownCalls).toBe(1);
-    // 'connecting' count is unchanged — the mid-modal branch does NOT
-    // republish 'connecting' (the existing SIWE modal is still tied to
-    // wallet-A; until it resolves we keep the UI synchronously locked).
-    const afterSwitchConnectingCalls = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'connecting',
-    ).length;
-    expect(afterSwitchConnectingCalls).toBe(initialConnectingCalls);
-    // And we must NOT start a second SIWE modal — modalOpen guard still wins.
-    expect(signinMock.showSignInModal).toHaveBeenCalledTimes(1);
+    // No 'anon' / 'free' downgrade on the 401 branch — the UI stays in
+    // loading-state until AppKit drives SIWE to completion or the user
+    // disconnects.
+    expect(accessStoreMock.set).not.toHaveBeenCalledWith('anon');
   });
 
-  it('does NOT republish connecting/unknown when the same address re-fires after a clean sign-in (no flicker)', async () => {
-    // /access succeeds → handler sets lastSignedInAddress and modalOpen=false.
+  it('markSignedIn() refreshes the banner and dedupes a subsequent same-address re-fire', async () => {
+    // /access succeeds (cookie alive) — initial path resolves cleanly.
     apiMock.getAccess.mockResolvedValue({ hasAccess: true, source: 'paid' });
     const banner = makeBanner();
     const handler = createAccountChangeHandler({ accessBanner: banner });
@@ -150,21 +120,43 @@ describe('createAccountChangeHandler — rapid double-switch (H-1)', () => {
     const baselineConnecting = accessStoreMock.set.mock.calls.filter(
       ([s]) => s === 'connecting',
     ).length;
-    const baselineUnknowns = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'unknown',
-    ).length;
 
-    // Same wallet-A re-fires (e.g. chain switch). address === lastSignedInAddress
-    // — must NOT call setAccessState again (no premium → loading flicker).
+    // Same wallet re-fires (chain switch) — must be deduped, no extra
+    // setAccessState call. The clean-cookie path already wrote
+    // lastSignedInAddress inside the .then() above.
     handler(connected(WALLET_A));
     const afterConnecting = accessStoreMock.set.mock.calls.filter(
       ([s]) => s === 'connecting',
     ).length;
-    const afterUnknowns = accessStoreMock.set.mock.calls.filter(
-      ([s]) => s === 'unknown',
-    ).length;
     expect(afterConnecting).toBe(baselineConnecting);
-    expect(afterUnknowns).toBe(baselineUnknowns);
+  });
+
+  it('markSignedIn() promotes a 401-path connection so a re-fire is a no-op', async () => {
+    // /access throws 401 the first time (forcing the 'connecting' path),
+    // then AppKit's onSignIn fires markSignedIn(wallet-A). Subsequent
+    // account-change with the same address must not republish 'connecting'.
+    apiMock.getAccess.mockImplementation(async () => {
+      const e = new apiMock.ApiError('unauthorized', 401);
+      throw e;
+    });
+    const banner = makeBanner();
+    const handler = createAccountChangeHandler({ accessBanner: banner });
+
+    handler(connected(WALLET_A));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const connectingBefore = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
+    ).length;
+    expect(connectingBefore).toBeGreaterThanOrEqual(1);
+
+    // AppKit signed-in — promote the handler.
+    handler.markSignedIn(WALLET_A);
+    // Same wallet re-fires.
+    handler(connected(WALLET_A));
+    const connectingAfter = accessStoreMock.set.mock.calls.filter(
+      ([s]) => s === 'connecting',
+    ).length;
+    expect(connectingAfter).toBe(connectingBefore);
   });
 });
 

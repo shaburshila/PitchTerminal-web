@@ -49,6 +49,11 @@ import { createPublicClient, http } from 'viem';
 // wagmi `Config` everything else in the app still consumes.
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
+// AppKit-managed SIWE — replaces the prior `signin-modal.js` + `siwe.js`
+// 2-step flow. The signing prompt is now rendered inside the AppKit modal
+// immediately after the wallet picker resolves, so wallets like Rabby don't
+// re-ask for "Authorize Application" between connect and personal_sign.
+import { buildSiweConfig, setSiweHooks } from './siwe-config.js';
 
 export const SUPPORTED_CHAINS = Object.freeze([base, baseSepolia]);
 export const BASE_CHAIN_ID = base.id; // 8453
@@ -302,11 +307,24 @@ function buildAppKit(projectId) {
     },
   });
 
+  // Wire the SIWE-config hooks BEFORE `createAppKit` — AppKit invokes
+  // `getSession()` synchronously on init to figure out whether to surface a
+  // sign-in prompt, and that callback needs a working `getWagmiConfig`
+  // thunk. We pass a thunk (rather than the live `wagmiAdapter.wagmiConfig`)
+  // because the SIWE module is also imported by `main.js` for the bootstrap
+  // hooks; using a thunk keeps both call sites pointing at the same config
+  // instance even if `_resetForTests` rebuilds the adapter.
+  setSiweHooks({
+    getWagmiConfig: () => wagmiAdapter.wagmiConfig,
+  });
+  const siweConfig = buildSiweConfig();
+
   const appKit = createAppKit({
     adapters: [wagmiAdapter],
     networks: [base, baseSepolia],
     defaultNetwork: base,
     projectId,
+    siweConfig,
     metadata: {
       name: 'PitchTerminal',
       description: 'PitchTerminal — pitchwc.app trading terminal',
@@ -577,3 +595,9 @@ export { createPublicClient };
 // Back-compat re-exports — older call sites used these wagmi actions through
 // the wallet module. Keeping them avoids touching unrelated files.
 export { connect, disconnect, switchChain, getConnections, reconnect };
+
+// Re-export so the bootstrap can register the onSignIn/onSignOut hooks
+// against the SAME siwe-config module instance the AppKit modal is bound
+// to (vitest's module registry is per-import-path; re-exporting via
+// wallet.js keeps `main.js`'s import graph aligned with the AppKit init).
+export { setSiweHooks };

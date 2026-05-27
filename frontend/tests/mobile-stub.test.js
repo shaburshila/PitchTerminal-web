@@ -173,11 +173,11 @@ describe('bootstrap integration — mobile viewport mounts mobile layout', () =>
     vi.doMock('../src/trade-panel.js', () => ({ mountTradePanel: vi.fn() }));
     vi.doMock('../src/sse.js', () => ({ openStream: walletInit }));
     vi.doMock('../src/ui/wallet-chip.js', () => ({ mountWalletChip: vi.fn() }));
-    vi.doMock('../src/siwe.js', () => ({ ensureSignedIn: vi.fn() }));
     vi.doMock('../src/wallet.js', () => ({
       onAccountChange: vi.fn(),
       getAccount: vi.fn(() => ({ address: null, isConnected: false })),
       tryAutoReconnect: vi.fn(async () => undefined),
+      setSiweHooks: vi.fn(),
     }));
     vi.doMock('../src/api.js', () => ({
       ApiError: class extends Error {},
@@ -194,7 +194,6 @@ describe('bootstrap integration — mobile viewport mounts mobile layout', () =>
     vi.doMock('../src/access.js', () => ({ mountAccessBanner: vi.fn() }));
     vi.doMock('../src/soft-lock.js', () => ({ mountSoftLock: vi.fn() }));
     vi.doMock('../src/ui/toast.js', () => ({ showToast: vi.fn() }));
-    vi.doMock('../src/ui/signin-modal.js', () => ({ showSignInModal: vi.fn() }));
     vi.doMock('../src/resizable.js', () => ({ mountResizable: vi.fn() }));
     vi.doMock('../src/components/header-actions.js', () => ({ mountHeaderActions: vi.fn() }));
     vi.doMock('../src/styles.css', () => ({}), { virtual: true });

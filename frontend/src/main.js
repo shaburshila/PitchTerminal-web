@@ -52,9 +52,7 @@ import { mountBottomTabs } from './components/bottom/index.js';
 import { mountTradePanel } from './trade-panel.js';
 import { openStream } from './sse.js';
 import { mountWalletChip } from './ui/wallet-chip.js';
-import { showSignInModal } from './ui/signin-modal.js';
-import { ensureSignedIn } from './siwe.js';
-import { onAccountChange, getAccount, tryAutoReconnect } from './wallet.js';
+import { onAccountChange, getAccount, tryAutoReconnect, setSiweHooks } from './wallet.js';
 import { getConfig, getTokens, getPortfolio, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
@@ -243,24 +241,38 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
   const _setAccessState = deps.setAccessState ?? setAccessState;
   const _logout = deps.logout ?? logout;
   const _getAccess = deps.getAccess ?? getAccess;
-  const _showSignInModal = deps.showSignInModal ?? showSignInModal;
   const _ApiError = deps.ApiError ?? ApiError;
 
   let lastSignedInAddress = null;
-  let modalOpen = false;
-  return (acc) => {
-    // Disconnect → release any session and lock UI.
+  /**
+   * Called by the AppKit `siweConfig.onSignIn` hook after the user signs in.
+   * Marks the address as the last successfully-signed-in wallet (so a
+   * subsequent same-wallet account-change re-fire is treated as a no-op
+   * instead of re-running the `/access` round-trip) and refreshes the
+   * pay-banner state. Bootstrap attaches this as `handler.markSignedIn`.
+   */
+  function markSignedIn(address) {
+    if (typeof address === 'string' && address) {
+      lastSignedInAddress = address.toLowerCase();
+    }
+    accessBanner.refresh().catch(() => {
+      /* surfaced via state */
+    });
+  }
+  const handler = (acc) => {
+    // Disconnect → lock UI. We do NOT POST /auth/logout from here anymore:
+    // AppKit's `signOutOnDisconnect: true` plus its `signOut` callback in
+    // siwe-config.js owns that round-trip, and its `onSignOut` hook flips
+    // the access-store to 'anon' synchronously. Calling _logout() here
+    // produced a double POST and a `'unknown' → 'anon'` flicker (AppKit's
+    // onSignOut fires `setAccessState('anon')` either before or after the
+    // 'unknown' set below, depending on microtask ordering — race).
     if (!acc.isConnected || !acc.address) {
-      const hadPriorSession = lastSignedInAddress !== null;
       lastSignedInAddress = null;
-      // refresh() sees `addr === null` and sets state synchronously to 'anon';
-      // we still pre-set 'unknown' so soft-locks flip BEFORE the microtask.
-      _setAccessState('unknown');
-      if (hadPriorSession) {
-        _logout().catch(() => {
-          /* best-effort; cookie may expire anyway */
-        });
-      }
+      // Set 'anon' directly (symmetric with onSignOut) so subscribers see a
+      // single, terminal state transition. accessBanner.refresh() will
+      // re-publish 'anon' as well, but that's a no-op overwrite.
+      _setAccessState('anon');
       accessBanner.refresh().catch(() => {
         /* surfaced via state */
       });
@@ -268,15 +280,7 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
     }
     // Same address re-fired (e.g. chain switch reuses the connection). Just
     // refresh — the existing session is still valid and the UI shouldn't flicker.
-    if (acc.address === lastSignedInAddress || modalOpen) {
-      // Rapid double-switch guard (H-1): if the SIWE modal is already open for
-      // wallet-A and the user switches to wallet-B before it closes, we still
-      // bail out of the full re-auth flow (modalOpen is true) but the UI would
-      // otherwise keep wallet-A's `'premium'` state until the modal resolves.
-      // Synchronously force-lock here whenever the address actually changed.
-      if (acc.address !== lastSignedInAddress) {
-        _setAccessState('unknown');
-      }
+    if (acc.address === lastSignedInAddress) {
       accessBanner.refresh().catch(() => {
         /* surfaced via state */
       });
@@ -295,9 +299,18 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
     // personal_sign popup. 'connecting' is treated as locked for the gate
     // predicate (same as 'unknown'/'anon') but lets subscribers render a
     // loading placeholder instead of the upsell. See access-store.js docs.
+    //
+    // AppKit-managed SIWE (2026-05-27): the prior 2-step flow opened our own
+    // signin-modal on 401 here. AppKit now drives SIWE inside its own modal
+    // immediately after the wallet picker — so the 401 path just keeps the
+    // UI at 'connecting' and waits for the `onSignIn` hook (registered by
+    // bootstrap) to flip the store to 'premium'/'free' after the user
+    // signs. If the user cancels SIWE inside the AppKit modal, AppKit
+    // tears the connection down → onAccountChange fires with no address →
+    // the disconnect branch above publishes 'unknown' → refresh() resolves
+    // to 'anon'.
     _setAccessState('connecting');
     const swap = lastSignedInAddress !== null && lastSignedInAddress !== acc.address;
-    modalOpen = true;
     const proceed = swap
       ? _logout().catch(() => {
           /* server-side cookie clear is best-effort; if it 5xxs the
@@ -310,7 +323,6 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
     proceed.then(() =>
       _getAccess()
         .then(() => {
-          modalOpen = false;
           lastSignedInAddress = acc.address;
           // Banner refresh re-publishes 'premium'/'free' from /access,
           // overwriting the transient 'connecting' we set above.
@@ -320,7 +332,6 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
         })
         .catch((err) => {
           if (!(err instanceof _ApiError) || err.status !== 401) {
-            modalOpen = false;
             // Non-401 (5xx / network): let banner.refresh figure it out.
             // It may republish 'anon' on transient error — acceptable, the
             // next user action will retry. State is NOT left at 'connecting'
@@ -330,29 +341,15 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
             });
             return;
           }
-          // 401 → SIWE required. KEEP state at 'connecting' while the modal
-          // is open so soft-locks show the loading placeholder, NOT the
-          // upsell. Only flip to 'anon' if the user actively cancels SIWE
-          // (declined to sign). On success we refresh() which republishes
-          // 'premium'/'free' authoritatively.
-          _showSignInModal({
-            onSuccess: () => {
-              modalOpen = false;
-              lastSignedInAddress = acc.address;
-              accessBanner.refresh().catch(() => {
-                /* surfaced via state */
-              });
-            },
-            onCancel: () => {
-              modalOpen = false;
-              // User declined SIWE — they remain anonymous from the backend's
-              // POV. Publish 'anon' so the upsell shows again.
-              _setAccessState('anon');
-            },
-          });
+          // 401 → SIWE required. AppKit owns the prompt now; we just leave
+          // the access-store at 'connecting'. The `onSignIn` hook wired by
+          // bootstrap will mark `lastSignedInAddress` + call
+          // `accessBanner.refresh()` once the user signs.
         }),
     );
   };
+  handler.markSignedIn = markSignedIn;
+  return handler;
 }
 
 /**
@@ -498,7 +495,18 @@ async function bootstrapMobile(root) {
           openOrReopenStream();
         },
       });
-      accountUnsubs.push(onAccountChange(createAccountChangeHandler({ accessBanner })));
+      const mobileAccountHandler = createAccountChangeHandler({ accessBanner });
+      accountUnsubs.push(onAccountChange(mobileAccountHandler));
+      // Wire AppKit-managed SIWE callbacks. AppKit fires `onSignIn` after the
+      // user completes the signing prompt inside its modal — we use that to
+      // promote 'connecting' → 'premium'/'free' via banner.refresh(). On
+      // `onSignOut` we let createAccountChangeHandler's disconnect branch do
+      // the cleanup (signOutOnDisconnect in siwe-config tears the wallet
+      // down too).
+      setSiweHooks({
+        onSignIn: (info) => mobileAccountHandler.markSignedIn(info?.address ?? null),
+        onSignOut: () => accessBanner.refresh().catch(() => {}),
+      });
 
       // Silent re-hydrate for wagmi-injected sessions (MetaMask / Coinbase
       // Wallet in-app browsers). WC re-hydrate is intentionally NOT here —
@@ -1269,11 +1277,18 @@ async function bootstrap() {
 
   // F0.11: after a successful wallet connect, ensure we have a valid backend
   // session. If `/access` returns 200 the cookie is still valid (refresh /
-  // re-connect during 72h TTL) and we skip the SIWE popup; on 401 we open the
-  // modal. We don't auto-popup on any other status (5xx / network) — let the
-  // user retry via wallet menu when backend recovers. See
-  // `createAccountChangeHandler` above for the full state-machine docs.
-  onAccountChange(createAccountChangeHandler({ accessBanner }));
+  // re-connect during 72h TTL) and we skip the SIWE popup; on 401 we leave
+  // the access store at 'connecting' and let AppKit-managed SIWE drive the
+  // signing prompt (single wallet popup — see `siwe-config.js`). The
+  // `setSiweHooks` call below tells AppKit's SIWE module how to mark the
+  // signed-in address back into createAccountChangeHandler's closure so a
+  // subsequent same-wallet re-fire is a no-op.
+  const desktopAccountHandler = createAccountChangeHandler({ accessBanner });
+  onAccountChange(desktopAccountHandler);
+  setSiweHooks({
+    onSignIn: (info) => desktopAccountHandler.markSignedIn(info?.address ?? null),
+    onSignOut: () => accessBanner.refresh().catch(() => {}),
+  });
   // Phase 1.5 batch 3 + Wave 2B: refresh position dots whenever the wallet
   // flips. Disconnect → /portfolio 401 → positionByAddr cleared, dots vanish.
   // Connect → /portfolio resolves with the new wallet's country + player holdings.
@@ -1294,9 +1309,6 @@ async function bootstrap() {
   // Kick positions once on boot so a returning user (cookie still valid)
   // sees their dots on first paint instead of after the next wallet event.
   refreshPositions();
-  // Suppress unused-import warning — `ensureSignedIn` is re-exported here for
-  // ad-hoc retry from other UI surfaces (e.g. premium-locked action buttons).
-  void ensureSignedIn;
 
   // Security fix #6 — stale WalletConnect session cleanup. Await the injected
   // wallet's silent reconnect (idempotent w.r.t. the parallel call from

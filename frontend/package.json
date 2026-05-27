@@ -19,6 +19,8 @@
   "dependencies": {
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-wagmi": "^1.8.20",
+    "@reown/appkit-siwe": "^1.8.20",
+    "siwe": "^2.3.2",
     "@sentry/browser": "^10.53.1",
     "@wagmi/core": "^2.21.2",
     "lightweight-charts": "4.1.3",
