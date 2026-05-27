@@ -108,6 +108,31 @@ function currentAddressOrThrow() {
 }
 
 /**
+ * Wait until wagmi has an address, polling every 100ms up to `maxMs`.
+ *
+ * AppKit on mobile WalletConnect triggers SIWE callbacks immediately after
+ * its modal advances past the wallet picker, sometimes BEFORE our
+ * `syncFromWagmi()` (which awaits `connector.getProvider()`) has written the
+ * address into wagmi state. The observed symptom is an error banner
+ * "SIWE: no connected wallet" at the top of the AppKit modal while the user
+ * still sees the wallet picker. Polling the wagmi state for a few seconds
+ * smooths this out without changing the user-visible flow.
+ */
+async function waitForAddress(maxMs = 3000) {
+  const start = Date.now();
+  let lastErr;
+  while (Date.now() - start < maxMs) {
+    try {
+      return currentAddressOrThrow();
+    } catch (err) {
+      lastErr = err;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastErr ?? new Error('SIWE: no connected wallet (timed out)');
+}
+
+/**
  * Build the SIWE config object that gets passed to `createAppKit({ siweConfig })`.
  * Synchronous so `wallet.js` can construct AppKit in one shot without making
  * the wallet bootstrap async (callers like `access.js`/`trade-panel.js`
@@ -143,7 +168,7 @@ export function buildSiweConfig() {
     // belt-and-braces.
     getNonce: async (address) => {
       const addr =
-        typeof address === 'string' && address ? address.toLowerCase() : currentAddressOrThrow();
+        typeof address === 'string' && address ? address.toLowerCase() : await waitForAddress();
       const resp = await getAuthNonce(addr);
       const nonce = resp?.nonce;
       if (typeof nonce !== 'string' || !nonce) {
