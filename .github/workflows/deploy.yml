@@ -15,6 +15,13 @@ name: Deploy
 # Деплоит HEAD ветки as-is. Оператор обязан вручную убедиться, что последний
 # CI run на этой ветке зелёный, прежде чем запускать dispatch (см. runbook §12).
 # Для защиты от случайного bypass — input `confirm_no_ci_check` (must be true).
+#
+# Архитектура (2026-05-27 — после appkit-oom-incident):
+# Frontend build (vite + pnpm) выполняется НА RUNNER'е (16GB RAM, бесплатно),
+# а не на 2GB VPS. Готовый dist/ rsync'ится на VPS в frontend-dist/, оттуда
+# Caddy serves через volume mount (см. docker-compose.prod.yml). На VPS
+# собираются только backend (api/worker) и кастомный Caddy с rate_limit —
+# это лёгкие сборки, в RAM укладываются.
 
 on:
   workflow_run:
@@ -40,7 +47,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     # workflow_run триггерится при ЛЮБОМ завершении CI (success/failure/cancelled).
     # Деплоим только на success. Для workflow_dispatch — github.event.workflow_run
     # отсутствует, разрешаем явно, НО требуем явного подтверждения
@@ -51,10 +58,101 @@ jobs:
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
+    env:
+      # workflow_run даёт head_sha коммита, который триггернул CI.
+      # workflow_dispatch — github.sha = HEAD ветки на которой запущен.
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - name: Checkout (for reference only)
+      # ── Checkout того SHA, который деплоим ─────────────────────────────
+      # ref важен: actions/checkout@v4 по дефолту чекаутит ветку workflow,
+      # но для workflow_run это будет main HEAD, который мог уйти вперёд за
+      # время CI. Нам нужен ровно тот коммит, который прошёл CI.
+      - name: Checkout target SHA
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      # ── Build frontend на runner'е ──────────────────────────────────────
+      # 16GB RAM ubuntu-latest — vite build с AppKit + minification занимает
+      # ~30-60 секунд, никаких OOM-рисков. Раньше build делался на VPS внутри
+      # Caddy multi-stage Dockerfile и убивал 2GB машину (см. memory
+      # project-appkit-oom-incident).
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend (vite)
+        working-directory: frontend
+        env:
+          # VITE_* инлайнятся в bundle на этапе build. Без этих env Sentry
+          # становится no-op (см. frontend/src/sentry.js). Version banner
+          # требует совпадения VITE_APP_VERSION с backend APP_VERSION
+          # (отдаётся через /api/v1/config.version).
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_ENVIRONMENT: production
+          VITE_APP_VERSION: ${{ github.event.workflow_run.head_sha || github.sha }}
+        # `pnpm build` = vite build → frontend/dist/. Используем короткий SHA
+        # (первые 7 символов) для VITE_APP_VERSION — соответствует тому, что
+        # backend получит через `git rev-parse --short HEAD` на VPS.
+        run: |
+          export VITE_APP_VERSION="${VITE_APP_VERSION:0:7}"
+          echo "Building with VITE_APP_VERSION=${VITE_APP_VERSION}"
+          pnpm build
+
+      # ── Upload dist/ на VPS через rsync over SSH ───────────────────────
+      # Atomic-ish: rsync с `--delete` заменяет содержимое frontend-dist/.
+      # Caddy file_server lazy-reads с диска, кеша нет, новые requests
+      # видят новый bundle сразу. Окно несогласованности (часть старых
+      # файлов / часть новых) — порядка десятков мс, в практике невидимо.
+      - name: Setup SSH key for rsync
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_HOST }} \
+            >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Бэкап текущей `frontend-dist/` через hardlink-копию ДО rsync'а —
+      # позволяет откатить frontend если health-check провалится и rollback.sh
+      # сработает (без бэкапа rollback откатил бы только backend, а bundle
+      # остался бы новый = mismatch). `cp -al` мгновенный, не дублирует диск.
+      # На first-time deploy frontend-dist может не существовать → `|| true`.
+      - name: Backup current frontend dist on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} \
+            -o StrictHostKeyChecking=yes \
+            deploy@${{ secrets.VPS_HOST }} \
+            'cd /home/deploy/pitchterminal && \
+             rm -rf frontend-dist.bak && \
+             cp -al frontend-dist frontend-dist.bak 2>/dev/null || true'
+
+      - name: Rsync frontend dist to VPS
+        run: |
+          rsync -az --delete --delay-updates \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=yes" \
+            frontend/dist/ \
+            deploy@${{ secrets.VPS_HOST }}:/home/deploy/pitchterminal/frontend-dist/
+
+      # ── Deploy backend / Caddy конфиг через SSH ────────────────────────
+      # Frontend больше не пересобирается на VPS — docker compose build
+      # перестроит только api/worker + Caddy (если её Dockerfile или
+      # Caddyfile.prod изменились). pt-caddy перезапускается всё равно,
+      # чтобы перечитать static (хотя read-only volume mount lazy-reads
+      # с диска, restart не критичен).
       - name: Deploy via SSH
         # Pinned to full commit SHA (v1.0.3) — third-party action имеет доступ
         # к VPS_SSH_KEY через `envs`. Тег может быть переписан при компрометации
@@ -68,14 +166,13 @@ jobs:
           username: deploy
           key: ${{ secrets.VPS_SSH_KEY }}
           # Таймаут на установку соединения и на выполнение команд.
+          # command_timeout 10m был достаточен пока build был лёгкий
+          # (без AppKit). Frontend ушёл на runner, на VPS остался только
+          # backend + Caddy — оба собираются за <60s. 10m с большим запасом.
           timeout: 30s
           command_timeout: 10m
           # `script_stop: true` — упасть на первой ошибке (set -e в стиле action).
           script_stop: true
-          # Передаём commit SHA, до которого нужно деплоить (и до которого
-          # откатываться при rollback). Используем head_sha из workflow_run,
-          # для workflow_dispatch — текущий github.sha (HEAD ветки, на которой
-          # запущен workflow).
           envs: DEPLOY_SHA
           script: |
             set -euo pipefail
@@ -91,44 +188,34 @@ jobs:
             git fetch origin main
             git reset --hard "${DEPLOY_SHA}"
 
-            # APP_VERSION — short git SHA. Прокидываем в compose как для
-            # backend (env api/worker → /config?.version), так и для frontend
-            # (build-arg → инлайнится в SPA bundle как VITE_APP_VERSION).
-            # Совпадение этих двух значений = единая версия деплоя; mismatch
-            # детектится фронтом и показывает "Update available" баннер.
+            # APP_VERSION — short git SHA. Прокидываем в backend env (api/worker
+            # → /config?.version). Frontend VITE_APP_VERSION уже инлайн'ен в
+            # bundle на runner-стадии — этот SHA должен с ним совпадать.
             export APP_VERSION="$(git rev-parse --short HEAD)"
             echo "APP_VERSION: ${APP_VERSION}"
 
             cd infra
 
-            # Образы Backend/worker/caddy собираются локально на VPS
-            # (см. docker-compose.yml — build: ../backend). pull нужен только
-            # для postgres:16-alpine.
+            # Только backend + Caddy. Frontend пришёл rsync'ом, в Dockerfile
+            # Caddy больше нет frontend-builder stage'а. pt-caddy build
+            # быстрый (~5-10s), api/worker — ~10-20s с cache'ем.
             docker compose --env-file ../.env \
               -f docker-compose.yml -f docker-compose.prod.yml pull postgres
             docker compose --env-file ../.env \
               -f docker-compose.yml -f docker-compose.prod.yml build
             # --remove-orphans: убрать контейнеры, которые остались от старых
             # compose-конфигов (например, переименованный/удалённый сервис).
-            # Без флага состояние стека может расходиться с compose-файлами.
             docker compose --env-file ../.env \
               -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
 
             # Cold-start пауза: миграции (api контейнер запускает alembic;
             # worker ждёт пока схема дойдёт до head — см. scripts/entrypoint.sh),
-            # healthcheck окно (start_period: 60s), Caddy ACME renewal.
-            # 60s = больше с запасом чем start_period, чтобы health-check
-            # уже успел дать первый зелёный сигнал до того как мы делаем
-            # docker exec curl ниже.
+            # healthcheck окно (start_period: 60s).
             echo "Waiting 60s for cold-start..."
             sleep 60
 
-            # Health check изнутри VPS — bypass'ит Caddy/TLS, проверяем
-            # api healthcheck endpoint. Каждая попытка — `docker exec curl` к
-            # api контейнеру (гарантирует что мы смотрим на свежий контейнер).
-            # Ретраи нужны потому что 60s sleep выше = граница start_period;
-            # медленная миграция или cold-start могут продлить становление
-            # healthy ещё на 30-40s сверх. 5 × 15s = 75s дополнительного запаса.
+            # Health check изнутри VPS — bypass'ит Caddy/TLS. 5 × 15s = 75s
+            # запаса сверх 60s sleep, на случай длинной миграции.
             HEALTH_OK=0
             for attempt in 1 2 3 4 5; do
               if docker exec pt-api curl -fsS --max-time 5 http://localhost:8000/api/v1/health > /dev/null 2>&1; then
@@ -154,5 +241,10 @@ jobs:
             if [ "${DEPLOYED_VERSION}" != "${APP_VERSION}" ]; then
               echo "::warning::/config.version='${DEPLOYED_VERSION}' != APP_VERSION='${APP_VERSION}' — version-check banner will not function correctly"
             fi
-        env:
-          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # ── Очистка SSH-ключа на runner'е ───────────────────────────────────
+      # Параноя: GitHub runner'ы эфемерные, всё равно убиваются после job'а,
+      # но явное удаление приватного ключа — defence-in-depth.
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

@@ -47,6 +47,27 @@ echo "[rollback] Checking out ${TARGET}..."
 # detached HEAD ok — мы откатываемся, не разрабатываем.
 git checkout --force "${TARGET}"
 
+# Frontend dist на VPS = rsync'нутый bundle с CI runner'а (см. deploy.yml).
+# Перед каждым rsync'ом deploy создаёт frontend-dist.bak/ (cp -al, hardlinks).
+# При rollback восстанавливаем bundle предыдущей версии — иначе backend
+# откатится, а frontend останется новый = mismatch. Если .bak отсутствует
+# (первый деплой / manual rollback без предыдущего deploy.yml run'а) —
+# warning без fail; такой rollback оставит mismatch который заметит
+# version-check banner до следующего deploy'а.
+if [[ -d frontend-dist.bak ]]; then
+  echo "[rollback] Restoring frontend-dist from .bak..."
+  rm -rf frontend-dist.broken
+  if [[ -d frontend-dist ]]; then
+    mv frontend-dist frontend-dist.broken
+  fi
+  mv frontend-dist.bak frontend-dist
+  # frontend-dist.broken оставлен для пост-инцидентного анализа.
+  # Очистится при следующем deploy'е (когда .bak ротируется).
+else
+  echo "[rollback] WARNING: frontend-dist.bak отсутствует — bundle НЕ откачен." >&2
+  echo "[rollback] Version banner может показать mismatch до следующего deploy'а." >&2
+fi
+
 cd infra
 
 echo "[rollback] Rebuilding and restarting stack..."

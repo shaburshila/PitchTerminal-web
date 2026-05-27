@@ -97,11 +97,10 @@ services:
 
   # ── Reverse proxy + SPA static ──────────────────────────────────────────
   # Кастомный Caddy с rate_limit (см. infra/caddy/Dockerfile + infra/Caddyfile).
-  # Статика фронта вшивается в образ через frontend-builder stage —
-  # docker compose build пересобирает SPA в воспроизводимой среде (Node 24
-  # + pnpm@9.15.4). Локальная разработка перекрывает /srv/frontend volume'ом
-  # в docker-compose.override.yml для hot-reload без полного rebuild'а.
-  # Context = repo root, чтобы frontend/ был доступен Dockerfile'у.
+  # Статика фронта НЕ вшивается в образ — собирается на CI runner и
+  # монтируется volume'ом в /srv/frontend (см. compose-overlays):
+  #   - prod: /home/deploy/pitchterminal/frontend-dist (deploy.yml rsync'ит)
+  #   - dev:  ../frontend/dist (override.yml; собирается локально pnpm build)
   # ВНИМАНИЕ: env_file НЕ пробрасывается — Caddy не должен иметь доступа к
   # JWT_SECRET / KEEPER_PRIVATE_KEY / TELEGRAM_WEBHOOK_SECRET. Если нужны
   # переменные для маршрутизации — добавлять явно через `environment:`.
@@ -109,12 +108,8 @@ services:
     build:
       context: ..
       dockerfile: infra/caddy/Dockerfile
-      args:
-        # Sentry DSN инлайнится в SPA-bundle на стадии `pnpm build` внутри
-        # frontend-builder. Пустое значение → Sentry no-op (см. sentry.js).
-        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
-        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
-        VITE_APP_VERSION: ${APP_VERSION:-dev}
+      # VITE_* build-args больше не нужны — frontend строится на CI runner,
+      # SPA-bundle монтируется volume'ом в /srv/frontend.
     image: pt-caddy:latest
     container_name: pt-caddy
     depends_on:

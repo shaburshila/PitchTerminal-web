@@ -23,6 +23,10 @@ services:
       - "443:443/udp"  # HTTP/3
     volumes:
       - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      # SPA-bundle собирается на CI runner и rsync'ится в эту директорию
+      # (см. .github/workflows/deploy.yml step "Rsync frontend dist to VPS").
+      # Read-only — контейнер не должен мутировать статику.
+      - ${FRONTEND_DIST_DIR:-/home/deploy/pitchterminal/frontend-dist}:/srv/frontend:ro
     environment:
       # Caddyfile.prod подставляет ${DOMAIN} в site-блок.
       DOMAIN: ${DOMAIN:?DOMAIN is required (e.g. pitchterminal.app)}
