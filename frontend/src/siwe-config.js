@@ -23,6 +23,7 @@
 
 import { getAccount } from '@wagmi/core';
 import { createSIWEConfig, formatMessage } from '@reown/appkit-siwe';
+import * as Sentry from '@sentry/browser';
 
 import {
   getAuthNonce,
@@ -79,6 +80,7 @@ let _hooks = {
   onSignIn: null,
   onSignOut: null,
   getWagmiConfig: null,
+  getAppKitAddress: null,
 };
 
 /**
@@ -93,43 +95,66 @@ export function setSiweHooks(hooks) {
   if (typeof hooks.onSignIn === 'function') _hooks.onSignIn = hooks.onSignIn;
   if (typeof hooks.onSignOut === 'function') _hooks.onSignOut = hooks.onSignOut;
   if (typeof hooks.getWagmiConfig === 'function') _hooks.getWagmiConfig = hooks.getWagmiConfig;
-}
-
-/** Return the currently-connected lowercase address, or throw. */
-function currentAddressOrThrow() {
-  if (typeof _hooks.getWagmiConfig !== 'function') {
-    throw new Error('SIWE: getWagmiConfig hook not wired');
-  }
-  const cfg = _hooks.getWagmiConfig();
-  const acc = getAccount(cfg);
-  const addr = acc?.address;
-  if (!addr) throw new Error('SIWE: no connected wallet');
-  return addr.toLowerCase();
+  if (typeof hooks.getAppKitAddress === 'function')
+    _hooks.getAppKitAddress = hooks.getAppKitAddress;
 }
 
 /**
- * Wait until wagmi has an address, polling every 100ms up to `maxMs`.
+ * Try every known source synchronously; return lowercase hex or null.
+ *
+ * Order: AppKit instance → wagmi state. AppKit's own state often lights up
+ * before wagmi's because our `syncFromWagmi()` awaits
+ * `connector.getProvider()` on the WC path (mobile pairing can take seconds).
+ */
+function readAddressBestEffort() {
+  if (typeof _hooks.getAppKitAddress === 'function') {
+    try {
+      const a = _hooks.getAppKitAddress();
+      if (typeof a === 'string' && a) return a.toLowerCase();
+    } catch {
+      /* fall through */
+    }
+  }
+  if (typeof _hooks.getWagmiConfig === 'function') {
+    try {
+      const cfg = _hooks.getWagmiConfig();
+      const acc = getAccount(cfg);
+      if (acc?.address) return acc.address.toLowerCase();
+    } catch {
+      /* fall through */
+    }
+  }
+  return null;
+}
+
+/**
+ * Poll address sources every 100ms up to `maxMs`. Report to Sentry on timeout
+ * so we can see in production how often we actually hit the ceiling and tune.
  *
  * AppKit on mobile WalletConnect triggers SIWE callbacks immediately after
  * its modal advances past the wallet picker, sometimes BEFORE our
- * `syncFromWagmi()` (which awaits `connector.getProvider()`) has written the
+ * `syncFromWagmi()` (which awaits `connector.getProvider()`) writes the
  * address into wagmi state. The observed symptom is an error banner
- * "SIWE: no connected wallet" at the top of the AppKit modal while the user
- * still sees the wallet picker. Polling the wagmi state for a few seconds
- * smooths this out without changing the user-visible flow.
+ * "SIWE: no connected wallet" at the top of the AppKit modal. Polling both
+ * AppKit's own state AND wagmi state for up to 10s smooths this out.
  */
-async function waitForAddress(maxMs = 3000) {
+async function waitForAddress(maxMs = 10000) {
   const start = Date.now();
-  let lastErr;
   while (Date.now() - start < maxMs) {
-    try {
-      return currentAddressOrThrow();
-    } catch (err) {
-      lastErr = err;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    const addr = readAddressBestEffort();
+    if (addr) return addr;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw lastErr ?? new Error('SIWE: no connected wallet (timed out)');
+  const err = new Error(`SIWE: no connected wallet after ${maxMs}ms wait`);
+  try {
+    Sentry.captureException(err, {
+      tags: { component: 'siwe-config', step: 'waitForAddress' },
+      extra: { waitedMs: Date.now() - start },
+    });
+  } catch {
+    /* sentry no-op in dev */
+  }
+  throw err;
 }
 
 /**
@@ -167,14 +192,26 @@ export function buildSiweConfig() {
     // (race observed on mobile). Fall back to live wagmi state for
     // belt-and-braces.
     getNonce: async (address) => {
-      const addr =
-        typeof address === 'string' && address ? address.toLowerCase() : await waitForAddress();
-      const resp = await getAuthNonce(addr);
-      const nonce = resp?.nonce;
-      if (typeof nonce !== 'string' || !nonce) {
-        throw new Error('SIWE: malformed /auth/nonce response');
+      try {
+        const addr =
+          typeof address === 'string' && address ? address.toLowerCase() : await waitForAddress();
+        const resp = await getAuthNonce(addr);
+        const nonce = resp?.nonce;
+        if (typeof nonce !== 'string' || !nonce) {
+          throw new Error('SIWE: malformed /auth/nonce response');
+        }
+        return nonce;
+      } catch (err) {
+        // AppKit swallows the throw into its modal UI and our Sentry global
+        // handler never sees it. Capture explicitly so we can debug what's
+        // actually failing in prod (no-connected-wallet vs nonce 5xx etc).
+        try {
+          Sentry.captureException(err, { tags: { component: 'siwe-config', step: 'getNonce' } });
+        } catch {
+          /* no-op */
+        }
+        throw err;
       }
-      return nonce;
     },
     verifyMessage: async ({ message, signature }) => {
       try {

@@ -316,6 +316,7 @@ function buildAppKit(projectId) {
   // instance even if `_resetForTests` rebuilds the adapter.
   setSiweHooks({
     getWagmiConfig: () => wagmiAdapter.wagmiConfig,
+    getAppKitAddress,
   });
   const siweConfig = buildSiweConfig();
 
@@ -377,6 +378,25 @@ export function getWagmiConfig() {
     ensureAppKitWalletSubscription();
   }
   return _wagmiAdapter.wagmiConfig;
+}
+
+/**
+ * Synchronously read the address AppKit currently believes is connected.
+ *
+ * Used by `siwe-config.js` as a fallback when wagmi state hasn't caught up
+ * yet (mobile WC pairing race). AppKit's internal state lights up before
+ * `syncFromWagmi` finishes awaiting `connector.getProvider()`.
+ *
+ * Returns lowercase hex or null. Never throws — caller decides what to do.
+ */
+export function getAppKitAddress() {
+  if (!_appKit || typeof _appKit.getAddress !== 'function') return null;
+  try {
+    const addr = _appKit.getAddress();
+    return typeof addr === 'string' && addr ? addr.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 function getAppKit() {
