@@ -11,13 +11,11 @@ function emitWagmi() {
 }
 
 vi.mock('@wagmi/core', () => ({
+  createConfig: vi.fn(() => ({ connectors: [{ id: 'injected' }] })),
+  injected: vi.fn(() => ({ id: 'injected' })),
   connect: vi.fn(async () => {
     wagmiState.connections = [
-      {
-        accounts: ['0xABCdef0000000000000000000000000000000001'],
-        chainId: 8453,
-        connector: { id: 'injected' },
-      },
+      { accounts: ['0xABCdef0000000000000000000000000000000001'], chainId: 8453 },
     ];
     emitWagmi();
     return wagmiState.connections[0];
@@ -37,7 +35,6 @@ vi.mock('@wagmi/core', () => ({
     return () => wagmiState.watchers.delete(onChange);
   }),
   reconnect: vi.fn(async () => []),
-  signMessage: vi.fn(async () => '0xfeedface'),
 }));
 
 vi.mock('viem/chains', () => ({
@@ -55,16 +52,8 @@ vi.mock('viem', () => ({
   http: vi.fn(() => ({})),
 }));
 
-// AppKit + WagmiAdapter test doubles. The wagmi Config returned by the
-// adapter exposes a `connectors` array so `connectWallet('injected')` (the
-// legacy back-compat path) can match against it.
-vi.mock('@reown/appkit', () => ({
-  createAppKit: vi.fn(() => ({ open: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) })),
-}));
-vi.mock('@reown/appkit-adapter-wagmi', () => ({
-  WagmiAdapter: vi.fn(function WagmiAdapter() {
-    return { wagmiConfig: { connectors: [{ id: 'injected' }] } };
-  }),
+vi.mock('@walletconnect/ethereum-provider', () => ({
+  EthereumProvider: { init: vi.fn(async () => ({})) },
 }));
 
 const wallet = await import('../src/wallet.js');
@@ -130,11 +119,6 @@ beforeEach(() => {
   _resetClientForTests();
   wagmiState.connections = [];
   wagmiState.watchers.clear();
-  // Prime AppKit/WagmiAdapter so legacy `connectWallet('injected')` calls
-  // resolve through the mocked wagmi config. Must run AFTER clearing
-  // wagmiState.watchers — otherwise the subscription registered inside
-  // setWalletConnectProjectId would be wiped.
-  wallet.setWalletConnectProjectId('test-project-id');
 });
 
 afterEach(() => {

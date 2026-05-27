@@ -21,66 +21,6 @@ import { enableBottomSheetDismiss } from '../mobile-modals.js';
 
 let _activeOverlay = null;
 
-/**
- * Local mobile-UA heuristic. Inlined (not imported from wallet-deep-links.js)
- * so this module survives a future refactor that drops the deep-link helpers
- * in favour of Reown AppKit. iPad on iPadOS Safari reports as Mac — we treat
- * it as desktop here (the SIWE modal is also shown on desktop with the same
- * shape; the only mobile-specific bit is the "Open wallet app" CTA below).
- */
-function isMobileUA(ua) {
-  const source =
-    typeof ua === 'string'
-      ? ua
-      : typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string'
-        ? navigator.userAgent
-        : '';
-  if (!source) return false;
-  if (/iPhone|iPad|iPod/i.test(source)) return true;
-  if (/Android/i.test(source)) return true;
-  return false;
-}
-
-/**
- * If the WC connect flow saved a wallet id under `pt:lastWalletId` (the
- * mobile picker may do this in a follow-up batch), read it back here. The
- * map is intentionally tiny — known universal links for the wallets the
- * picker currently lists. If the id isn't recognised (or no id was stored)
- * we return null and the CTA falls back to a generic instruction.
- *
- * @returns {string|null}
- */
-function readLastWalletDeepLink() {
-  let id = null;
-  try {
-    if (typeof localStorage !== 'undefined') {
-      id = localStorage.getItem('pt:lastWalletId');
-    }
-  } catch {
-    /* private mode / disabled — fall through to null */
-  }
-  if (!id) return null;
-  // Universal-link hub for each wallet — opening this re-foregrounds the
-  // app even WITHOUT a fresh `wc:` pairing URI (which is what we want for
-  // re-triggering the in-flight personal_sign).
-  switch (id) {
-    case 'metamask':
-      return 'https://metamask.app.link/';
-    case 'rainbow':
-      return 'https://rnbwapp.com/';
-    case 'coinbase':
-      return 'https://go.cb-wallet.com/';
-    case 'trust':
-      return 'https://link.trustwallet.com/';
-    case 'okx':
-      return 'okx://wallet';
-    case 'imtoken':
-      return 'imtokenv2://';
-    default:
-      return null;
-  }
-}
-
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -214,44 +154,12 @@ export function showSignInModal(opts = {}) {
   actions.appendChild(cancelBtn);
   actions.appendChild(signBtn);
 
-  // Mobile-only "Open wallet app" CTA (2026-05-27 fix).
-  //
-  // On iOS Safari the second WalletConnect RPC request after the initial
-  // pair (here: personal_sign) does NOT automatically re-foreground the
-  // wallet app — the user taps "Sign with wallet" and nothing visible
-  // happens. We render a secondary CTA below the primary button that
-  // explicitly opens the wallet's universal link (if we have one cached
-  // under `pt:lastWalletId`) or shows a plain text hint to switch apps.
-  //
-  // The button is hidden initially; we only reveal it after the user taps
-  // Sign (so the modal isn't visually noisy for desktop users who don't
-  // need it). On desktop the hint stays hidden because `isMobileUA()` is
-  // false — desktop wallets re-popup their own UI for personal_sign.
-  const mobileHint = el('div', {
-    className: 'pt-modal__mobile-hint',
-    dataset: { testId: 'signin-mobile-hint' },
-  });
-  mobileHint.hidden = true;
-  const mobileHintText = el('span', {
-    className: 'pt-modal__mobile-hint-text',
-    text: 'Switch to your wallet app to approve the signature.',
-  });
-  const openWalletBtn = el('button', {
-    className: 'pt-btn pt-btn--ghost pt-modal__mobile-open',
-    dataset: { testId: 'signin-open-wallet' },
-    attrs: { type: 'button' },
-    text: 'Open wallet app',
-  });
-  mobileHint.appendChild(mobileHintText);
-  mobileHint.appendChild(openWalletBtn);
-
   card.appendChild(head);
   card.appendChild(body);
   card.appendChild(sectionLabel);
   card.appendChild(preview);
   card.appendChild(netRow);
   card.appendChild(actions);
-  card.appendChild(mobileHint);
   overlay.appendChild(card);
   // B5 — capture the element that opened the modal so we can restore focus on
   // close (WCAG 2.4.3). Fall back to body if the active element is unusable
@@ -282,15 +190,11 @@ export function showSignInModal(opts = {}) {
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
       ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     return Array.from(overlay.querySelectorAll(sel)).filter((node) => {
-      // Skip the node itself if hidden, AND any node whose ancestor (within
-      // the overlay) is hidden — needed for the mobile "Open wallet app"
-      // CTA which lives inside a `hidden` wrapper until the user taps Sign.
-      // Without this, Shift+Tab focus-trap would land on a visually-hidden
-      // control and existing focus-trap tests would fail.
-      for (let cur = node; cur && cur !== overlay; cur = cur.parentNode) {
-        if (cur.hasAttribute && cur.hasAttribute('hidden')) return false;
-      }
-      return true;
+      // `disabled` covers <button disabled>; also skip nodes that are hidden
+      // via `hidden` attr or CSS display:none (offsetParent === null in
+      // browsers, but happy-dom doesn't always populate that, so checking
+      // disabled is enough for current modal contents).
+      return !node.hasAttribute('hidden');
     });
   }
 
@@ -324,40 +228,6 @@ export function showSignInModal(opts = {}) {
     close();
   }
 
-  /**
-   * Try to re-foreground the wallet app via its universal/deep-link. On iOS
-   * Safari the second RPC request after the initial WC pair (personal_sign
-   * here) doesn't auto-trigger the wallet, so the user has to manually
-   * switch — this CTA does the switch for them. Falls back to a generic
-   * focus hint when we don't have a cached wallet id.
-   */
-  function openWalletApp() {
-    const link = readLastWalletDeepLink();
-    if (link && typeof window !== 'undefined') {
-      try {
-        // Prefer `window.open` so a non-intercepted universal link doesn't
-        // navigate the top frame away from the in-flight signature. On a
-        // user-gesture click iOS Safari won't popup-block, so the returned
-        // window is reliably non-null here; the `location.href` fallback
-        // matches the prior best-effort behaviour for the rare blocker case.
-        const opened = window.open(link, '_blank');
-        if (!opened) {
-          window.location.href = link;
-        }
-        return;
-      } catch {
-        /* fall through to hint */
-      }
-    }
-    // No cached wallet — toast the generic switch instruction so the user
-    // still gets actionable feedback.
-    try {
-      showToast('Open your wallet app to approve the signature.', { kind: 'info' });
-    } catch {
-      /* toast may not be ready in tests */
-    }
-  }
-
   async function onSign() {
     if (busy) return;
     busy = true;
@@ -365,38 +235,6 @@ export function showSignInModal(opts = {}) {
     cancelBtn.disabled = true;
     const origText = signBtn.textContent;
     signBtn.textContent = 'Signing…';
-    // Mobile race fix (2026-05-27): on iOS Safari, the WalletConnect
-    // personal_sign request often does NOT auto-foreground the wallet app
-    // after the initial pair. We surface an "Open wallet app" CTA the user
-    // can tap if their wallet doesn't pop up. We also attempt the deep-link
-    // proactively — best-effort, ignored if the user is on desktop.
-    if (isMobileUA()) {
-      mobileHint.hidden = false;
-      // Pro-active deep-link nudge: if we have a saved wallet id, push the
-      // browser to that universal link in parallel with the sign request.
-      // The wallet app receives focus, sees the in-flight RPC request, and
-      // surfaces the signature prompt. If the link isn't recognised this is
-      // a no-op (no toast — the visible CTA is enough).
-      const link = readLastWalletDeepLink();
-      if (link && typeof window !== 'undefined') {
-        try {
-          // Use `window.open(_, '_blank')` instead of `location.href` so an
-          // unintercepted universal link doesn't navigate the top frame away
-          // (which would zombify the in-flight `runSignIn()` promise on iOS
-          // Safari). If the OS routes the universal link to the wallet app
-          // the new tab/window is irrelevant; if it doesn't, we just opened a
-          // blank tab — strictly better than losing the page. Fallback to the
-          // old top-frame nav only when popup-blocker returns null (we're
-          // still inside the user gesture from the Sign tap, so this is rare).
-          const opened = window.open(link, '_blank');
-          if (!opened) {
-            window.location.href = link;
-          }
-        } catch {
-          /* swallow — CTA still gives the user a way out */
-        }
-      }
-    }
     try {
       const info = await runSignIn();
       if (typeof opts.onSuccess === 'function') opts.onSuccess(info);
@@ -408,8 +246,6 @@ export function showSignInModal(opts = {}) {
       signBtn.disabled = false;
       cancelBtn.disabled = false;
       signBtn.textContent = origText || 'Sign with wallet';
-      // Keep the hint visible across retries — the user may need to
-      // re-foreground the wallet again on the second tap.
     }
   }
 
@@ -441,14 +277,6 @@ export function showSignInModal(opts = {}) {
 
   signBtn.addEventListener('click', onSign);
   cancelBtn.addEventListener('click', onCancel);
-  openWalletBtn.addEventListener('click', openWalletApp);
-  // Backdrop tap dismisses (matches access-modal + drag-to-dismiss UX). The
-  // `busy` guard inside `onCancel` keeps the modal open mid-sign — same
-  // semantics as ESC / drag, so a misclick during signing can't strand the
-  // 'connecting' access state.
-  overlay.addEventListener('click', (ev) => {
-    if (ev.target === overlay) onCancel();
-  });
   document.addEventListener('keydown', onKey);
 
   return { close };

@@ -2,12 +2,9 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Mock @wagmi/core BEFORE importing the SUT. We model just enough of the
-// v2/v3 vanilla wagmi surface for our wallet wrapper —
-// connect/disconnect/switchChain/getConnections/watchConnections/reconnect/
-// signMessage. The actual AppKit/WagmiAdapter pair below installs a
-// pre-built `Config` via `wagmiAdapter.wagmiConfig`, so the action mocks
-// here just have to accept that opaque object as the first arg.
+// Mock @wagmi/core BEFORE importing the SUT so its module-level imports
+// resolve to the test doubles. We model just enough of the v3 surface for
+// the SUT — connect/disconnect/switchChain/getConnections/watchConnections/reconnect/createConfig/injected/http/chains.
 const wagmiState = {
   connections: [],
   watchers: new Set(),
@@ -19,13 +16,11 @@ function emitWagmi() {
 
 vi.mock('@wagmi/core', () => {
   return {
+    createConfig: vi.fn(() => ({ connectors: [{ id: 'injected' }] })),
+    injected: vi.fn(() => ({ id: 'injected' })),
     connect: vi.fn(async () => {
       wagmiState.connections = [
-        {
-          accounts: ['0xABCdef0000000000000000000000000000000001'],
-          chainId: 8453,
-          connector: { id: 'injected' },
-        },
+        { accounts: ['0xABCdef0000000000000000000000000000000001'], chainId: 8453 },
       ];
       emitWagmi();
       return wagmiState.connections[0];
@@ -45,7 +40,6 @@ vi.mock('@wagmi/core', () => {
       return () => wagmiState.watchers.delete(onChange);
     }),
     reconnect: vi.fn(async () => []),
-    signMessage: vi.fn(async () => '0xfeedface'),
   };
 });
 
@@ -59,24 +53,30 @@ vi.mock('viem', () => ({
   http: vi.fn(() => ({})),
 }));
 
-// AppKit + WagmiAdapter test doubles. `wagmiConfig` is just an opaque marker
-// — production code passes it through to the @wagmi/core actions which we
-// already mocked above.
-const appKitState = {
-  open: vi.fn(async () => {}),
-  disconnect: vi.fn(async () => {}),
-};
-const adapterState = { wagmiConfig: { __marker: 'wagmiConfig' } };
-
-vi.mock('@reown/appkit', () => ({
-  createAppKit: vi.fn(() => appKitState),
-}));
-
-vi.mock('@reown/appkit-adapter-wagmi', () => ({
-  WagmiAdapter: vi.fn(function WagmiAdapter() {
-    return adapterState;
-  }),
-}));
+// Mock the WC provider import — it's `import()`-ed lazily in wallet.js.
+const wcState = { provider: null, init: vi.fn() };
+vi.mock('@walletconnect/ethereum-provider', () => {
+  const provider = {
+    accounts: ['0xdEAD000000000000000000000000000000000002'],
+    chainId: 8453,
+    _handlers: new Map(),
+    on(event, cb) {
+      this._handlers.set(event, cb);
+    },
+    request: vi.fn(async () => null),
+    connect: vi.fn(async () => null),
+    disconnect: vi.fn(async () => null),
+  };
+  wcState.provider = provider;
+  return {
+    EthereumProvider: {
+      init: vi.fn(async () => {
+        wcState.init();
+        return provider;
+      }),
+    },
+  };
+});
 
 // Import SUT AFTER mocks so they take effect.
 const wallet = await import('../src/wallet.js');
@@ -85,8 +85,12 @@ beforeEach(() => {
   wallet._resetForTests();
   wagmiState.connections = [];
   wagmiState.watchers.clear();
-  appKitState.open.mockClear();
-  appKitState.disconnect.mockClear();
+  wcState.init.mockClear();
+  if (wcState.provider) {
+    wcState.provider._handlers.clear();
+    wcState.provider.disconnect.mockClear?.();
+    wcState.provider.request.mockClear?.();
+  }
 });
 
 describe('wallet — state machine', () => {
@@ -98,61 +102,32 @@ describe('wallet — state machine', () => {
     expect(acc.connectorId).toBeNull();
   });
 
-  it('onAccountChange fires when a connection appears via wagmi watcher', async () => {
-    wallet.setWalletConnectProjectId('abc123');
+  it('connectWallet(injected) updates state and lowercases address', async () => {
+    await wallet.connectWallet('injected');
+    const acc = wallet.getAccount();
+    expect(acc.isConnected).toBe(true);
+    expect(acc.address).toBe('0xabcdef0000000000000000000000000000000001');
+    expect(acc.chainId).toBe(8453);
+    expect(acc.connectorId).toBe('injected');
+  });
+
+  it('onAccountChange fires on state transitions', async () => {
     const seen = [];
     const off = wallet.onAccountChange((s) => seen.push(s));
-    // Simulate AppKit-driven connection: wagmi picks up a new connection and
-    // notifies our watcher. The watcher's onChange handler reads
-    // getConnections() and pushes state.
-    wagmiState.connections = [
-      {
-        accounts: ['0xABCdef0000000000000000000000000000000001'],
-        chainId: 8453,
-        connector: { id: 'injected' },
-      },
-    ];
-    emitWagmi();
+    await wallet.connectWallet('injected');
     expect(seen.length).toBeGreaterThan(0);
-    const last = seen[seen.length - 1];
-    expect(last.isConnected).toBe(true);
-    expect(last.address).toBe('0xabcdef0000000000000000000000000000000001');
-    expect(last.chainId).toBe(8453);
-    expect(last.connectorId).toBe('injected');
+    expect(seen[seen.length - 1].isConnected).toBe(true);
     off();
+
+    await wallet.disconnectWallet();
+    // No additional callbacks after unsubscribe.
+    const lenAfter = seen.length;
+    await wallet.connectWallet('injected');
+    expect(seen.length).toBe(lenAfter);
   });
 
-  it('classifies WalletConnect connector ids as walletConnect', async () => {
-    wallet.setWalletConnectProjectId('abc123');
-    wagmiState.connections = [
-      {
-        accounts: ['0xdEAD000000000000000000000000000000000002'],
-        chainId: 8453,
-        connector: { id: 'walletConnect' },
-      },
-    ];
-    emitWagmi();
-    expect(wallet.getAccount().connectorId).toBe('walletConnect');
-  });
-
-  it('connectWallet opens the AppKit modal', async () => {
-    wallet.setWalletConnectProjectId('abc123');
-    await wallet.connectWallet();
-    expect(appKitState.open).toHaveBeenCalledTimes(1);
-    // Modal opens directly on the Connect view, not the Account view.
-    expect(appKitState.open).toHaveBeenCalledWith({ view: 'Connect' });
-  });
-
-  it('disconnectWallet clears state and calls wagmi.disconnect', async () => {
-    wallet.setWalletConnectProjectId('abc123');
-    wagmiState.connections = [
-      {
-        accounts: ['0xABCdef0000000000000000000000000000000001'],
-        chainId: 8453,
-        connector: { id: 'injected' },
-      },
-    ];
-    emitWagmi();
+  it('disconnectWallet resets state', async () => {
+    await wallet.connectWallet('injected');
     await wallet.disconnectWallet();
     const acc = wallet.getAccount();
     expect(acc.isConnected).toBe(false);
@@ -160,16 +135,10 @@ describe('wallet — state machine', () => {
     expect(acc.connectorId).toBeNull();
   });
 
-  it('switchToBase forwards to wagmi switchChain', async () => {
-    wallet.setWalletConnectProjectId('abc123');
-    wagmiState.connections = [
-      {
-        accounts: ['0xABCdef0000000000000000000000000000000001'],
-        chainId: 137,
-        connector: { id: 'injected' },
-      },
-    ];
-    emitWagmi();
+  it('switchToBase forwards to wagmi for injected sessions', async () => {
+    await wallet.connectWallet('injected');
+    // Pretend we ended up on Polygon.
+    wagmiState.connections[0].chainId = 137;
     await wallet.switchToBase();
     expect(wallet.getAccount().chainId).toBe(8453);
     expect(wallet.isOnBase()).toBe(true);
@@ -178,30 +147,60 @@ describe('wallet — state machine', () => {
   it('isOnBase is false when not connected', () => {
     expect(wallet.isOnBase()).toBe(false);
   });
+
+  it('isOnBase is false when on a different chain', async () => {
+    await wallet.connectWallet('injected');
+    wagmiState.connections[0].chainId = 1; // Ethereum mainnet
+    // Trigger sync via a fresh connect (mocked syncFromWagmi reads head conn)
+    // by emitting watcher event:
+    for (const w of wagmiState.watchers) w();
+    expect(wallet.isOnBase()).toBe(false);
+  });
 });
 
-describe('wallet — walletConnect project id', () => {
-  it('setWalletConnectProjectId is idempotent for the same id', () => {
+describe('wallet — walletConnect path', () => {
+  it('setWalletConnectProjectId is idempotent', () => {
     wallet.setWalletConnectProjectId('abc123');
     wallet.setWalletConnectProjectId('abc123');
-    // Build is eager but should only happen once; we don't have a counter
-    // exposed, so we just assert it doesn't throw.
+    expect(wcState.init).not.toHaveBeenCalled(); // init only on connect
   });
 
-  it('empty project id is a no-op', () => {
-    wallet.setWalletConnectProjectId('');
-    // No AppKit construction — getWagmiConfig should still throw because the
-    // adapter never built.
-    expect(() => wallet.getWagmiConfig()).toThrow(/setWalletConnectProjectId/);
+  it('connectWallet(walletConnect) without projectId throws', async () => {
+    await expect(wallet.connectWallet('walletConnect')).rejects.toThrow(/projectId/);
   });
 
-  it('rotating the project id throws (would require modal teardown)', () => {
+  it('connectWallet(walletConnect) initialises the WC provider and updates state', async () => {
     wallet.setWalletConnectProjectId('abc123');
-    expect(() => wallet.setWalletConnectProjectId('different')).toThrow();
+    await wallet.connectWallet('walletConnect');
+    expect(wcState.init).toHaveBeenCalledTimes(1);
+    const acc = wallet.getAccount();
+    expect(acc.isConnected).toBe(true);
+    expect(acc.address).toBe('0xdead000000000000000000000000000000000002');
+    expect(acc.connectorId).toBe('walletConnect');
   });
 
-  it('getWagmiConfig returns the adapter wagmiConfig once primed', () => {
+  it('WC accountsChanged event flips address (lowercased)', async () => {
     wallet.setWalletConnectProjectId('abc123');
-    expect(wallet.getWagmiConfig()).toBe(adapterState.wagmiConfig);
+    await wallet.connectWallet('walletConnect');
+    const cb = wcState.provider._handlers.get('accountsChanged');
+    expect(typeof cb).toBe('function');
+    cb(['0xFEEDFACE00000000000000000000000000000003']);
+    expect(wallet.getAccount().address).toBe('0xfeedface00000000000000000000000000000003');
+  });
+
+  it('WC chainChanged event normalises hex chainId', async () => {
+    wallet.setWalletConnectProjectId('abc123');
+    await wallet.connectWallet('walletConnect');
+    const cb = wcState.provider._handlers.get('chainChanged');
+    cb('0x2105'); // 8453
+    expect(wallet.getAccount().chainId).toBe(8453);
+  });
+
+  it('WC disconnect event clears state', async () => {
+    wallet.setWalletConnectProjectId('abc123');
+    await wallet.connectWallet('walletConnect');
+    const cb = wcState.provider._handlers.get('disconnect');
+    cb();
+    expect(wallet.getAccount().isConnected).toBe(false);
   });
 });

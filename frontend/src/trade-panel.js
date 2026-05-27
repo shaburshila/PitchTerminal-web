@@ -1537,19 +1537,10 @@ export function mountTradePanel(container, options = {}) {
       headLock.hidden = true;
       return;
     }
-    const stateValue = _getAccessState();
-    const isLocked = stateValue !== 'premium';
+    const isLocked = _getAccessState() !== 'premium';
     root.classList.toggle('is-locked', isLocked);
     cover.hidden = !isLocked;
     headLock.hidden = !isLocked;
-    // Mobile race fix (2026-05-27): while access is still resolving
-    // ('connecting' — post-connect, pre-/access response or pre-SIWE), keep
-    // the cover visible but tag it `.is-checking` so CSS hides the upsell
-    // card content. Flashing "Upgrade to Pro" at a user who actually owns
-    // premium for the 5-15s mobile WC SIWE round-trip was the symptom we're
-    // fixing. Once /access resolves the class is removed by the next
-    // renderCover() call.
-    cover.classList.toggle('is-checking', stateValue === 'connecting');
   }
 
   function renderAll() {

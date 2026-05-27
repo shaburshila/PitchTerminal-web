@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const fake = {
   account: { address: null, chainId: null, isConnected: false, connectorId: null },
   listeners: new Set(),
-  connectCalls: 0,
+  connectCalls: [],
   disconnectCalls: 0,
   switchCalls: 0,
   wcProjectId: '',
@@ -24,11 +24,14 @@ vi.mock('../src/wallet.js', () => ({
     fake.listeners.add(cb);
     return () => fake.listeners.delete(cb);
   },
-  connectWallet: vi.fn(async () => {
-    fake.connectCalls++;
-    // AppKit modal would resolve the actual connection asynchronously via
-    // the wagmi watcher. Tests that need a connected chip drive setAccount()
-    // directly.
+  connectWallet: vi.fn(async (id) => {
+    fake.connectCalls.push(id);
+    setAccount({
+      address: '0xabcdef0000000000000000000000000000000001',
+      chainId: 8453,
+      isConnected: true,
+      connectorId: id,
+    });
   }),
   disconnectWallet: vi.fn(async () => {
     fake.disconnectCalls++;
@@ -43,6 +46,8 @@ vi.mock('../src/wallet.js', () => ({
   }),
   isOnBase: () => fake.account.isConnected && fake.account.chainId === 8453,
   tryAutoReconnect: vi.fn(async () => ({ ...fake.account })),
+  CONNECTOR_INJECTED: 'injected',
+  CONNECTOR_WALLET_CONNECT: 'walletConnect',
 }));
 
 const { mountWalletChip } = await import('../src/ui/wallet-chip.js');
@@ -51,7 +56,7 @@ beforeEach(() => {
   document.body.replaceChildren();
   fake.account = { address: null, chainId: null, isConnected: false, connectorId: null };
   fake.listeners.clear();
-  fake.connectCalls = 0;
+  fake.connectCalls.length = 0;
   fake.disconnectCalls = 0;
   fake.switchCalls = 0;
   fake.wcProjectId = '';
@@ -70,20 +75,45 @@ describe('mountWalletChip — disconnected state', () => {
     expect(document.querySelector('[data-test-id="wallet-chip"]').hidden).toBe(true);
   });
 
-  it('connect-btn opens the AppKit modal via connectWallet()', async () => {
-    mountWalletChip(host(), { wcProjectId: 'abc123' });
+  it('connect-btn directly connects when WC not enabled', async () => {
+    mountWalletChip(host()); // no wcProjectId
     document.querySelector('[data-test-id="wallet-connect-btn"]').click();
     // microtask flush
     await Promise.resolve();
     await Promise.resolve();
-    expect(fake.connectCalls).toBe(1);
+    expect(fake.connectCalls).toEqual(['injected']);
   });
 
-  it('there is no in-app connector picker (AppKit owns it)', () => {
+  it('connect-btn opens the picker when WC IS enabled', () => {
     mountWalletChip(host(), { wcProjectId: 'abc123' });
-    expect(document.querySelector('[data-test-id="wallet-connector-picker"]')).toBeNull();
-    expect(document.querySelector('[data-test-id="wallet-pick-injected"]')).toBeNull();
+    const picker = document.querySelector('[data-test-id="wallet-connector-picker"]');
+    expect(picker.hidden).toBe(true);
+    document.querySelector('[data-test-id="wallet-connect-btn"]').click();
+    expect(picker.hidden).toBe(false);
+    expect(document.querySelector('[data-test-id="wallet-pick-wc"]')).not.toBeNull();
+  });
+
+  it('WC picker entry is omitted when projectId is empty', () => {
+    mountWalletChip(host(), { wcProjectId: '' });
     expect(document.querySelector('[data-test-id="wallet-pick-wc"]')).toBeNull();
+  });
+
+  it('picking injected from the picker triggers connect', async () => {
+    mountWalletChip(host(), { wcProjectId: 'abc123' });
+    document.querySelector('[data-test-id="wallet-connect-btn"]').click();
+    document.querySelector('[data-test-id="wallet-pick-injected"]').click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fake.connectCalls).toContain('injected');
+  });
+
+  it('picking WC triggers connectWallet("walletConnect")', async () => {
+    mountWalletChip(host(), { wcProjectId: 'abc123' });
+    document.querySelector('[data-test-id="wallet-connect-btn"]').click();
+    document.querySelector('[data-test-id="wallet-pick-wc"]').click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fake.connectCalls).toContain('walletConnect');
   });
 });
 
@@ -169,6 +199,20 @@ describe('mountWalletChip — connected state', () => {
     expect(document.querySelector('[data-test-id="wallet-dropdown"]').hidden).toBe(false);
     document.body.click();
     expect(document.querySelector('[data-test-id="wallet-dropdown"]').hidden).toBe(true);
+  });
+
+  it('view-profile invokes the onViewProfile callback', () => {
+    const onViewProfile = vi.fn();
+    mountWalletChip(host(), { onViewProfile });
+    setAccount({
+      address: '0xabc0000000000000000000000000000000000001',
+      chainId: 8453,
+      isConnected: true,
+      connectorId: 'injected',
+    });
+    document.querySelector('[data-test-id="wallet-chip"]').click();
+    document.querySelector('[data-test-id="wallet-view-profile"]').click();
+    expect(onViewProfile).toHaveBeenCalledTimes(1);
   });
 
   it('disconnect-menu invokes disconnectWallet', async () => {
