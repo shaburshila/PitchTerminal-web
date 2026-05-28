@@ -166,8 +166,7 @@ function isPhase2Unavailable(err) {
  * @typedef {object} OrdersOpts
  * @property {{
  *   getOrders: typeof defaultApi.getOrders,
- *   cancelOrder: typeof defaultApi.cancelOrder,
- *   setArmed: typeof defaultApi.setArmed
+ *   cancelOrder: typeof defaultApi.cancelOrder
  * }} [apiClient]
  * @property {string|null} [token]
  * @property {{ openPayModal?: Function, payOpts?: object }} [softLock]
@@ -217,13 +216,11 @@ export function mountOrdersTab(container, opts = {}) {
     tokenMeta: opts.tokenMeta && typeof opts.tokenMeta === 'object' ? opts.tokenMeta : null,
     accessState: getAccessState(),
     orders: /** @type {object[]} */ ([]),
-    armed: true,
     loading: false,
     error: null,
     /** Set when the backend route is not yet implemented (phase 2). */
     phase2: false,
     busyOrderId: null,
-    busyArmed: false,
     /** Phase 1.5 batch 6: active filter chip — 'all' | status string. */
     filter: 'all',
     gen: 0,
@@ -369,46 +366,6 @@ export function mountOrdersTab(container, opts = {}) {
         text: state.error || 'Failed to load orders',
       }),
     );
-  }
-
-  function buildArmedToggle() {
-    const wrap = el('label', {
-      className: 'pt-orders__armed',
-      dataset: { testId: 'orders-armed-wrap' },
-    });
-    const input = el('input', {
-      className: 'pt-orders__armed-input',
-      dataset: { testId: 'orders-armed' },
-      attrs: { type: 'checkbox' },
-    });
-    input.checked = state.armed;
-    input.disabled = state.busyArmed;
-    input.addEventListener('change', () => {
-      const desired = input.checked;
-      // Revert visually until the server confirms; busy flag prevents reentry.
-      input.disabled = true;
-      onToggleArmed(desired).catch(() => {
-        /* surfaced via error state */
-      });
-    });
-    wrap.appendChild(input);
-    wrap.appendChild(
-      el('span', {
-        className: 'pt-orders__armed-label',
-        text: state.armed ? 'Kill-switch: armed' : 'Kill-switch: paused',
-      }),
-    );
-    // Kept "armed"/"paused" — these are conventional EN terms.
-    return wrap;
-  }
-
-  function buildToolbar() {
-    const bar = el('div', {
-      className: 'pt-orders__toolbar',
-      dataset: { testId: 'orders-toolbar' },
-    });
-    bar.appendChild(buildArmedToggle());
-    return bar;
   }
 
   /**
@@ -624,7 +581,6 @@ export function mountOrdersTab(container, opts = {}) {
     root.replaceChildren();
     tearDownLock();
 
-    root.appendChild(buildToolbar());
     root.appendChild(buildFilters());
 
     // When there are no orders at all, show the illustrated empty panel
@@ -739,7 +695,6 @@ export function mountOrdersTab(container, opts = {}) {
       const resp = await apiClient.getOrders({ token: state.token });
       if (myGen !== state.gen) return;
       state.orders = Array.isArray(resp?.items) ? resp.items : [];
-      if (typeof resp?.armed === 'boolean') state.armed = resp.armed;
     } catch (err) {
       if (myGen !== state.gen) return;
       _handleListError(err);
@@ -786,30 +741,6 @@ export function mountOrdersTab(container, opts = {}) {
       }
     } finally {
       state.busyOrderId = null;
-      render();
-    }
-  }
-
-  async function onToggleArmed(desired) {
-    if (state.busyArmed) return;
-    state.busyArmed = true;
-    render();
-    try {
-      const resp = await apiClient.setArmed(Boolean(desired));
-      // Server is authoritative — use the value it returns when present.
-      if (resp && typeof resp.armed === 'boolean') {
-        state.armed = resp.armed;
-      } else {
-        state.armed = Boolean(desired);
-      }
-      fireAction('armed', { armed: state.armed, ok: true });
-    } catch (err) {
-      // Same reasoning as `onCancelOrder` — never let a per-mutation failure
-      // collapse the list into the phase-2 stub.
-      state.error = _mutationErrorMessage(err, 'Failed to update kill-switch');
-      fireAction('armed', { ok: false, err });
-    } finally {
-      state.busyArmed = false;
       render();
     }
   }
@@ -912,7 +843,6 @@ export function mountOrdersTab(container, opts = {}) {
     return {
       token: state.token,
       accessState: state.accessState,
-      armed: state.armed,
       ordersCount: state.orders.length,
       loading: state.loading,
       error: state.error,

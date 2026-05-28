@@ -347,18 +347,6 @@ export function cancelOrder(id) {
   return apiFetch(`/orders/${id}`, { method: 'DELETE' });
 }
 
-/**
- * PUT /orders/armed — personal kill-switch (true = orders active, false = paused).
- * @param {boolean} armed
- */
-export function setArmed(armed) {
-  return apiFetch('/orders/armed', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ armed }),
-  });
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Telegram (phase 3 — backend not implemented yet; stubs for forward compat)
 // ─────────────────────────────────────────────────────────────────────────────

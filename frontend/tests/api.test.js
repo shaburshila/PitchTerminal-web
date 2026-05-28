@@ -19,7 +19,6 @@ import {
   getTrades,
   logout,
   paginate,
-  setArmed,
   verifySiwe,
 } from '../src/api.js';
 
@@ -297,15 +296,6 @@ describe('endpoint wrappers — URLs', () => {
     fetch.mockResolvedValueOnce(makeResponse({ body: { items: [] } }));
     await getPortfolio();
     expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/portfolio`);
-  });
-
-  it('setArmed PUTs { armed }', async () => {
-    fetch.mockResolvedValueOnce(makeResponse({ body: { armed: false } }));
-    await setArmed(false);
-
-    const [, init] = fetch.mock.calls[0];
-    expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body)).toEqual({ armed: false });
   });
 });
 

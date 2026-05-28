@@ -31,11 +31,10 @@ function makeOrder(overrides = {}) {
   };
 }
 
-function makeApi({ items = [], armed = true, cancel, setArmed } = {}) {
+function makeApi({ items = [], armed = true, cancel } = {}) {
   return {
     getOrders: vi.fn(async () => ({ items, armed, nextCursor: null, limit: 100 })),
     cancelOrder: vi.fn(cancel ?? (async () => null)),
-    setArmed: vi.fn(setArmed ?? (async (a) => ({ armed: a }))),
   };
 }
 
@@ -114,7 +113,6 @@ describe('mountOrdersTab', () => {
         throw err;
       }),
       cancelOrder: vi.fn(),
-      setArmed: vi.fn(),
     };
     mountOrdersTab(c, { apiClient: api, token: TOKEN });
     await flush();
@@ -132,7 +130,6 @@ describe('mountOrdersTab', () => {
         throw err;
       }),
       cancelOrder: vi.fn(),
-      setArmed: vi.fn(),
     };
     mountOrdersTab(c, { apiClient: api, token: TOKEN });
     await flush();
@@ -149,26 +146,12 @@ describe('mountOrdersTab', () => {
         throw err;
       }),
       cancelOrder: vi.fn(),
-      setArmed: vi.fn(),
     };
     mountOrdersTab(c, { apiClient: api, token: TOKEN });
     await flush();
     const errEl = c.querySelector('[data-test-id="orders-error"]');
     expect(errEl).toBeTruthy();
     expect(errEl.textContent).toContain('Server down');
-  });
-
-  it('renders armed toggle reflecting server-provided state', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    mountOrdersTab(c, {
-      apiClient: makeApi({ items: [makeOrder()], armed: false }),
-      token: TOKEN,
-    });
-    await flush();
-    const checkbox = c.querySelector('[data-test-id="orders-armed"]');
-    expect(checkbox).toBeTruthy();
-    expect(checkbox.checked).toBe(false);
   });
 
   it('cancel button on pending order calls cancelOrder + flips status optimistically', async () => {
@@ -252,27 +235,6 @@ describe('mountOrdersTab', () => {
     expect(handle.getState().error).toMatch(/Server down/);
   });
 
-  it('setArmed 404 surfaces inline error without flipping to phase-2 stub', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    const armedErr = new Error('Not found');
-    armedErr.status = 404;
-    const api = makeApi({
-      items: [makeOrder()],
-      armed: true,
-      setArmed: async () => { throw armedErr; },
-    });
-    const handle = mountOrdersTab(c, { apiClient: api, token: TOKEN });
-    await flush();
-    const checkbox = c.querySelector('[data-test-id="orders-armed"]');
-    checkbox.checked = false;
-    checkbox.dispatchEvent(new Event('change'));
-    await flush();
-    expect(c.querySelector('[data-test-id="orders-phase2"]')).toBeFalsy();
-    expect(handle.getState().phase2).toBe(false);
-    expect(handle.getState().error).toBeTruthy();
-  });
-
   it('cancel button is absent for non-pending orders', async () => {
     accessStore.set('premium');
     const c = makeContainer();
@@ -282,31 +244,6 @@ describe('mountOrdersTab', () => {
     });
     await flush();
     expect(c.querySelector('[data-test-id="orders-cancel"]')).toBeFalsy();
-  });
-
-  it('armed toggle calls setArmed', async () => {
-    accessStore.set('premium');
-    const c = makeContainer();
-    const api = makeApi({ items: [], armed: true });
-    const actions = [];
-    mountOrdersTab(c, {
-      apiClient: api,
-      token: TOKEN,
-      onActionDone: (action, info) => actions.push([action, info]),
-    });
-    await flush();
-    const checkbox = c.querySelector('[data-test-id="orders-armed"]');
-    expect(checkbox.checked).toBe(true);
-    checkbox.checked = false;
-    checkbox.dispatchEvent(new Event('change'));
-    await flush();
-    expect(api.setArmed).toHaveBeenCalledWith(false);
-    expect(actions[0][0]).toBe('armed');
-    expect(actions[0][1].armed).toBe(false);
-
-    // Re-fetch the checkbox (table re-rendered after server response)
-    const fresh = c.querySelector('[data-test-id="orders-armed"]');
-    expect(fresh.checked).toBe(false);
   });
 
   it('pushOrderUpdate merges incoming SSE payloads', async () => {
