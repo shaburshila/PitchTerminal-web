@@ -47,7 +47,17 @@ html,
 body {
   margin: 0;
   padding: 0;
-  height: 100%;
+  /* The root chain must track the *dynamic* viewport so it matches the
+     `.pt-shell` height (also `100dvh`). With a plain `height: 100%` the
+     html/body/#app chain resolves against the *large* viewport (URL-bar
+     collapsed) on mobile Safari/Chrome, so it ends up TALLER than the
+     `100dvh` shell while the URL bar is visible — leaving a scrollable
+     empty strip below the app. `100vh` is the legacy fallback for UAs
+     without `dvh` support. `overflow: hidden` guards against any
+     sub-pixel rounding producing a scroll gutter. */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   /* Phase 1.5 batch 2: pull surface + brand-font tokens from tokens.css so
      the shell adopts the redesign palette + Inter UI face. The legacy
      `--bg`/`--text` vars in styles.css are still used by component
@@ -64,7 +74,8 @@ body {
 }
 
 #app {
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
 }
 
 button {
