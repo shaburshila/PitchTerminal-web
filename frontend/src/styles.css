@@ -129,12 +129,38 @@ button {
 
 .pt-shell {
   display: grid;
-  grid-template-rows: var(--header-h) auto 1fr var(--footer-h);
+  /* Header (fixed) | banner (auto, collapses when empty) | main (1fr, fills
+     the rest) | footer (auto, collapses when empty). The banner and footer
+     tracks are `auto` — NOT a fixed `var(--footer-h)` — so that when those
+     rows are empty (`.pt-banner:empty` / `.pt-footer:empty` set
+     `display:none`) the track sizes to 0 instead of reserving dead space.
+     The footer element carries its own `--footer-h` once it has content. A
+     fixed footer track here left a ~32px empty strip at the bottom on
+     desktop, and because the collapsed (`display:none`) banner/footer are
+     removed from grid auto-placement, `main` no longer reliably landed on
+     the `1fr` track — so we pin each child to its row explicitly below. */
+  grid-template-rows: var(--header-h) auto 1fr auto;
   /* `dvh` honors mobile browser URL-bar changes; falls back to vh
      on older Safari. */
   height: 100vh;
   height: 100dvh;
   width: 100%;
+}
+
+.pt-header {
+  grid-row: 1;
+}
+
+.pt-banner {
+  grid-row: 2;
+}
+
+.pt-main {
+  grid-row: 3;
+}
+
+.pt-footer {
+  grid-row: 4;
 }
 
 /* Header --------------------------------------------------------------- */
@@ -483,6 +509,9 @@ body.mode-dashboard .pt-profile {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Grid track is now `auto` (collapses to 0 when empty); the band height
+     lives on the element so a populated footer still reads as a 32px strip. */
+  min-height: var(--footer-h);
 }
 
 .pt-footer:empty {
