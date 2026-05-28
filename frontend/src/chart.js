@@ -314,6 +314,11 @@ export function mountChart(container, options = {}) {
     // in display PITCH; <= 0 / undefined = fully de-risked or no position).
     // Net-pos line draws at this value (not spot). Wired via setOwnBalance().
     ownBreakEven: new Map(),
+    // Parallel map of break-even in *base* (country) denomination. Picked by
+    // renderNetPosLine() when state.unit === 'country' so the Net-pos line
+    // stays in the right units for player tokens viewed in country mode.
+    // Mirrors ownBreakEven lifecycle exactly. Wired via setOwnBalance().
+    ownBreakEvenBase: new Map(),
   };
 
   // ── Skeleton ────────────────────────────────────────────────────────────
@@ -773,6 +778,13 @@ export function mountChart(container, options = {}) {
     return typeof be === 'number' && Number.isFinite(be) && be > 0 ? be : 0;
   }
 
+  function currentOwnBreakEvenBase() {
+    const addr = state.token?.address;
+    if (!addr) return 0;
+    const be = state.ownBreakEvenBase.get(addr.toLowerCase());
+    return typeof be === 'number' && Number.isFinite(be) && be > 0 ? be : 0;
+  }
+
   function renderNetPosLine() {
     if (!series) return;
     if (netPosPriceLine && typeof series.removePriceLine === 'function') {
@@ -790,7 +802,9 @@ export function mountChart(container, options = {}) {
     // Draw at the net-position break-even, not the live spot price. A
     // break-even of <= 0 (fully de-risked / floored by the backend) or a
     // missing value means there's nothing meaningful to show — skip it.
-    const price = currentOwnBreakEven();
+    // Pick by denomination: in 'country' mode (player tokens only) use the
+    // base-unit break-even so it matches the re-denominated candles/Avg line.
+    const price = state.unit === 'country' ? currentOwnBreakEvenBase() : currentOwnBreakEven();
     if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return;
     try {
       netPosPriceLine = series.createPriceLine({
@@ -1363,6 +1377,7 @@ export function mountChart(container, options = {}) {
       // Disconnect → forget balances too (next connect re-supplies).
       state.ownBalances.clear();
       state.ownBreakEven.clear();
+      state.ownBreakEvenBase.clear();
     }
     if (series && typeof series.setMarkers === 'function') {
       series.setMarkers(computeMarkers());
@@ -1393,12 +1408,18 @@ export function mountChart(container, options = {}) {
    * @param {number} balance       Display-unit balance; 0 to clear.
    * @param {number} [breakEven]   Net-position break-even price (display
    *                               PITCH); <= 0 / omitted = nothing to draw.
+   * @param {number} [breakEvenBase] Net-position break-even in *base*
+   *                               (country) units; picked when the chart is
+   *                               in 'country' denomination. <= 0 / omitted =
+   *                               nothing to draw in that mode.
    */
-  function setOwnBalance(tokenAddress, balance, breakEven) {
+  function setOwnBalance(tokenAddress, balance, breakEven, breakEvenBase) {
     if (typeof tokenAddress !== 'string' || !tokenAddress) return;
     const key = tokenAddress.toLowerCase();
     const num = typeof balance === 'number' && Number.isFinite(balance) ? balance : 0;
     const be = typeof breakEven === 'number' && Number.isFinite(breakEven) ? breakEven : 0;
+    const beBase =
+      typeof breakEvenBase === 'number' && Number.isFinite(breakEvenBase) ? breakEvenBase : 0;
     // Plausibility guard — if a caller accidentally passes wei (~1e18 for 1
     // PITCH) the chart would draw a horizontal line at a value beyond the
     // candle price range. 1e15 in display units (= 1 quadrillion tokens) is
@@ -1411,6 +1432,7 @@ export function mountChart(container, options = {}) {
       );
       state.ownBalances.delete(key);
       state.ownBreakEven.delete(key);
+      state.ownBreakEvenBase.delete(key);
       const activeAddr = state.token?.address?.toLowerCase();
       if (activeAddr === key) renderNetPosLine();
       return;
@@ -1424,6 +1446,11 @@ export function mountChart(container, options = {}) {
       state.ownBreakEven.set(key, be);
     } else {
       state.ownBreakEven.delete(key);
+    }
+    if (beBase > 0) {
+      state.ownBreakEvenBase.set(key, beBase);
+    } else {
+      state.ownBreakEvenBase.delete(key);
     }
     const active = state.token?.address?.toLowerCase();
     if (active === key) renderNetPosLine();

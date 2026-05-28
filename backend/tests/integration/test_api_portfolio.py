@@ -181,6 +181,9 @@ class TestMixedPositions:
         assert country["pnlPitch"] == "0"
         # No sells → break-even == avg buy (1 PITCH), realized 0.
         assert country["breakEvenPitch"] == str(10**18)
+        # Country: base IS PITCH → base break-even equals the pitch value.
+        assert country["breakEvenBaseWei"] == str(10**18)
+        assert country["breakEvenBaseDisplay"] == pytest.approx(1.0)
         assert country["realizedPitch"] == "0"
 
         player = items_by_token[_PLAYER]
@@ -195,6 +198,10 @@ class TestMixedPositions:
         assert player["pnlPitch"] == "0"
         # No sells → break-even == avg buy (2 PITCH), realized 0.
         assert player["breakEvenPitch"] == str(2 * 10**18)
+        # Player: break-even base is in country units (2 country); the pitch
+        # value is that x country->PITCH rate (1 per fixture) = 2 PITCH.
+        assert player["breakEvenBaseWei"] == str(2 * 10**18)
+        assert player["breakEvenBaseDisplay"] == pytest.approx(2.0)
         assert player["realizedPitch"] == "0"
 
 
@@ -301,6 +308,33 @@ class TestBreakEvenAndRealized:
         assert item["realizedPitchDisplay"] == pytest.approx(-4.0)
         # break-even = (12 - 4) / 2 = 4 country → * 1 = 4 PITCH.
         assert item["breakEvenPitch"] == str(4 * 10**18)
+        # Base break-even is the un-converted country value (4 country).
+        assert item["breakEvenBaseWei"] == str(4 * 10**18)
+        assert item["breakEvenBaseDisplay"] == pytest.approx(4.0)
+
+    def test_break_even_base_differs_from_pitch_when_rate_not_one(self, app) -> None:
+        # Player break-even base stays in country units while the pitch value
+        # is scaled by a non-1 country→PITCH rate, so the two MUST differ.
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE market_state SET price_pitch = %s WHERE token_address = %s",
+                    (3 * 10**18, _COUNTRY),  # country→PITCH rate = 3
+                )
+            conn.commit()
+        # Buy 2 for 4 country (avg buy 2 country). No sells → break-even base = 2.
+        _insert_event(100, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/portfolio")
+        item = resp.get_json()["items"][0]
+        assert item["kind"] == "player"
+        # base = 2 country; pitch = 2 * 3 = 6 PITCH.
+        assert item["breakEvenBaseDisplay"] == pytest.approx(2.0)
+        assert item["breakEvenBaseWei"] == str(2 * 10**18)
+        assert item["breakEvenPitchDisplay"] == pytest.approx(6.0)
+        assert item["breakEvenPitch"] == str(6 * 10**18)
 
 
 class TestSortOrder:

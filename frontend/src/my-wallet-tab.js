@@ -97,6 +97,7 @@ function shortAddr(addr) {
  *   pnl: number,
  *   pnlPct: number|null,
  *   breakEven: number,
+ *   breakEvenBase: number,
  *   realized: number,
  *   balanceWei: string,
  * }|null}
@@ -113,6 +114,7 @@ function normaliseItem(raw) {
   const value = pickDisplay(raw, 'valuePitchDisplay', 'valuePitch');
   const pnl = pickDisplay(raw, 'pnlPitchDisplay', 'pnlPitch');
   const breakEven = pickDisplay(raw, 'breakEvenPitchDisplay', 'breakEvenPitch');
+  const breakEvenBase = pickDisplay(raw, 'breakEvenBaseDisplay', 'breakEvenBaseWei');
   const realized = pickDisplay(raw, 'realizedPitchDisplay', 'realizedPitch');
   // PnL % = pnl / cost-basis where cost-basis = balance * avgEntry. Skip when
   // we can't compute meaningfully (avoid divide-by-zero, infinity, etc.).
@@ -133,6 +135,7 @@ function normaliseItem(raw) {
     pnl: Number.isFinite(pnl) ? pnl : 0,
     pnlPct,
     breakEven: Number.isFinite(breakEven) ? breakEven : 0,
+    breakEvenBase: Number.isFinite(breakEvenBase) ? breakEvenBase : 0,
     realized: Number.isFinite(realized) ? realized : 0,
     balanceWei,
   };
@@ -181,13 +184,15 @@ function pickDisplay(raw, displayKey, weiKey) {
  * @property {(count: number|null) => void} [onTabCount]
  *   Host callback fired with the current position count (0 / N / null when
  *   locked). Used by the bottom-tabs shell to render the tab badge.
- * @property {(addr: string|null, balance: number, breakEven?: number) => void} [onBalance]
+ * @property {(addr: string|null, balance: number, breakEven?: number, breakEvenBase?: number) => void} [onBalance]
  *   Host callback fired with the freshly-fetched balance for the ACTIVE
  *   token in display units (NOT wei), plus its net-position break-even
- *   price (display PITCH; 0 = de-risked/not held). `chart.setOwnBalance`
- *   consumes both to render the Net pos overlay line at the break-even.
- *   Fired with 0/0 when the active token isn't in the portfolio (held
- *   nothing), and with the previous addr + 0/0 when the active token
+ *   price in BOTH denominations: PITCH (`breakEven`) and base/country
+ *   (`breakEvenBase`); 0 = de-risked/not held. `chart.setOwnBalance`
+ *   consumes them to render the Net pos overlay line at the break-even,
+ *   picking the denomination by the chart's unit toggle.
+ *   Fired with 0/0/0 when the active token isn't in the portfolio (held
+ *   nothing), and with the previous addr + 0/0/0 when the active token
  *   changes so the chart can clear stale lines.
  * @property {(item: { token: string, symbol: string, kind: string|null }) => void} [onTokenSelect]
  *   Host callback invoked when the user clicks a row — host resolves the
@@ -267,7 +272,12 @@ export function mountMyWalletTab(container, opts = {}) {
   function emitBalance() {
     if (!onBalance) return;
     const item = findActiveItem();
-    onBalance(state.token, item ? item.balance : 0, item ? item.breakEven : 0);
+    onBalance(
+      state.token,
+      item ? item.balance : 0,
+      item ? item.breakEven : 0,
+      item ? item.breakEvenBase : 0,
+    );
   }
 
   const root = el('div', {
@@ -760,7 +770,7 @@ export function mountMyWalletTab(container, opts = {}) {
         state.error = null;
         state.gen += 1;
         render();
-        if (onBalance && state.token) onBalance(state.token, 0, 0);
+        if (onBalance && state.token) onBalance(state.token, 0, 0, 0);
         return;
       }
       if (!wasConnected && state.accessState === 'premium') {
@@ -791,7 +801,7 @@ export function mountMyWalletTab(container, opts = {}) {
     // Clear stale balance on the previous token before swapping — otherwise
     // the chart's Net pos line keeps the old number.
     if (onBalance && prevToken && prevToken !== normalized) {
-      onBalance(prevToken, 0, 0);
+      onBalance(prevToken, 0, 0, 0);
     }
     state.token = normalized;
     state.tokenMeta = newMeta;

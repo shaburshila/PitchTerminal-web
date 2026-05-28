@@ -952,7 +952,8 @@ describe('mountChart', () => {
 
     // Supply a balance + break-even → line appears at the break-even price
     // (NOT the spot/last-candle-close of 11.8), styled orange via --net-pos.
-    chart.setOwnBalance(player.address, 5, 8.5);
+    // Player default unit is 'country' → the base value (4th arg) is drawn.
+    chart.setOwnBalance(player.address, 5, 8.5, 8.5);
     netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
     expect(netLines.length).toBe(1);
     expect(netLines[0].opts.price).toBeCloseTo(8.5, 5);
@@ -976,19 +977,50 @@ describe('mountChart', () => {
     await flush();
 
     const series = created.charts[0].seriesList[0];
-    // Balance held but break-even floored at 0 → nothing meaningful to draw.
-    chart.setOwnBalance(player.address, 5, 0);
+    // Player default unit is 'country' → renderNetPosLine picks the base
+    // (4th) arg. Balance held but break-even floored at 0 → nothing to draw.
+    chart.setOwnBalance(player.address, 5, 0, 0);
     expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
 
     // Break-even omitted (defaults to 0) → still no line.
     chart.setOwnBalance(player.address, 5);
     expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
 
-    // Supplying a positive break-even draws it.
-    chart.setOwnBalance(player.address, 5, 9.25);
+    // Supplying a positive base break-even draws it.
+    chart.setOwnBalance(player.address, 5, 9.25, 9.25);
     const lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
     expect(lines.length).toBe(1);
     expect(lines[0].opts.price).toBeCloseTo(9.25, 5);
+  });
+
+  it('Net pos line picks break-even by denomination (country vs pitch)', async () => {
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    await flush();
+
+    // Supply distinct break-even values: pitch=14, base/country=7.
+    chart.setOwnBalance(player.address, 5, 14, 7);
+
+    // Player default unit is 'country' → line drawn at the base value (7).
+    let series = created.charts[0].seriesList[0];
+    let lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(lines.length).toBe(1);
+    expect(lines[0].opts.price).toBeCloseTo(7, 5);
+
+    // Switch to PITCH denomination → renderNetPosLine re-renders (via
+    // rebuildSeries) and picks the pitch value (14) on the fresh series.
+    container.querySelector('[data-test-id="chart-unit-pitch"]').click();
+    await flush();
+    series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
+    lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(lines.length).toBe(1);
+    expect(lines[0].opts.price).toBeCloseTo(14, 5);
   });
 
   it('toggling Net pos off removes the line without affecting balance state', async () => {
@@ -1000,7 +1032,7 @@ describe('mountChart', () => {
     });
     chart.setOwnAddress('0xme');
     chart.setToken(player);
-    chart.setOwnBalance(player.address, 5, 8.5);
+    chart.setOwnBalance(player.address, 5, 8.5, 8.5);
     await flush();
 
     const series = created.charts[0].seriesList[0];
@@ -1174,7 +1206,7 @@ describe('mountChart', () => {
     chart.setOwnAddress('0xme');
     chart.setToken(player);
     await flush();
-    chart.setOwnBalance(player.address, 5, 8.5);
+    chart.setOwnBalance(player.address, 5, 8.5, 8.5);
 
     // Now toggle type=candles — onTypeClick calls rebuildSeries() which
     // awaits ensureChartInstance() (already resolved here, so the await is

@@ -191,6 +191,10 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
         "balanceDisplay": round(_to_float(net_tokens_wei), 4),
         "avgEntryPitch": _wei_str(avg_entry_pitch_wei),
         "breakEvenPitch": _wei_str(break_even_pitch_wei),
+        # Break-even in *base* (country for players, PITCH for countries) units.
+        # The chart's price-denomination toggle picks this when viewing a player
+        # token in 'country' mode so the Net-pos line stays in the right units.
+        "breakEvenBaseWei": _wei_str(break_even_base_wei),
         "currentPricePitch": _wei_str(current_price_pitch_wei),
         "valuePitch": _wei_str(value_pitch_wei),
         "pnlPitch": _wei_str(pnl_pitch_wei),
@@ -198,6 +202,7 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
         # Convenience floats — UI doesn't need to do BigInt math just to render.
         "avgEntryPitchDisplay": round(_to_float(avg_entry_pitch_wei), 6),
         "breakEvenPitchDisplay": round(_to_float(break_even_pitch_wei), 6),
+        "breakEvenBaseDisplay": round(_to_float(break_even_base_wei), 6),
         "currentPricePitchDisplay": round(_to_float(current_price_pitch_wei), 6),
         "valuePitchDisplay": round(_to_float(value_pitch_wei), 4),
         "pnlPitchDisplay": round(_to_float(pnl_pitch_wei), 4),

@@ -25,6 +25,8 @@ function makeItem(overrides = {}) {
     pnlPitchDisplay: 1.0,
     breakEvenPitch: '11600000000000000000',
     breakEvenPitchDisplay: 11.6,
+    breakEvenBaseWei: '11600000000000000000',
+    breakEvenBaseDisplay: 11.6,
     realizedPitch: '3100000000000000000',
     realizedPitchDisplay: 3.1,
     feesPaidWei: '400000000000000000',
@@ -328,10 +330,15 @@ describe('mountMyWalletTab', () => {
     const acc = makeAccount();
     mountMyWalletTab(c, {
       apiClient: makeApi([
-        makeItem({ token: TOKEN, balanceDisplay: 7.5, breakEvenPitchDisplay: 9.25 }),
+        makeItem({
+          token: TOKEN,
+          balanceDisplay: 7.5,
+          breakEvenPitchDisplay: 9.25,
+          breakEvenBaseDisplay: 4.6,
+        }),
       ]),
       token: TOKEN,
-      onBalance: (addr, bal, be) => balances.push({ addr, bal, be }),
+      onBalance: (addr, bal, be, beBase) => balances.push({ addr, bal, be, beBase }),
       getAccount: acc.getAccount,
       onAccountChange: acc.onAccountChange,
     });
@@ -339,8 +346,10 @@ describe('mountMyWalletTab', () => {
     const last = balances[balances.length - 1];
     expect(last.addr).toBe(TOKEN);
     expect(last.bal).toBe(7.5);
-    // Break-even is plumbed through as the 3rd arg → chart draws Net pos here.
+    // Break-even is plumbed through as the 3rd arg (PITCH) + 4th arg (base) →
+    // chart draws Net pos at whichever matches the active denomination.
     expect(last.be).toBe(9.25);
+    expect(last.beBase).toBe(4.6);
   });
 
   it('emits onBalance=0 when active token is not in portfolio', async () => {

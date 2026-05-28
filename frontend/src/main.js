@@ -1004,7 +1004,8 @@ async function bootstrap() {
   // the Net pos overlay line shows. Cleared to 0 on token swap / no-data.
   // Wave 2B: also forward portfolio row-clicks via onTokenSelect → selectByAddress.
   const bottom = mountBottomTabs(bottomZone, {
-    onBalance: (addr, balance, breakEven) => chart.setOwnBalance(addr, balance, breakEven),
+    onBalance: (addr, balance, breakEven, breakEvenBase) =>
+      chart.setOwnBalance(addr, balance, breakEven, breakEvenBase),
     onTokenSelect: (item) =>
       selectByAddress(item?.token, { symbol: item?.symbol, kind: item?.kind }),
   });
