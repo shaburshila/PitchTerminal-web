@@ -169,16 +169,20 @@
 
 /* Header help button ----------------------------------------------------- */
 
-/* Square chip with a single `?` glyph. Sits between Referral and Profile in
- * the header cluster; visual weight intentionally quieter than the Referral
- * gold chip so it reads as a secondary affordance. */
+/* Small round chip with a single `?` glyph. Sits immediately after the
+ * "PitchTerminal · beta" wordmark in the header's left cluster; compact and
+ * quiet so it reads as a secondary "what is this?" affordance. */
 .pt-header__action.pt-header__action--help {
-  /* Square-ish footprint — same height as siblings via .pt-header__action.
-     Override padding so the lone ? glyph sits centered. */
-  padding-left: 12px;
-  padding-right: 12px;
-  min-width: 32px;
+  /* Circular footprint, slightly smaller than the other header action chips.
+     Equal width/height + 50% radius for a perfect circle; flex-centered `?`. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
 }

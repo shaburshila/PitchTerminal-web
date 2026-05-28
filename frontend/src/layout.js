@@ -65,6 +65,18 @@ function buildHeader() {
   );
   left.appendChild(logo);
 
+  // Help (?) button — re-opens the onboarding modal. Sits immediately after
+  // the "PitchTerminal · beta" wordmark so first-time users find it right next
+  // to the brand. Click handler is wired in main.js. Hidden on mobile (see
+  // styles/mobile.css) — mobile uses the first-visit auto-open instead.
+  const helpBtn = el('button', {
+    className: 'pt-btn pt-header__action pt-header__action--help',
+    dataset: { testId: 'header-help-btn' },
+    attrs: { type: 'button', 'aria-label': 'What is PitchTerminal? (help)' },
+    text: '?',
+  });
+  left.appendChild(helpBtn);
+
   // Center: mount point for the version-check "update available" banner.
   // Empty by default — `version-check.js` populates it on backend↔bundle
   // SHA mismatch, hiding via CSS `:empty` selector when in sync.
@@ -120,15 +132,6 @@ function buildHeader() {
     }),
   );
 
-  // Help (?) button — re-opens the onboarding modal. Sits between Referral
-  // and Profile so the eye reaches it first when looking for orientation.
-  const helpBtn = el('button', {
-    className: 'pt-btn pt-header__action pt-header__action--help',
-    dataset: { testId: 'header-help-btn' },
-    attrs: { type: 'button', 'aria-label': 'What is PitchTerminal? (help)' },
-    text: '?',
-  });
-
   // Wallet-area placeholder — `mountWalletChip` (F0.9/F0.10) replaces its
   // children with the connect-button → chip flow on every `onAccountChange`.
   const walletArea = el('div', {
@@ -146,11 +149,9 @@ function buildHeader() {
   // would leak listeners on re-mount).
   walletArea.appendChild(connectBtn);
 
-  // Order: Referral → Help (?) → Profile → wallet-area. Referral keeps the
-  // outer-left slot; Help sits adjacent so first-time users find it on the
-  // way to/from the brand-pitch cluster.
+  // Order: Referral → Profile → wallet-area. The Help (?) button moved next
+  // to the brand wordmark in the left cluster (see above).
   right.appendChild(referralBtn);
-  right.appendChild(helpBtn);
   right.appendChild(profileBtn);
   right.appendChild(walletArea);
 

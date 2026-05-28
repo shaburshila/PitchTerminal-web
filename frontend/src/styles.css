@@ -141,6 +141,10 @@ button {
 
 .pt-header__left {
   justify-self: start;
+  /* Flex so the round Help (?) button sits inline right after the wordmark. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .pt-header__center {

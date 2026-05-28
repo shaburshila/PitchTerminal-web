@@ -73,16 +73,22 @@ describe('mountLayout', () => {
     expect(profileBtn).not.toBeNull();
     expect(referralBtn).not.toBeNull();
     expect(walletArea).not.toBeNull();
-    // Sibling order — all three live inside .pt-header__right.
+    // Sibling order — Referral + Profile + wallet-area live inside
+    // .pt-header__right (Help moved to the left cluster, see below).
     const right = walletArea.parentElement;
     expect(right.classList.contains('pt-header__right')).toBe(true);
     const order = Array.from(right.children).map((c) => c.dataset.testId);
-    expect(order).toEqual([
-      'header-referral-btn',
-      'header-help-btn',
-      'header-profile-btn',
-      'wallet-area',
-    ]);
+    expect(order).toEqual(['header-referral-btn', 'header-profile-btn', 'wallet-area']);
+
+    // Help (?) button sits in the left cluster, immediately after the logo
+    // wordmark.
+    const helpBtn = root.querySelector('[data-test-id="header-help-btn"]');
+    const logo = root.querySelector('[data-test-id="header-logo"]');
+    expect(helpBtn).not.toBeNull();
+    const left = logo.parentElement;
+    expect(left.classList.contains('pt-header__left')).toBe(true);
+    expect(helpBtn.parentElement).toBe(left);
+    expect(logo.nextElementSibling).toBe(helpBtn);
   });
 
   it('renders the PitchTerminal logo as a clickable button', () => {
