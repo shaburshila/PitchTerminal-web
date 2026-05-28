@@ -2310,6 +2310,77 @@ body.mode-dashboard .pt-profile {
   font-weight: 600;
 }
 
+/* Single-token focused position card (shown when an active token is selected
+   and held — replaces the multi-row table for that one position). */
+.pt-mywallet__card {
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.pt-mywallet__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px;
+  border-bottom: 1px solid var(--line, var(--border));
+  background: var(--bg-2, #141d1a);
+}
+.pt-mywallet__card-ident {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.pt-mywallet__card-sym {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-mywallet__card-rows {
+  display: flex;
+  flex-direction: column;
+}
+.pt-mywallet__card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--bg-2, #141d1a);
+}
+.pt-mywallet__card-row:last-child {
+  border-bottom: none;
+}
+.pt-mywallet__card-label {
+  color: var(--text-3, var(--text-muted));
+  font-size: 11.5px;
+}
+.pt-mywallet__card-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+}
+.pt-mywallet__card-value.is-positive {
+  color: var(--up, var(--success));
+}
+.pt-mywallet__card-value.is-negative {
+  color: var(--down, var(--danger));
+}
+.pt-mywallet__card-pnlpct {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
 /* Illustrated empty state — matches the mockup's icon + heading + body. */
 .pt-mywallet__empty {
   padding: 36px 18px;

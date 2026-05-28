@@ -96,6 +96,8 @@ function shortAddr(addr) {
  *   value: number,
  *   pnl: number,
  *   pnlPct: number|null,
+ *   breakEven: number,
+ *   realized: number,
  *   balanceWei: string,
  * }|null}
  */
@@ -110,6 +112,8 @@ function normaliseItem(raw) {
   const currentPrice = pickDisplay(raw, 'currentPricePitchDisplay', 'currentPricePitch');
   const value = pickDisplay(raw, 'valuePitchDisplay', 'valuePitch');
   const pnl = pickDisplay(raw, 'pnlPitchDisplay', 'pnlPitch');
+  const breakEven = pickDisplay(raw, 'breakEvenPitchDisplay', 'breakEvenPitch');
+  const realized = pickDisplay(raw, 'realizedPitchDisplay', 'realizedPitch');
   // PnL % = pnl / cost-basis where cost-basis = balance * avgEntry. Skip when
   // we can't compute meaningfully (avoid divide-by-zero, infinity, etc.).
   let pnlPct = null;
@@ -128,6 +132,8 @@ function normaliseItem(raw) {
     value: Number.isFinite(value) ? value : 0,
     pnl: Number.isFinite(pnl) ? pnl : 0,
     pnlPct,
+    breakEven: Number.isFinite(breakEven) ? breakEven : 0,
+    realized: Number.isFinite(realized) ? realized : 0,
     balanceWei,
   };
 }
@@ -243,6 +249,19 @@ export function mountMyWalletTab(container, opts = {}) {
     return state.items.find((it) => it.token === state.token) ?? null;
   }
 
+  /**
+   * Items to display + aggregate over. When an active token is selected the
+   * view is scoped to that single token's position (header totals + list +
+   * empty state all follow this subset). With no active token we fall back to
+   * the full multi-token portfolio.
+   *
+   * @returns {ReturnType<typeof normaliseItem>[]}
+   */
+  function visibleItems() {
+    if (!state.token) return state.items;
+    return state.items.filter((it) => it.token === state.token);
+  }
+
   function emitBalance() {
     if (!onBalance) return;
     const item = findActiveItem();
@@ -304,6 +323,9 @@ export function mountMyWalletTab(container, opts = {}) {
 
   function renderEmpty() {
     root.replaceChildren();
+    // Two flavours: a token is selected but the user holds none of it
+    // (scoped-empty) vs. the user holds nothing at all (portfolio-empty).
+    const scopedEmpty = state.token != null;
     const wrap = el('div', {
       className: 'pt-mywallet__empty',
       dataset: { testId: 'mywallet-empty' },
@@ -314,11 +336,18 @@ export function mountMyWalletTab(container, opts = {}) {
       '<path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>' +
       '<path d="M17 12h2"/><path d="M3 9h18"/></svg>';
     wrap.appendChild(icon);
-    wrap.appendChild(el('h4', { className: 'pt-mywallet__empty-title', text: 'No positions yet' }));
+    wrap.appendChild(
+      el('h4', {
+        className: 'pt-mywallet__empty-title',
+        text: scopedEmpty ? 'No position in this token' : 'No positions yet',
+      }),
+    );
     wrap.appendChild(
       el('p', {
         className: 'pt-mywallet__empty-body',
-        text: 'You have no holdings. Browse the markets and buy your first position.',
+        text: scopedEmpty
+          ? "You don't hold this token yet. Buy a position to see it here."
+          : 'You have no holdings. Browse the markets and buy your first position.',
       }),
     );
     root.appendChild(wrap);
@@ -331,14 +360,17 @@ export function mountMyWalletTab(container, opts = {}) {
     });
     const totals = el('div', { className: 'pt-mywallet__totals' });
     totals.appendChild(
-      el('span', { className: 'pt-mywallet__head-label', text: 'Total holdings' }),
+      el('span', {
+        className: 'pt-mywallet__head-label',
+        text: state.token ? 'Position value' : 'Total holdings',
+      }),
     );
-    const totalValue = state.items.reduce((acc, it) => acc + (it.value || 0), 0);
-    const totalPnl = state.items.reduce((acc, it) => acc + (it.pnl || 0), 0);
-    const totalCost = state.items.reduce(
-      (acc, it) => acc + (it.balance || 0) * (it.avgEntry || 0),
-      0,
-    );
+    // Scope the header aggregates to the visible subset — when a token is
+    // selected this is just that one position; otherwise the full portfolio.
+    const scoped = visibleItems();
+    const totalValue = scoped.reduce((acc, it) => acc + (it.value || 0), 0);
+    const totalPnl = scoped.reduce((acc, it) => acc + (it.pnl || 0), 0);
+    const totalCost = scoped.reduce((acc, it) => acc + (it.balance || 0) * (it.avgEntry || 0), 0);
     const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : null;
 
     const valueWrap = el('span', { className: 'pt-mywallet__head-value' });
@@ -466,8 +498,131 @@ export function mountMyWalletTab(container, opts = {}) {
     return row;
   }
 
+  /**
+   * Single-token focused position card. Rendered instead of the multi-row
+   * table when an active token is selected and the user holds it. The card
+   * surfaces the same metrics as a table row plus break-even + realized PnL,
+   * so the separate header-totals block is intentionally NOT rendered in this
+   * mode (it would duplicate Position value / Unrealized PnL).
+   */
+  function buildCard(item) {
+    const card = el('div', {
+      className: 'pt-mywallet__card',
+      dataset: { testId: 'mywallet-card', token: item.token },
+    });
+
+    // Header: symbol + kind badge + PnL% pill.
+    const header = el('div', { className: 'pt-mywallet__card-head' });
+    const ident = el('div', { className: 'pt-mywallet__card-ident' });
+    ident.appendChild(
+      el('span', {
+        className: 'pt-mywallet__card-sym',
+        text: item.symbol || shortAddr(item.token),
+      }),
+    );
+    const kindLabel = item.kind || 'token';
+    ident.appendChild(
+      el('span', {
+        className: `pt-mywallet__tick pt-mywallet__tick--${kindLabel}`,
+        text: `· ${kindLabel}`,
+      }),
+    );
+    header.appendChild(ident);
+    if (item.pnlPct != null) {
+      const isPositive = item.pnlPct >= 0;
+      header.appendChild(
+        el('span', {
+          className: `pt-mywallet__pnl${isPositive ? ' is-positive' : ' is-negative'}`,
+          dataset: { testId: 'mywallet-card-pnlpct' },
+          text: formatPct(item.pnlPct),
+        }),
+      );
+    }
+    card.appendChild(header);
+
+    const rows = el('div', { className: 'pt-mywallet__card-rows' });
+
+    function metric(label, valueNode, testId) {
+      const r = el('div', { className: 'pt-mywallet__card-row' });
+      r.appendChild(el('span', { className: 'pt-mywallet__card-label', text: label }));
+      if (testId) valueNode.dataset.testId = testId;
+      rows.appendChild(r);
+      r.appendChild(valueNode);
+    }
+
+    metric(
+      'Quantity',
+      el('span', { className: 'pt-mywallet__card-value', text: formatNumber(item.balance, 4) }),
+      'mywallet-card-qty',
+    );
+    metric(
+      'Position value',
+      el('span', {
+        className: 'pt-mywallet__card-value',
+        text: `${formatNumber(item.value, 4)} PITCH`,
+      }),
+      'mywallet-card-value',
+    );
+    metric(
+      'Avg buy',
+      el('span', { className: 'pt-mywallet__card-value', text: formatNumber(item.avgEntry, 6) }),
+      'mywallet-card-avg',
+    );
+    // Break-even floored at 0 server-side is meaningless (fully de-risked) —
+    // show an em-dash rather than "0.000000".
+    metric(
+      'Break-even',
+      el('span', {
+        className: 'pt-mywallet__card-value',
+        text: item.breakEven > 0 ? formatNumber(item.breakEven, 6) : '—',
+      }),
+      'mywallet-card-breakeven',
+    );
+
+    const pnlSign = item.pnl >= 0 ? ' is-positive' : ' is-negative';
+    const pnlNode = el('span', {
+      className: `pt-mywallet__card-value${pnlSign}`,
+      dataset: { testId: 'mywallet-card-pnl' },
+    });
+    pnlNode.appendChild(el('span', { text: `${formatSigned(item.pnl, 4)} PITCH` }));
+    if (item.pnlPct != null) {
+      pnlNode.appendChild(
+        el('span', {
+          className: 'pt-mywallet__card-pnlpct',
+          text: ` (${formatPct(item.pnlPct)})`,
+        }),
+      );
+    }
+    metric('Unrealized PnL', pnlNode);
+
+    const realizedSign = item.realized >= 0 ? ' is-positive' : ' is-negative';
+    metric(
+      'Realized PnL',
+      el('span', {
+        className: `pt-mywallet__card-value${realizedSign}`,
+        text: `${formatSigned(item.realized, 4)} PITCH`,
+      }),
+      'mywallet-card-realized',
+    );
+
+    card.appendChild(rows);
+    return card;
+  }
+
   function renderData() {
     root.replaceChildren();
+
+    // Single-token focused mode: render a position card instead of the table.
+    // The card carries its own metrics, so we skip the header-totals block to
+    // avoid showing Position value / Unrealized PnL twice.
+    if (state.token != null) {
+      const scoped = visibleItems();
+      if (scoped.length === 1) {
+        root.appendChild(buildCard(scoped[0]));
+        return;
+      }
+    }
+
     root.appendChild(buildHead());
 
     const tableHead = el('div', {
@@ -484,8 +639,11 @@ export function mountMyWalletTab(container, opts = {}) {
       dataset: { testId: 'mywallet-list' },
     });
     // Sort by value desc (server already sorts but we re-sort defensively
-    // in case future SSE-driven mutation reorders the list locally).
-    const sorted = state.items.slice().sort((a, b) => (b.value || 0) - (a.value || 0));
+    // in case future SSE-driven mutation reorders the list locally). When an
+    // active token is selected this is scoped to that single position.
+    const sorted = visibleItems()
+      .slice()
+      .sort((a, b) => (b.value || 0) - (a.value || 0));
     for (const item of sorted) {
       list.appendChild(buildRow(item));
     }
@@ -518,7 +676,10 @@ export function mountMyWalletTab(container, opts = {}) {
       emitTabCount();
       return;
     }
-    if (state.items.length === 0) {
+    // Empty when there's nothing to show in the current scope: either the
+    // whole portfolio is empty (no token selected) or the selected token has
+    // no matching position.
+    if (visibleItems().length === 0) {
       renderEmpty();
       emitTabCount();
       return;

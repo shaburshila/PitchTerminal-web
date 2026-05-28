@@ -23,6 +23,10 @@ function makeItem(overrides = {}) {
     valuePitchDisplay: 30.0,
     pnlPitch: '1000000000000000000',
     pnlPitchDisplay: 1.0,
+    breakEvenPitch: '11600000000000000000',
+    breakEvenPitchDisplay: 11.6,
+    realizedPitch: '3100000000000000000',
+    realizedPitchDisplay: 3.1,
     feesPaidWei: '400000000000000000',
     spentBaseWei: '30000000000000000000',
     receivedBaseWei: '12000000000000000000',
@@ -420,7 +424,7 @@ describe('mountMyWalletTab', () => {
     expect(c.querySelector('.pt-mywallet__flag--placeholder')).toBeTruthy();
   });
 
-  it('active token row has is-active class + data-active=1', async () => {
+  it('selecting a held token renders its focused card (replaces table)', async () => {
     accessStore.set('premium');
     const c = makeContainer();
     const acc = makeAccount();
@@ -434,10 +438,10 @@ describe('mountMyWalletTab', () => {
       onAccountChange: acc.onAccountChange,
     });
     await flush();
-    const rows = c.querySelectorAll('[data-test-id="mywallet-row"]');
-    const activeRow = Array.from(rows).find((r) => r.dataset.token === TOKEN);
-    expect(activeRow.classList.contains('is-active')).toBe(true);
-    expect(activeRow.dataset.active).toBe('1');
+    const card = c.querySelector('[data-test-id="mywallet-card"]');
+    expect(card).toBeTruthy();
+    expect(card.dataset.token).toBe(TOKEN);
+    expect(c.querySelector('[data-test-id="mywallet-row"]')).toBeFalsy();
   });
 
   it('account-change to disconnect clears portfolio and emits onBalance=0', async () => {
@@ -570,5 +574,117 @@ describe('mountMyWalletTab', () => {
     const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
     expect(pill.className).toContain('is-negative');
     expect(pill.textContent).toContain('-3.5');
+  });
+
+  describe('single-token position card', () => {
+    it('renders the card (not the table/head) when an active token is held', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      mountMyWalletTab(c, {
+        apiClient: makeApi([
+          makeItem({ token: TOKEN, symbol: 'FRA' }),
+          makeItem({ token: TOKEN_2, symbol: 'BRA' }),
+        ]),
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-card"]')).toBeTruthy();
+      // Table + head-totals are suppressed in card mode.
+      expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeFalsy();
+      expect(c.querySelector('[data-test-id="mywallet-head"]')).toBeFalsy();
+      expect(c.querySelector('[data-test-id="mywallet-card"]').dataset.token).toBe(TOKEN);
+    });
+
+    it('shows all six metric rows with PITCH-suffixed values', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      mountMyWalletTab(c, {
+        apiClient: makeApi([
+          makeItem({
+            token: TOKEN,
+            symbol: 'FRA',
+            balanceDisplay: 1250,
+            valuePitchDisplay: 84.3,
+            avgEntryPitchDisplay: 0.0612,
+            breakEvenPitchDisplay: 0.054,
+            realizedPitchDisplay: 3.1,
+          }),
+        ]),
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-card-qty"]').textContent).toContain('1,250');
+      expect(c.querySelector('[data-test-id="mywallet-card-value"]').textContent).toBe(
+        '84.3 PITCH',
+      );
+      expect(c.querySelector('[data-test-id="mywallet-card-avg"]').textContent).toBe('0.0612');
+      expect(c.querySelector('[data-test-id="mywallet-card-breakeven"]').textContent).toBe('0.054');
+      expect(c.querySelector('[data-test-id="mywallet-card-realized"]').textContent).toBe(
+        '+3.1 PITCH',
+      );
+    });
+
+    it('colors gains green and losses red', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      mountMyWalletTab(c, {
+        apiClient: makeApi([
+          makeItem({ token: TOKEN, pnlPitchDisplay: 9.3, realizedPitchDisplay: -2.0 }),
+        ]),
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-card-pnl"]').className).toContain(
+        'is-positive',
+      );
+      expect(c.querySelector('[data-test-id="mywallet-card-realized"]').className).toContain(
+        'is-negative',
+      );
+      expect(c.querySelector('[data-test-id="mywallet-card-pnlpct"]').className).toContain(
+        'is-positive',
+      );
+    });
+
+    it('shows em-dash for break-even when floored at 0', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      mountMyWalletTab(c, {
+        apiClient: makeApi([makeItem({ token: TOKEN, breakEvenPitchDisplay: 0 })]),
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-card-breakeven"]').textContent).toBe('—');
+    });
+
+    it('falls back to table when no token selected, empty-state when token not held', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      // No token → table.
+      const handle = mountMyWalletTab(c, {
+        apiClient: makeApi([makeItem({ token: TOKEN_2, symbol: 'BRA' })]),
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-list"]')).toBeTruthy();
+      expect(c.querySelector('[data-test-id="mywallet-card"]')).toBeFalsy();
+      // Select a token the user does NOT hold → scoped empty state, no card.
+      await handle.setToken(TOKEN);
+      expect(c.querySelector('[data-test-id="mywallet-empty"]')).toBeTruthy();
+      expect(c.querySelector('[data-test-id="mywallet-card"]')).toBeFalsy();
+    });
   });
 });

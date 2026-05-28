@@ -179,6 +179,9 @@ class TestMixedPositions:
         assert country["currentPricePitch"] == str(10**18)
         assert country["valuePitch"] == str(5 * 10**18)
         assert country["pnlPitch"] == "0"
+        # No sells → break-even == avg buy (1 PITCH), realized 0.
+        assert country["breakEvenPitch"] == str(10**18)
+        assert country["realizedPitch"] == "0"
 
         player = items_by_token[_PLAYER]
         assert player["kind"] == "player"
@@ -190,6 +193,9 @@ class TestMixedPositions:
         # value = 2 * 2 = 4 PITCH; pnl = 0.
         assert player["valuePitch"] == str(4 * 10**18)
         assert player["pnlPitch"] == "0"
+        # No sells → break-even == avg buy (2 PITCH), realized 0.
+        assert player["breakEvenPitch"] == str(2 * 10**18)
+        assert player["realizedPitch"] == "0"
 
 
 class TestPnlMath:
@@ -234,6 +240,67 @@ class TestPnlMath:
         assert item["valuePitch"] == str(10**18)
         assert item["pnlPitch"] == str(-4 * 10**18)
         assert item["pnlPitchDisplay"] == pytest.approx(-4.0)
+
+
+class TestBreakEvenAndRealized:
+    def test_break_even_and_realized_with_prior_sells(self, app) -> None:
+        # Country token (base IS PITCH → identity conversion).
+        # Buy 10 tokens for 10 PITCH (avg buy = 1 PITCH/token).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 10 * 10**18, 0)
+        # Sell 4 tokens for 12 PITCH (3 PITCH each). Net held = 6.
+        _insert_event(101, 0, _COUNTRY, _WALLET, "sell", 12 * 10**18, 4 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/portfolio")
+        assert resp.status_code == 200
+        item = resp.get_json()["items"][0]
+        assert item["balance"] == str(6 * 10**18)
+        # avg buy = spent/bought = 10/10 = 1 PITCH.
+        assert item["avgEntryPitch"] == str(10**18)
+        # break-even = (spent - received) / position = (10 - 12) / 6 = -0.33…
+        #   floored at 0.
+        assert item["breakEvenPitch"] == "0"
+        # realized = received - avgBuy * sold = 12 - 1 * 4 = 8 PITCH.
+        assert item["realizedPitch"] == str(8 * 10**18)
+        assert item["realizedPitchDisplay"] == pytest.approx(8.0)
+
+    def test_break_even_above_avg_buy_when_sold_at_loss(self, app) -> None:
+        # Buy 10 for 10 PITCH (avg buy 1). Sell 4 for 2 PITCH (0.5 each, a loss).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 10 * 10**18, 0)
+        _insert_event(101, 0, _COUNTRY, _WALLET, "sell", 2 * 10**18, 4 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/portfolio")
+        item = resp.get_json()["items"][0]
+        assert item["balance"] == str(6 * 10**18)
+        assert item["avgEntryPitch"] == str(10**18)
+        # break-even = (10 - 2) / 6 = 1.333… PITCH → above avg buy.
+        assert item["breakEvenPitch"] == str(8 * 10**18 // 6)
+        assert item["breakEvenPitchDisplay"] == pytest.approx(8 / 6, abs=1e-6)
+        # realized = 2 - 1 * 4 = -2 PITCH (locked-in loss, negative wei string).
+        assert item["realizedPitch"] == str(-2 * 10**18)
+        assert item["realizedPitchDisplay"] == pytest.approx(-2.0)
+
+    def test_realized_negative_for_player_uses_signed_conversion(self, app) -> None:
+        # Player: base = country, country→PITCH rate = 1 (per fixture).
+        # Buy 6 for 12 country (avg buy 2 country = 2 PITCH). Sell 4 for 4
+        # country (1 each, a loss). Net held = 2. realized_base = 4 - 2*4 = -4.
+        _insert_event(100, 0, _PLAYER, _WALLET, "buy", 12 * 10**18, 6 * 10**18, 0)
+        _insert_event(101, 0, _PLAYER, _WALLET, "sell", 4 * 10**18, 4 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/portfolio")
+        item = resp.get_json()["items"][0]
+        assert item["kind"] == "player"
+        assert item["balance"] == str(2 * 10**18)
+        # signed conversion: -4 country * rate 1 = -4 PITCH (exact, no floor bias).
+        assert item["realizedPitch"] == str(-4 * 10**18)
+        assert item["realizedPitchDisplay"] == pytest.approx(-4.0)
+        # break-even = (12 - 4) / 2 = 4 country → * 1 = 4 PITCH.
+        assert item["breakEvenPitch"] == str(4 * 10**18)
 
 
 class TestSortOrder:

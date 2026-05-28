@@ -154,6 +154,35 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
     cost_basis_pitch_wei = (net_tokens_wei * avg_entry_pitch_wei) // 10**18
     pnl_pitch_wei = value_pitch_wei - cost_basis_pitch_wei  # may be negative
 
+    # ─── Break-even (net cost per held token, *base* currency, wei) ──────────
+    # (spent - received) / position — the per-token price at which selling the
+    # whole remaining position nets zero total PnL. Floored at 0 (a position
+    # that has already returned more than it cost has no positive break-even).
+    sold_wei = bought_wei - net_tokens_wei  # gross tokens sold
+    break_even_base_wei = (
+        max((spent_wei - received_wei) * 10**18 // net_tokens_wei, 0) if net_tokens_wei > 0 else 0
+    )
+
+    # ─── Realized PnL (already-locked profit/loss, *base* currency, wei) ─────
+    # received - avgBuy * sold. Can be NEGATIVE (sold below cost basis).
+    realized_base_wei = received_wei - (avg_entry_base_wei * sold_wei) // 10**18
+
+    # Convert both from base→PITCH. break_even mirrors avg_entry (player: scale by
+    # country→PITCH; country: identity). realized needs the same scaling but is
+    # sign-sensitive: Python ``//`` floors toward -inf, so a naive
+    # ``(neg * rate) // 10**18`` would bias the loss. Split the sign off, scale
+    # the magnitude, then re-apply — keeps negative values exact.
+    if kind == "player":
+        break_even_pitch_wei = (break_even_base_wei * country_pitch_wei) // 10**18
+        realized_sign = -1 if realized_base_wei < 0 else 1
+        realized_pitch_wei = realized_sign * (
+            (abs(realized_base_wei) * country_pitch_wei) // 10**18
+        )
+    else:
+        # countries: base IS PITCH → identity conversion.
+        break_even_pitch_wei = break_even_base_wei
+        realized_pitch_wei = realized_base_wei
+
     return {
         "token": token,
         "symbol": row["symbol"],
@@ -161,14 +190,18 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
         "balance": _wei_str(net_tokens_wei),
         "balanceDisplay": round(_to_float(net_tokens_wei), 4),
         "avgEntryPitch": _wei_str(avg_entry_pitch_wei),
+        "breakEvenPitch": _wei_str(break_even_pitch_wei),
         "currentPricePitch": _wei_str(current_price_pitch_wei),
         "valuePitch": _wei_str(value_pitch_wei),
         "pnlPitch": _wei_str(pnl_pitch_wei),
+        "realizedPitch": _wei_str(realized_pitch_wei),  # may be negative
         # Convenience floats — UI doesn't need to do BigInt math just to render.
         "avgEntryPitchDisplay": round(_to_float(avg_entry_pitch_wei), 6),
+        "breakEvenPitchDisplay": round(_to_float(break_even_pitch_wei), 6),
         "currentPricePitchDisplay": round(_to_float(current_price_pitch_wei), 6),
         "valuePitchDisplay": round(_to_float(value_pitch_wei), 4),
         "pnlPitchDisplay": round(_to_float(pnl_pitch_wei), 4),
+        "realizedPitchDisplay": round(_to_float(realized_pitch_wei), 4),
         # Raw aggregation metadata (helps debugging + future UI needs).
         "feesPaidWei": _wei_str(fees_wei),
         "spentBaseWei": _wei_str(spent_wei),
