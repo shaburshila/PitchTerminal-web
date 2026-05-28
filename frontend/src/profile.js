@@ -130,7 +130,7 @@ export function mountProfile(container, opts = {}) {
   const status = el('div', {
     className: 'pt-profile__status',
     dataset: { testId: 'profile-status' },
-    text: 'Loading profile…',
+    text: 'Loading portfolio…',
   });
   wrapper.appendChild(status);
 
@@ -657,7 +657,7 @@ export function mountProfile(container, opts = {}) {
     // Reset pagination — reload() must not preserve a stale cursor stack
     // from a previous session of the same Profile view.
     state.trades.history = [];
-    setStatus('Loading profile…', false);
+    setStatus('Loading portfolio…', false);
 
     let resp;
     try {

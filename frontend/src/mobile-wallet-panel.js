@@ -136,7 +136,7 @@ export function mountMobileWalletPanel(container, opts = {}) {
   /** @type {Record<string, HTMLButtonElement>} */
   const chipButtons = {};
   const chipSpec = [
-    { id: 'profile', label: 'Profile' },
+    { id: 'profile', label: 'Portfolio' },
     { id: 'orders', label: 'Orders' },
     { id: 'referral', label: 'Referral' },
     { id: 'mywallet', label: 'My Wallet' },

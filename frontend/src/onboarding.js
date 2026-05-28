@@ -194,7 +194,7 @@ export function showOnboardingModal() {
   proList.appendChild(buildFeatureItem('Market & limit orders (trading)'));
   proList.appendChild(buildFeatureItem('My Wallet portfolio view'));
   proList.appendChild(buildFeatureItem('Orders tab (open + history)'));
-  proList.appendChild(buildFeatureItem('Profile + Referral program'));
+  proList.appendChild(buildFeatureItem('Portfolio + Referral program'));
   proCard.appendChild(proList);
   grid.appendChild(proCard);
 

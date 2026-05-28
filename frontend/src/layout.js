@@ -105,8 +105,8 @@ function buildHeader() {
   const profileBtn = el('button', {
     className: 'pt-btn pt-header__action',
     dataset: { testId: 'header-profile-btn' },
-    attrs: { type: 'button', 'aria-label': 'Open profile' },
-    text: 'Profile',
+    attrs: { type: 'button', 'aria-label': 'Open portfolio' },
+    text: 'Portfolio',
   });
   profileBtn.appendChild(
     el('span', {
