@@ -327,9 +327,11 @@ describe('mountMyWalletTab', () => {
     const balances = [];
     const acc = makeAccount();
     mountMyWalletTab(c, {
-      apiClient: makeApi([makeItem({ token: TOKEN, balanceDisplay: 7.5 })]),
+      apiClient: makeApi([
+        makeItem({ token: TOKEN, balanceDisplay: 7.5, breakEvenPitchDisplay: 9.25 }),
+      ]),
       token: TOKEN,
-      onBalance: (addr, bal) => balances.push({ addr, bal }),
+      onBalance: (addr, bal, be) => balances.push({ addr, bal, be }),
       getAccount: acc.getAccount,
       onAccountChange: acc.onAccountChange,
     });
@@ -337,6 +339,8 @@ describe('mountMyWalletTab', () => {
     const last = balances[balances.length - 1];
     expect(last.addr).toBe(TOKEN);
     expect(last.bal).toBe(7.5);
+    // Break-even is plumbed through as the 3rd arg → chart draws Net pos here.
+    expect(last.be).toBe(9.25);
   });
 
   it('emits onBalance=0 when active token is not in portfolio', async () => {
@@ -429,10 +433,7 @@ describe('mountMyWalletTab', () => {
     const c = makeContainer();
     const acc = makeAccount();
     mountMyWalletTab(c, {
-      apiClient: makeApi([
-        makeItem({ token: TOKEN }),
-        makeItem({ token: TOKEN_2, symbol: 'BRA' }),
-      ]),
+      apiClient: makeApi([makeItem({ token: TOKEN }), makeItem({ token: TOKEN_2, symbol: 'BRA' })]),
       token: TOKEN,
       getAccount: acc.getAccount,
       onAccountChange: acc.onAccountChange,

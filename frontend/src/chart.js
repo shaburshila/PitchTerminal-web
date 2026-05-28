@@ -310,6 +310,10 @@ export function mountChart(container, options = {}) {
     // and the Net-pos toggle is a no-op on the live app — the setter
     // exists so tests can drive the behaviour today.
     ownBalances: new Map(),
+    // Parallel map of lowercased token-address → break-even price (number,
+    // in display PITCH; <= 0 / undefined = fully de-risked or no position).
+    // Net-pos line draws at this value (not spot). Wired via setOwnBalance().
+    ownBreakEven: new Map(),
   };
 
   // ── Skeleton ────────────────────────────────────────────────────────────
@@ -762,6 +766,13 @@ export function mountChart(container, options = {}) {
     return typeof b === 'number' && Number.isFinite(b) && b > 0 ? b : 0;
   }
 
+  function currentOwnBreakEven() {
+    const addr = state.token?.address;
+    if (!addr) return 0;
+    const be = state.ownBreakEven.get(addr.toLowerCase());
+    return typeof be === 'number' && Number.isFinite(be) && be > 0 ? be : 0;
+  }
+
   function renderNetPosLine() {
     if (!series) return;
     if (netPosPriceLine && typeof series.removePriceLine === 'function') {
@@ -776,15 +787,18 @@ export function mountChart(container, options = {}) {
     if (!state.ownAddress) return; // disconnected → no position to draw
     if (currentOwnBalance() <= 0) return;
     if (typeof series.createPriceLine !== 'function') return;
-    const price = lastCandleClose();
-    if (typeof price !== 'number' || !Number.isFinite(price)) return;
+    // Draw at the net-position break-even, not the live spot price. A
+    // break-even of <= 0 (fully de-risked / floored by the backend) or a
+    // missing value means there's nothing meaningful to show — skip it.
+    const price = currentOwnBreakEven();
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return;
     try {
       netPosPriceLine = series.createPriceLine({
         price,
-        // lightweight-charts doesn't parse CSS variables — resolve --accent to
-        // a literal hex via readToken(). Fallback keeps tests/SSR rendering
-        // the canonical green from tokens.css.
-        color: readToken('--accent', '#3ddb8e'),
+        // lightweight-charts doesn't parse CSS variables — resolve --net-pos to
+        // a literal hex via readToken(). Orange keeps the break-even line
+        // visually distinct from the green --up/--accent and gold Avg line.
+        color: readToken('--net-pos', '#ff9500'),
         lineWidth: 1,
         lineStyle: 2, // dashed
         axisLabelVisible: true,
@@ -1348,6 +1362,7 @@ export function mountChart(container, options = {}) {
     if (next === null) {
       // Disconnect → forget balances too (next connect re-supplies).
       state.ownBalances.clear();
+      state.ownBreakEven.clear();
     }
     if (series && typeof series.setMarkers === 'function') {
       series.setMarkers(computeMarkers());
@@ -1376,11 +1391,14 @@ export function mountChart(container, options = {}) {
    *
    * @param {string} tokenAddress  Token contract address (any case).
    * @param {number} balance       Display-unit balance; 0 to clear.
+   * @param {number} [breakEven]   Net-position break-even price (display
+   *                               PITCH); <= 0 / omitted = nothing to draw.
    */
-  function setOwnBalance(tokenAddress, balance) {
+  function setOwnBalance(tokenAddress, balance, breakEven) {
     if (typeof tokenAddress !== 'string' || !tokenAddress) return;
     const key = tokenAddress.toLowerCase();
     const num = typeof balance === 'number' && Number.isFinite(balance) ? balance : 0;
+    const be = typeof breakEven === 'number' && Number.isFinite(breakEven) ? breakEven : 0;
     // Plausibility guard — if a caller accidentally passes wei (~1e18 for 1
     // PITCH) the chart would draw a horizontal line at a value beyond the
     // candle price range. 1e15 in display units (= 1 quadrillion tokens) is
@@ -1392,6 +1410,7 @@ export function mountChart(container, options = {}) {
         key,
       );
       state.ownBalances.delete(key);
+      state.ownBreakEven.delete(key);
       const activeAddr = state.token?.address?.toLowerCase();
       if (activeAddr === key) renderNetPosLine();
       return;
@@ -1400,6 +1419,11 @@ export function mountChart(container, options = {}) {
       state.ownBalances.set(key, num);
     } else {
       state.ownBalances.delete(key);
+    }
+    if (be > 0) {
+      state.ownBreakEven.set(key, be);
+    } else {
+      state.ownBreakEven.delete(key);
     }
     const active = state.token?.address?.toLowerCase();
     if (active === key) renderNetPosLine();

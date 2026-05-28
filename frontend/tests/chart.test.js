@@ -934,7 +934,7 @@ describe('mountChart', () => {
     expect(stillHasAvg).toBe(false);
   });
 
-  it('Net pos line renders at spot when balance>0 and clears on disconnect', async () => {
+  it('Net pos line renders at break-even when balance>0 and clears on disconnect', async () => {
     const { lib, created } = makeChartLib();
     const player = makePlayer();
     const chart = mountChart(container, {
@@ -950,16 +950,45 @@ describe('mountChart', () => {
     let netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
     expect(netLines.length).toBe(0);
 
-    // Supply a balance → line appears at last candle close (11.8 per payload).
-    chart.setOwnBalance(player.address, 5);
+    // Supply a balance + break-even → line appears at the break-even price
+    // (NOT the spot/last-candle-close of 11.8), styled orange via --net-pos.
+    chart.setOwnBalance(player.address, 5, 8.5);
     netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
     expect(netLines.length).toBe(1);
-    expect(netLines[0].opts.price).toBeCloseTo(11.8, 5);
+    expect(netLines[0].opts.price).toBeCloseTo(8.5, 5);
+    expect(netLines[0].opts.color).toBe('#ff9500');
 
     // Disconnect → net pos line cleared (ownAddress null → no position).
     chart.setOwnAddress(null);
     netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
     expect(netLines.length).toBe(0);
+  });
+
+  it('Net pos line is hidden when break-even is <= 0 (fully de-risked)', async () => {
+    const { lib, created } = makeChartLib();
+    const player = makePlayer();
+    const chart = mountChart(container, {
+      apiClient: makeApi(),
+      chartLibFactory: () => lib,
+    });
+    chart.setOwnAddress('0xme');
+    chart.setToken(player);
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    // Balance held but break-even floored at 0 → nothing meaningful to draw.
+    chart.setOwnBalance(player.address, 5, 0);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+
+    // Break-even omitted (defaults to 0) → still no line.
+    chart.setOwnBalance(player.address, 5);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+
+    // Supplying a positive break-even draws it.
+    chart.setOwnBalance(player.address, 5, 9.25);
+    const lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    expect(lines.length).toBe(1);
+    expect(lines[0].opts.price).toBeCloseTo(9.25, 5);
   });
 
   it('toggling Net pos off removes the line without affecting balance state', async () => {
@@ -971,7 +1000,7 @@ describe('mountChart', () => {
     });
     chart.setOwnAddress('0xme');
     chart.setToken(player);
-    chart.setOwnBalance(player.address, 5);
+    chart.setOwnBalance(player.address, 5, 8.5);
     await flush();
 
     const series = created.charts[0].seriesList[0];
@@ -1145,7 +1174,7 @@ describe('mountChart', () => {
     chart.setOwnAddress('0xme');
     chart.setToken(player);
     await flush();
-    chart.setOwnBalance(player.address, 5);
+    chart.setOwnBalance(player.address, 5, 8.5);
 
     // Now toggle type=candles — onTypeClick calls rebuildSeries() which
     // awaits ensureChartInstance() (already resolved here, so the await is

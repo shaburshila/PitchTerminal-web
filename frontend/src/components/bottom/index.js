@@ -140,7 +140,7 @@ function formatPercent(value) {
  *   myAddress?: string|null,
  *   pageSize?: number,
  *   softLock?: object,
- *   onBalance?: (addr: string|null, balance: number) => void,
+ *   onBalance?: (addr: string|null, balance: number, breakEven?: number) => void,
  *   onTokenSelect?: (item: { token: string, symbol: string, kind: string|null }) => void,
  * }} [options]
  * @returns {{

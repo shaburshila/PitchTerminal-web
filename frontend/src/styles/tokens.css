@@ -32,6 +32,10 @@
   --warn: #e0a93a;
   --warn-dim: rgba(224, 169, 58, 0.12);
   --info: #5fb0ff;
+  /* Net-position break-even chart line — orange, distinct from green
+     --up/--accent and gold --warn (Avg-buy line) so the two overlays
+     don't blend. */
+  --net-pos: #ff9500;
 
   /* Brand — primary accent (matches --up by design). */
   --accent: #3ddb8e;
