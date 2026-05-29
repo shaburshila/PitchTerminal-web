@@ -374,3 +374,89 @@ class TestValueSeriesHistorical:
         assert len(series) >= 1
         first = series[0]
         assert first["value"] == pytest.approx(16.0, abs=0.01)
+
+    def test_intermediate_points_use_each_moments_historical_price(self, app) -> None:
+        """Every wallet-trade point (not just the first) values held tokens at
+        the historical price of *that* moment.
+
+        This is the user-reported scenario: country tokens (and the player
+        price chain) must be marked-to-market at each intermediate point's
+        historical price, NOT at the current market price. We build two wallet
+        trades at different timestamps with the country price moving in between
+        (via a non-wallet trader), plus a player position whose two-leg chain
+        is sampled at the later timestamp.
+
+        Timeline (ts = 1_700_000_000 + block):
+          block 100  CTY  wallet  buy 5 for 10 PITCH  -> country curve = 2 PITCH
+          block 200  CTY  other   buy 5 for 30 PITCH  -> country moves to 6 PITCH
+          block 250  PLR  other   buy 3 for 6 BRA     -> player_in_country = 2
+          block 300  PLR  wallet  buy 4 for 8 BRA      (player_in_country = 2)
+
+        Expected valueSeries (the two wallet-trade points):
+          @ block-100 ts: holdings {CTY:5}; country@2  -> 5 * 2          = 10
+          @ block-300 ts: holdings {CTY:5, PLR:4};
+              country@6 (nearest <= ts is block 200)    -> 5 * 6          = 30
+              player@(2 country/PEL * 6 PITCH/country=12)-> 4 * 12         = 48
+                                                          -----------------------
+                                                          total            = 78
+
+        The tail "now" point uses current market_state (fixture: CTY=3, PLR=6
+        PITCH) -> 5*3 + 4*6 = 39, which deliberately differs from 78 so a
+        regression that reused the current price for the historical points
+        would surface as the block-300 point reading 39 instead of 78.
+        """
+
+        _other = "0x" + "cc" * 20
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(200, 0, _COUNTRY, _other, "buy", 30 * 10**18, 5 * 10**18, 0)
+        _insert_event(250, 0, _PLAYER, _other, "buy", 6 * 10**18, 3 * 10**18, 0)
+        _insert_event(300, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        series = body["valueSeries"]
+        # Two wallet-trade points + one tail "now" point.
+        assert len(series) == 3
+        # Sorted by time ascending; first = block 100, second = block 300.
+        by_time = {pt["time"]: pt["value"] for pt in series}
+        ts1 = 1_700_000_000 + 100
+        ts2 = 1_700_000_000 + 300
+        assert by_time[ts1] == pytest.approx(10.0, abs=0.01)
+        assert by_time[ts2] == pytest.approx(78.0, abs=0.01)
+        # The tail point ("now") is the current-price valuation = 39, distinct
+        # from the historical block-300 point (78). Confirms the loop never
+        # leaked the current price into the historical points.
+        tail = series[-1]
+        assert tail["time"] not in (ts1, ts2)
+        assert tail["value"] == pytest.approx(39.0, abs=0.01)
+
+    def test_sold_position_drops_out_of_later_points(self, app) -> None:
+        """A token fully sold before a later trade contributes 0 to subsequent
+        points (holdings goes to ~0, the per-token guard skips it)."""
+
+        # block 100: buy 5 CTY for 10 PITCH (country curve = 2 PITCH).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        # block 200: sell all 5 CTY for 20 PITCH (country curve = 4 PITCH).
+        _insert_event(200, 0, _COUNTRY, _WALLET, "sell", 20 * 10**18, 5 * 10**18, 0)
+        # block 300: buy 2 PLR for 4 BRA. Country@300 = 4 (nearest <= ts is
+        # block 200), player_in_country = 2 -> player = 2 * 4 = 8 PITCH.
+        _insert_event(300, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        series = resp.get_json()["valueSeries"]
+        by_time = {pt["time"]: pt["value"] for pt in series}
+        ts_buy = 1_700_000_000 + 100
+        ts_sell = 1_700_000_000 + 200
+        ts_player = 1_700_000_000 + 300
+        # @100: 5 CTY * 2 = 10.
+        assert by_time[ts_buy] == pytest.approx(10.0, abs=0.01)
+        # @200: CTY fully sold -> 0 contribution.
+        assert by_time[ts_sell] == pytest.approx(0.0, abs=0.01)
+        # @300: only 2 PLR held; CTY no longer contributes. 2 * (2 * 4) = 16.
+        assert by_time[ts_player] == pytest.approx(16.0, abs=0.01)
