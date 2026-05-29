@@ -109,6 +109,11 @@ class Config:
     # ─── Our contracts ───────────────────────────────────────────────────
     access_contract: str
     executor_contract: str
+    # Second LimitOrderExecutor instance configured for the icon venue
+    # (icon hook/router in the "player" slot). Empty until deployed — when
+    # empty, icon limit orders are simply unavailable (market trading is
+    # unaffected, it does not route through the executor).
+    icon_executor: str
 
     # ─── pitchwc contracts ───────────────────────────────────────────────
     player_router: str
@@ -116,6 +121,10 @@ class Config:
     player_hook: str
     country_hook: str
     pitch_token: str
+    # Icon-pack venue (pitchwc IconCurveHook + its router). Icon tokens trade
+    # against their country like players, but on this separate hook/router.
+    icon_hook: str
+    icon_router: str
 
     # ─── Frontend bootstrap ──────────────────────────────────────────────
     walletconnect_project_id: str
@@ -170,12 +179,15 @@ def _load() -> Config:
         # Our contracts (filled post-deploy)
         access_contract=_optional_addr("ACCESS_CONTRACT"),
         executor_contract=_optional_addr("EXECUTOR_CONTRACT"),
+        icon_executor=_optional_addr("ICON_EXECUTOR"),
         # pitchwc contracts
         player_router=_optional_addr("PLAYER_ROUTER"),
         country_router=_optional_addr("COUNTRY_ROUTER"),
         player_hook=_optional_addr("PLAYER_HOOK"),
         country_hook=_optional_addr("COUNTRY_HOOK"),
         pitch_token=_optional_addr("PITCH_TOKEN"),
+        icon_hook=_optional_addr("ICON_HOOK"),
+        icon_router=_optional_addr("ICON_ROUTER"),
         # Frontend
         walletconnect_project_id=_optional("WALLETCONNECT_PROJECT_ID"),
         # SIWE

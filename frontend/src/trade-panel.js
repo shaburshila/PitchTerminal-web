@@ -1122,12 +1122,37 @@ export function mountTradePanel(container, options = {}) {
    *
    * Returns null when we can't resolve (no token / contracts not loaded).
    */
+  /**
+   * The LimitOrderExecutor address for the currently-selected token. Icon
+   * tokens use the second executor instance (its own DOMAIN_SEPARATOR); when
+   * that address is unset (not yet deployed) limit mode stays disabled for
+   * icons while market trading is unaffected.
+   * @returns {string|null}
+   */
+  function activeExecutor() {
+    return state.token?.isIcon
+      ? (state.contracts?.iconLimitOrderExecutor ?? null)
+      : (state.contracts?.limitOrderExecutor ?? null);
+  }
+
   function resolveSide() {
     const v = resolveVenue(state.token, state.contracts?.pitch);
     if (!v) return null;
-    const hook = v.venue === 'player' ? state.contracts?.playerHook : state.contracts?.countryHook;
-    const router =
-      v.venue === 'player' ? state.contracts?.playerRouter : state.contracts?.countryRouter;
+    // Icon tokens resolve to the 'player' venue (they have a countryAddress)
+    // but trade on the separate IconCurveHook / icon router.
+    const isIcon = !!state.token?.isIcon;
+    let hook;
+    let router;
+    if (isIcon) {
+      hook = state.contracts?.iconHook;
+      router = state.contracts?.iconRouter;
+    } else if (v.venue === 'player') {
+      hook = state.contracts?.playerHook;
+      router = state.contracts?.playerRouter;
+    } else {
+      hook = state.contracts?.countryHook;
+      router = state.contracts?.countryRouter;
+    }
     if (typeof hook !== 'string' || !hook) return null;
     // Router can be missing in early config-load — still allow quote/balance,
     // approve+swap branches gate on it themselves.
@@ -1480,7 +1505,7 @@ export function mountTradePanel(container, options = {}) {
       chainId: state.account.chainId,
       token: state.token,
       contractsReady: !!state.contracts,
-      executorReady: !!state.contracts?.limitOrderExecutor,
+      executorReady: !!activeExecutor(),
       amountWei,
       triggerPriceWei: triggerWei,
       slippageBps,
@@ -1912,7 +1937,7 @@ export function mountTradePanel(container, options = {}) {
     return resolveLimitSpenderAndToken({
       side: state.side,
       venue: v,
-      executor: state.contracts?.limitOrderExecutor,
+      executor: activeExecutor(),
     });
   }
 
@@ -2186,7 +2211,7 @@ export function mountTradePanel(container, options = {}) {
     if (!amountWei || amountWei <= 0n) return;
     if (!displayWei || displayWei <= 0n) return;
     if (!state.account.isConnected || !state.account.address) return;
-    if (!state.contracts?.limitOrderExecutor) return;
+    if (!activeExecutor()) return;
     const v = resolveVenue(state.token, state.contracts?.pitch);
     if (!v) return;
 
@@ -2294,11 +2319,7 @@ export function mountTradePanel(container, options = {}) {
     renderLimit();
     renderCta();
 
-    const typedData = buildOrderTypedData(
-      signOrder,
-      state.contracts.limitOrderExecutor,
-      state.chainId,
-    );
+    const typedData = buildOrderTypedData(signOrder, activeExecutor(), state.chainId);
     const signer = signTypedDataOverride ?? defaultSignTypedData;
 
     try {
@@ -2449,16 +2470,20 @@ export function mountTradePanel(container, options = {}) {
     // F2.x — also stash the LimitOrderExecutor address (verifyingContract in
     // the EIP-712 domain). Treat the well-known "all-zeros placeholder" as
     // unset so the limit-CTA stays disabled before the contract is deployed.
-    const exec =
-      typeof c.limitOrderExecutor === 'string' ? c.limitOrderExecutor.toLowerCase() : null;
-    const execValid = exec && exec !== '0x0000000000000000000000000000000000000000' ? exec : null;
+    const normExec = (v) => {
+      const a = typeof v === 'string' ? v.toLowerCase() : null;
+      return a && a !== '0x0000000000000000000000000000000000000000' ? a : null;
+    };
     state.contracts = {
       pitch: typeof c.pitch === 'string' ? c.pitch.toLowerCase() : null,
       playerHook: typeof c.playerHook === 'string' ? c.playerHook.toLowerCase() : null,
       countryHook: typeof c.countryHook === 'string' ? c.countryHook.toLowerCase() : null,
+      iconHook: typeof c.iconHook === 'string' ? c.iconHook.toLowerCase() : null,
       playerRouter: typeof c.playerRouter === 'string' ? c.playerRouter.toLowerCase() : null,
       countryRouter: typeof c.countryRouter === 'string' ? c.countryRouter.toLowerCase() : null,
-      limitOrderExecutor: execValid,
+      iconRouter: typeof c.iconRouter === 'string' ? c.iconRouter.toLowerCase() : null,
+      limitOrderExecutor: normExec(c.limitOrderExecutor),
+      iconLimitOrderExecutor: normExec(c.iconLimitOrderExecutor),
     };
     // F2.x — `chainId` from the config response wins over the hardcoded
     // BASE_CHAIN_ID for typedData signing. Falls back to Base (8453).

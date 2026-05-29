@@ -59,7 +59,7 @@ def _normalize_token_or_404(raw: str) -> dict[str, Any]:
             detail="not a valid 0x-address",
         )
     row = fetch_one(
-        "SELECT address, name, symbol, kind, country_address, role "
+        "SELECT address, name, symbol, kind, country_address, role, is_icon "
         "FROM tokens WHERE address = %s",
         (addr,),
     )
@@ -156,6 +156,10 @@ def _serialize_token(
         base["countryAddress"] = country_addr
         base["role"] = row["role"]
         base["priceCountry"] = float(market["price_country"]) / 1e18
+        # Icon-pack token: trades like a player but on the separate IconCurveHook
+        # / router / executor. The frontend reads this to pick the icon venue.
+        if row.get("is_icon"):
+            base["isIcon"] = True
     return base
 
 
@@ -172,7 +176,7 @@ def list_tokens() -> Any:
     # stable tiebreaker so the order doesn't shuffle between requests when
     # several tokens share the same price (very common when everything is 0).
     token_rows = fetch_all(
-        "SELECT t.address, t.name, t.symbol, t.kind, t.country_address, t.role "
+        "SELECT t.address, t.name, t.symbol, t.kind, t.country_address, t.role, t.is_icon "
         "FROM tokens t "
         "LEFT JOIN market_state m ON m.token_address = t.address "
         "ORDER BY m.price_pitch DESC NULLS LAST, t.address ASC"

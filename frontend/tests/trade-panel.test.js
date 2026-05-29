@@ -92,9 +92,12 @@ const CONFIG = {
     countryRouter: '0x61cad011db02d9924257f536bfd1ea615e42bb9d',
     playerHook: '0xd5252a67935fc6b913c4441ac0e5ebf3219faaa8',
     countryHook: '0x1111111111111111111111111111111111111111',
+    iconHook: '0xb3086becb80c2a82f93a47d773c3dac8958d2aa8',
+    iconRouter: '0x947b75422980bb451eca0c9a55dcc120f5c660dc',
     multicall3: '0xca11bde05977b3631167028862be2a173976ca11',
     access: '0x2222222222222222222222222222222222222222',
     limitOrderExecutor: '0xb22f38a0c133a32ab9582ace9e2da41d1738b9d5',
+    iconLimitOrderExecutor: '0x3333333333333333333333333333333333333333',
   },
 };
 
@@ -102,6 +105,15 @@ const PLAYER_TOKEN = {
   address: '0xpppp000000000000000000000000000000000001',
   symbol: 'PLR',
   countryAddress: '0xcccc000000000000000000000000000000000001',
+};
+
+// Icon token: has a countryAddress (resolves to 'player' venue) but carries
+// isIcon → must route to the icon hook/router/executor.
+const ICON_TOKEN = {
+  address: '0xicon000000000000000000000000000000000001',
+  symbol: 'RONALDO',
+  countryAddress: '0xcccc000000000000000000000000000000000001',
+  isIcon: true,
 };
 
 const COUNTRY_TOKEN = {
@@ -418,6 +430,33 @@ describe('mountTradePanel — quote flow', () => {
       fn: 'quoteBuy',
       token: PLAYER_TOKEN.address,
       amountIn: 15n * 10n ** 17n, // 1.5e18
+    });
+    handle.destroy();
+  });
+
+  it('icon token routes the quote to the icon hook', async () => {
+    vi.useFakeTimers();
+    const readQuote = vi.fn().mockResolvedValue(2n * 10n ** 18n);
+    const readBalance = vi.fn().mockResolvedValue(100n * 10n ** 18n);
+    const handle = mountTradePanel(container, {
+      apiClient: makeApi(),
+      token: ICON_TOKEN,
+      readQuote,
+      readBalance,
+      debounceMs: 200,
+    });
+    await wallet.connectWallet('injected');
+    await vi.advanceTimersByTimeAsync(0);
+    const input = container.querySelector('[data-test-id="trade-amount"]');
+    input.value = '1';
+    input.dispatchEvent(new Event('input'));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(readQuote).toHaveBeenCalledTimes(1);
+    // Icon tokens resolve to the 'player' venue but use the icon hook.
+    expect(readQuote.mock.calls[0][0]).toMatchObject({
+      hook: CONFIG.contracts.iconHook,
+      fn: 'quoteBuy',
+      token: ICON_TOKEN.address,
     });
     handle.destroy();
   });
@@ -2393,6 +2432,13 @@ const VALID_PLAYER_TOKEN = {
   countryAddress: '0x4444444444444444444444444444444444444444',
 };
 
+const VALID_ICON_TOKEN = {
+  address: '0x5555555555555555555555555555555555555555',
+  symbol: 'RONALDO',
+  countryAddress: '0x4444444444444444444444444444444444444444',
+  isIcon: true,
+};
+
 describe('disabledReasonLimit', () => {
   const base = {
     walletConnected: true,
@@ -2565,6 +2611,39 @@ describe('mountTradePanel — F2.x limit mode', () => {
 
     // Trigger price input cleared on success.
     expect(handle.getState().limitTriggerPriceStr).toBe('');
+    handle.destroy();
+  });
+
+  it('icon limit order signs against the icon executor domain', async () => {
+    const signTypedData = vi.fn().mockResolvedValue('0x' + 'ab'.repeat(65));
+    const createOrder = vi.fn().mockResolvedValue({ id: '1', status: 'open' });
+    const handle = mountTradePanel(container, {
+      apiClient: { ...makeApi(), createOrder },
+      token: VALID_ICON_TOKEN,
+      getAccessState: () => 'premium',
+      subscribeAccess: () => () => {},
+      signTypedData,
+      readAllowance: vi.fn().mockResolvedValue(MAX_UINT256),
+    });
+    await wallet.connectWallet('injected');
+    await flush();
+    container.querySelector('[data-test-id="mode-limit"]').click();
+    await flush();
+    const amount = container.querySelector('[data-test-id="trade-amount"]');
+    amount.value = '1';
+    amount.dispatchEvent(new Event('input'));
+    const trigger = container.querySelector('[data-test-id="trade-limit-price"]');
+    trigger.value = '12.5';
+    trigger.dispatchEvent(new Event('input'));
+
+    container.querySelector('[data-test-id="trade-cta"]').click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    // verifyingContract must be the ICON executor, not the main one.
+    expect(signTypedData.mock.calls[0][0].typedData.domain.verifyingContract).toBe(
+      CONFIG.contracts.iconLimitOrderExecutor,
+    );
     handle.destroy();
   });
 

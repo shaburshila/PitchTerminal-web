@@ -34,8 +34,10 @@ def test_seed_inserts_countries_and_players() -> None:
 
     assert counts.inserted_countries == 48
     assert counts.inserted_players == 144
+    assert counts.inserted_icons == 11
     assert counts.skipped_countries == 0
     assert counts.skipped_players == 0
+    assert counts.skipped_icons == 0
 
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM tokens WHERE kind='country'")
@@ -43,10 +45,11 @@ def test_seed_inserts_countries_and_players() -> None:
         assert row is not None
         assert row[0] == 48
 
+        # kind='player' covers both regular players (144) and icons (11).
         cur.execute("SELECT COUNT(*) FROM tokens WHERE kind='player'")
         row = cur.fetchone()
         assert row is not None
-        assert row[0] == 144
+        assert row[0] == 144 + 11
 
         # Country rows must have NULL country_address & NULL role.
         cur.execute(
@@ -70,18 +73,103 @@ def test_seed_is_idempotent() -> None:
 
     assert first.inserted_countries == 48
     assert first.inserted_players == 144
+    assert first.inserted_icons == 11
 
     # Second run: nothing new, everything skipped.
     assert second.inserted_countries == 0
     assert second.inserted_players == 0
+    assert second.inserted_icons == 0
     assert second.skipped_countries == 48
     assert second.skipped_players == 144
+    assert second.skipped_icons == 11
 
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM tokens")
         row = cur.fetchone()
         assert row is not None
+        assert row[0] == 48 + 144 + 11
+
+
+def test_seed_inserts_icons_as_players_with_flag() -> None:
+    seed_tokens.seed(_TOKENS_JSON)
+    with _connect() as conn, conn.cursor() as cur:
+        # Icons are stored as kind='player' with is_icon=TRUE, a country and role.
+        cur.execute(
+            "SELECT COUNT(*) FROM tokens "
+            "WHERE is_icon AND kind='player' AND country_address IS NOT NULL AND role IS NOT NULL"
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 11
+
+        # Every icon's country must be one of the 48 country rows.
+        cur.execute(
+            "SELECT COUNT(*) FROM tokens WHERE is_icon "
+            "AND country_address NOT IN (SELECT address FROM tokens WHERE kind='country')"
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+
+        # Non-icon rows keep is_icon=FALSE (default).
+        cur.execute("SELECT COUNT(*) FROM tokens WHERE NOT is_icon")
+        row = cur.fetchone()
+        assert row is not None
         assert row[0] == 48 + 144
+
+
+def test_seed_heals_icon_flag_on_existing_row() -> None:
+    """If an icon address already exists with is_icon=FALSE, re-seed flips it.
+
+    Guards against a token that was previously seeded as a regular player
+    silently keeping the wrong venue (player hook instead of icon hook).
+    """
+
+    # Seed countries + players only first (no icons), then manually insert one
+    # icon address as a NON-icon player to simulate the bad state.
+    seed_tokens.seed(_TOKENS_JSON)
+    ronaldo = "0x15fea0c9571638f7b556ac92cf09b7cf42c0806e"
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE tokens SET is_icon = FALSE WHERE address = %s", (ronaldo,))
+        conn.commit()
+        cur.execute("SELECT is_icon FROM tokens WHERE address = %s", (ronaldo,))
+        row = cur.fetchone()
+        assert row is not None and row[0] is False
+
+    # Re-seed: the conflict path must flip is_icon back to TRUE.
+    seed_tokens.seed(_TOKENS_JSON)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT is_icon FROM tokens WHERE address = %s", (ronaldo,))
+        row = cur.fetchone()
+        assert row is not None and row[0] is True
+
+
+def test_seed_rejects_duplicate_address_across_players_and_icons() -> None:
+    bad = {
+        "countries": [
+            {"id": 0, "symbol": "USA", "name": "USA", "address": "0x" + "1" * 40},
+        ],
+        "players": [
+            {
+                "symbol": "X",
+                "name": "X",
+                "address": "0x" + "2" * 40,
+                "country": "USA",
+                "role": "best",
+            },
+        ],
+        "icons": [
+            {
+                "symbol": "Y",
+                "name": "Y",
+                "address": "0x" + "2" * 40,
+                "country": "USA",
+                "role": "best",
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate address"):
+        seed_tokens.seed_from_data(bad)
 
 
 def test_all_player_country_addresses_are_valid() -> None:
@@ -120,8 +208,10 @@ def test_dry_run_does_not_write() -> None:
     assert counts.dry_run is True
     assert counts.inserted_countries == 48
     assert counts.inserted_players == 144
+    assert counts.inserted_icons == 11
     assert counts.skipped_countries == 0
     assert counts.skipped_players == 0
+    assert counts.skipped_icons == 0
     assert "[dry-run]" in counts.as_log_line()
 
     with _connect() as conn, conn.cursor() as cur:

@@ -62,6 +62,15 @@ class TestConfigShape:
             if addr:  # may be empty string if env var not set
                 assert addr == addr.lower()
 
+    def test_icon_contract_keys_present(self, app) -> None:
+        # Icon venue addresses are exposed so the frontend can route icon
+        # trades. Values may be empty strings if the env vars aren't set in
+        # the test environment — we only assert the keys exist.
+        resp = app.test_client().get("/api/v1/config")
+        contracts = resp.get_json()["contracts"]
+        for key in ("iconHook", "iconRouter", "iconLimitOrderExecutor"):
+            assert key in contracts, f"missing contracts.{key}"
+
 
 class TestConfigFresh:
     def test_fresh_bypasses_cache(self, app) -> None:

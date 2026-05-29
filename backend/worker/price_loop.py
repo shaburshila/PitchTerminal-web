@@ -90,7 +90,9 @@ def _addr_padded(addr: str) -> bytes:
 def _load_tokens() -> list[dict[str, Any]]:
     """Return rows ``{address, kind, country_address}`` for every token."""
 
-    return fetch_all("SELECT address, kind, country_address FROM tokens ORDER BY kind, address")
+    return fetch_all(
+        "SELECT address, kind, country_address, is_icon FROM tokens ORDER BY kind, address"
+    )
 
 
 def _build_calls(
@@ -115,7 +117,11 @@ def _build_calls(
     for row in tokens:
         addr = row["address"]
         kind = row["kind"]
-        hook = config.player_hook if kind == "player" else config.country_hook
+        # Icon tokens are kind='player' but live on the separate IconCurveHook.
+        if row["is_icon"]:
+            hook = config.icon_hook
+        else:
+            hook = config.player_hook if kind == "player" else config.country_hook
         if not hook:
             # Without a hook configured we can't fetch the price; emit a
             # zero-supply fallback to keep ``market_state`` shape consistent.

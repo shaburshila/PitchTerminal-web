@@ -137,7 +137,7 @@ def _venue_from_int(v: int) -> OrderVenue:
 
 def _token_meta_or_404(addr: str) -> dict[str, Any]:
     row = fetch_one(
-        "SELECT address, kind, country_address, symbol FROM tokens WHERE address = %s",
+        "SELECT address, kind, country_address, symbol, is_icon FROM tokens WHERE address = %s",
         (addr.lower(),),
     )
     if row is None:
@@ -441,8 +441,22 @@ def create_order() -> Any:
     except QuoteTokenError:
         _problem_quote_token()
 
-    # 4. EIP-712 signature
-    if not verify_order_signature(order, signature):
+    # 4. EIP-712 signature. Icon tokens are signed against the second executor
+    #    instance (its own DOMAIN_SEPARATOR from address(this)). Reject icon
+    #    limit orders outright when ICON_EXECUTOR is unset — otherwise
+    #    verify_order_signature would fall back to the main executor's domain.
+    #    (The frontend also hides limit mode for icons when the address is
+    #    missing, so this is a defense-in-depth guard.)
+    executor_address: str | None = None
+    if token_meta["is_icon"]:
+        if not config.icon_executor:
+            abort_with_problem(
+                code="orders.icon_executor_unavailable",
+                title="Limit orders for icon tokens are not available yet",
+                status=422,
+            )
+        executor_address = config.icon_executor
+    if not verify_order_signature(order, signature, executor_address=executor_address):
         abort_with_problem(
             code="orders.invalid_signature",
             title="EIP-712 signature does not match owner",

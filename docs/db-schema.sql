@@ -56,6 +56,9 @@ CREATE TABLE tokens (
                                   CHECK (country_address IS NULL
                                          OR country_address ~ '^0x[0-9a-f]{40}$'),
     role              player_role NULL,
+    -- icon-pack token: kind='player' but trades on the separate pitchwc
+    -- IconCurveHook / router (added by migration 0006_tokens_is_icon).
+    is_icon           BOOLEAN     NOT NULL DEFAULT FALSE,
     CONSTRAINT tokens_player_must_have_country
         CHECK ((kind = 'country' AND country_address IS NULL AND role IS NULL)
             OR (kind = 'player'  AND country_address IS NOT NULL AND role IS NOT NULL)),

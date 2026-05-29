@@ -94,11 +94,17 @@ class TestConfigLoading:
                 "RPC_URL": "https://example.invalid/rpc",
                 "PLAYER_HOOK": "0xD5252A67935Fc6B913C4441Ac0E5EBF3219FAaa8",
                 "ACCESS_CONTRACT": "0xCa11Bde05977b3631167028862Be2A173976Ca11",
+                "ICON_HOOK": "0xB3086bEcB80c2A82F93a47D773C3DAc8958d2aa8",
+                "ICON_ROUTER": "0x947B75422980Bb451eCa0C9A55dCC120F5c660Dc",
+                "ICON_EXECUTOR": "0x947B75422980Bb451eCa0C9A55dCC120F5c660Dc",
             },
         )
         cfg = mod.config  # type: ignore[attr-defined]
         assert cfg.player_hook == "0xd5252a67935fc6b913c4441ac0e5ebf3219faaa8"
         assert cfg.access_contract == "0xca11bde05977b3631167028862be2a173976ca11"
+        assert cfg.icon_hook == "0xb3086becb80c2a82f93a47d773c3dac8958d2aa8"
+        assert cfg.icon_router == "0x947b75422980bb451eca0c9a55dcc120f5c660dc"
+        assert cfg.icon_executor == "0x947b75422980bb451eca0c9a55dcc120f5c660dc"
 
     def test_int_parsing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _reload_with_env(

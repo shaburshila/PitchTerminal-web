@@ -50,11 +50,12 @@ class TestListTokens:
         assert body["lastUpdate"] is None
         assert body["stale"] is True  # no update → considered stale
 
-    def test_returns_192_when_seeded(self, app, seeded_tokens) -> None:
+    def test_returns_all_when_seeded(self, app, seeded_tokens) -> None:
         resp = app.test_client().get("/api/v1/tokens")
         assert resp.status_code == 200
         body = resp.get_json()
-        assert len(body["players"]) == 144
+        # 144 regular players + 11 icon tokens (icons are kind='player').
+        assert len(body["players"]) == 144 + 11
         assert len(body["countries"]) == 48
 
         # Spec §4.1: players carry name, role, country (NAME), countryAddress.
@@ -68,6 +69,21 @@ class TestListTokens:
             assert "role" not in c
             assert "country" not in c
             assert "countryAddress" not in c
+
+    def test_icons_appear_in_players_with_flag(self, app, seeded_tokens) -> None:
+        resp = app.test_client().get("/api/v1/tokens")
+        body = resp.get_json()
+        # Exactly 11 player rows carry isIcon=true; regular players omit it.
+        icons = [p for p in body["players"] if p.get("isIcon")]
+        assert len(icons) == 11
+        for ic in icons:
+            assert ic["isIcon"] is True
+            assert ic["role"] in {"best", "captain", "rookie"}
+            assert ic["countryAddress"].startswith("0x")
+        # Regular (non-icon) players don't emit the flag at all.
+        non_icon = [p for p in body["players"] if not p.get("isIcon")]
+        assert len(non_icon) == 144
+        assert all("isIcon" not in p for p in non_icon)
 
     def test_zero_market_state(self, app, seeded_tokens) -> None:
         resp = app.test_client().get("/api/v1/tokens")

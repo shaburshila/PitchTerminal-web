@@ -37,6 +37,10 @@ _PITCH_ADDR = "0x" + "cc" * 20
 _OTHER_TOKEN = "0x" + "dd" * 20
 _EXECUTOR_ADDR = "0x" + "ee" * 20
 _ACCESS_CONTRACT = "0x" + "ff" * 20
+# Icon venue: a kind='player' token with is_icon=true, paired against the same
+# country, signed against a SEPARATE executor instance.
+_ICON_ADDR = "0x" + "1a" * 20
+_ICON_EXECUTOR_ADDR = "0x" + "2b" * 20
 
 # Keeper shared secret used in these tests.
 _KEEPER_TOKEN = "test-keeper-secret-do-not-use-in-prod"
@@ -69,6 +73,36 @@ def _configured_executor():
         pitch_token=_PITCH_ADDR,
     )
     with patch.object(orders_mod, "config", patched):
+        yield
+
+
+@contextmanager
+def _configured_icon_executor(*, icon_executor: str = _ICON_EXECUTOR_ADDR):
+    """Pin both the main and icon executor addresses for signature verify.
+
+    The route module (``app.routes.orders``) reads ``config.icon_executor`` to
+    decide which executor an icon order is signed against; ``shared.orders``
+    reads ``config.executor_contract`` for the default verify path. Patch both
+    so the icon-venue branch sees a configured address.
+
+    Pass ``icon_executor=""`` to simulate ICON_EXECUTOR being unset (icon
+    limit orders should then be rejected with 422).
+    """
+
+    from dataclasses import replace
+
+    from app.routes import orders as orders_routes
+
+    patched = replace(
+        orders_mod.config,
+        executor_contract=_EXECUTOR_ADDR,
+        icon_executor=icon_executor,
+        pitch_token=_PITCH_ADDR,
+    )
+    with (
+        patch.object(orders_mod, "config", patched),
+        patch.object(orders_routes, "config", patched),
+    ):
         yield
 
 
@@ -193,9 +227,19 @@ def _make_order(
     }
 
 
-def _sign_order(account, order: dict[str, Any]) -> str:
-    """Produce a real EIP-712 signature for ``order`` with ``account``."""
+def _sign_order(account, order: dict[str, Any], verifying_contract: str = _EXECUTOR_ADDR) -> str:
+    """Produce a real EIP-712 signature for ``order`` with ``account``.
 
+    ``verifying_contract`` lets icon-venue tests sign against the second
+    executor instance (which has its own DOMAIN_SEPARATOR).
+    """
+
+    domain = {
+        "name": orders_mod.EIP712_DOMAIN_NAME,
+        "version": orders_mod.EIP712_DOMAIN_VERSION,
+        "chainId": orders_mod.BASE_CHAIN_ID,
+        "verifyingContract": verifying_contract,
+    }
     msg = {
         "owner": order["owner"],
         "token": order["token"],
@@ -208,10 +252,29 @@ def _sign_order(account, order: dict[str, Any]) -> str:
         "expiry": int(order["expiry"]),
         "nonce": int(order["nonce"], 16),
     }
-    signable = encode_typed_data(_domain(), _types(), msg)
+    signable = encode_typed_data(domain, _types(), msg)
     signed = account.sign_message(signable)
     raw = bytes(signed.signature)
     return "0x" + raw.hex()
+
+
+def _insert_icon_token() -> None:
+    """Add a kind='player' is_icon=true token paired with the seeded country."""
+
+    with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tokens (address, name, symbol, kind, country_address, role, is_icon) "
+                "VALUES (%s, 'Ronaldo', 'RONALDO', 'player', %s, 'best', TRUE) "
+                "ON CONFLICT (address) DO NOTHING",
+                (_ICON_ADDR, _COUNTRY_ADDR),
+            )
+            cur.execute(
+                "INSERT INTO market_state (token_address, price_country, price_pitch, supply) "
+                "VALUES (%s, %s, %s, 50) ON CONFLICT (token_address) DO NOTHING",
+                (_ICON_ADDR, 5 * 10**18, 35 * 10**18),
+            )
+        conn.commit()
 
 
 def _post(client, order: dict[str, Any], signature: str) -> Any:
@@ -642,3 +705,48 @@ class TestDigestCrossCheck:
                 allow_eip1271=False,
             )
         assert ok is True
+
+
+class TestIconExecutor:
+    """Icon-venue orders verify against the SECOND executor instance.
+
+    Icon tokens are kind='player' (venue=0) but signed against ICON_EXECUTOR's
+    own DOMAIN_SEPARATOR. The server must verify against that address — not the
+    main executor — and reject icon orders outright when ICON_EXECUTOR is unset.
+    """
+
+    def test_icon_order_signed_against_icon_executor_inserts(self, app) -> None:
+        _insert_icon_token()
+        client = _auth_client(app)
+        order = _make_order(token=_ICON_ADDR, quote=_COUNTRY_ADDR, venue=0)
+        with _configured_icon_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order, verifying_contract=_ICON_EXECUTOR_ADDR)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["status"] == "open"
+
+    def test_icon_order_signed_against_main_executor_rejected(self, app) -> None:
+        # Signing against the MAIN executor domain must NOT verify for an icon
+        # token (defense against the verify fallback misrouting venues).
+        _insert_icon_token()
+        client = _auth_client(app)
+        order = _make_order(token=_ICON_ADDR, quote=_COUNTRY_ADDR, venue=0)
+        with _configured_icon_executor():
+            sig = _sign_order(_TEST_ACCOUNT, order, verifying_contract=_EXECUTOR_ADDR)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 422
+        assert resp.get_json()["code"] == "orders.invalid_signature"
+
+    def test_icon_order_rejected_when_icon_executor_unset(self, app) -> None:
+        _insert_icon_token()
+        client = _auth_client(app)
+        order = _make_order(token=_ICON_ADDR, quote=_COUNTRY_ADDR, venue=0)
+        # ICON_EXECUTOR empty → icon limit orders unavailable.
+        with _configured_icon_executor(icon_executor=""):
+            sig = _sign_order(_TEST_ACCOUNT, order, verifying_contract=_ICON_EXECUTOR_ADDR)
+            with _premium(has_access=True):
+                resp = _post(client, order, sig)
+        assert resp.status_code == 422
+        assert resp.get_json()["code"] == "orders.icon_executor_unavailable"

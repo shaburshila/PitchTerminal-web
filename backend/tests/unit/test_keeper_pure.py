@@ -15,13 +15,64 @@ loop lives in ``tests/integration/test_keeper.py``.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
 from web3 import Web3
 
+from worker import keeper as keeper_mod
 from worker.keeper import (
+    _contract_for,
     decode_revert_reason,
     is_retryable_label,
     should_trigger,
 )
+
+
+class _FakeEth:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def contract(self, *, address: str, abi: object) -> str:
+        self.calls.append(address)
+        return f"contract@{address}"
+
+
+class _FakeW3:
+    def __init__(self) -> None:
+        self.eth = _FakeEth()
+
+
+_MAIN = "0x" + "ee" * 20
+_ICON = "0x" + "2b" * 20
+
+
+class TestContractFor:
+    """``_contract_for`` routes each order to the right executor instance."""
+
+    def test_icon_order_uses_icon_executor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            keeper_mod,
+            "config",
+            replace(keeper_mod.config, executor_contract=_MAIN, icon_executor=_ICON),
+        )
+        w3 = _FakeW3()
+        assert _contract_for(w3, True) == f"contract@{Web3.to_checksum_address(_ICON)}"
+        assert _contract_for(w3, False) == f"contract@{Web3.to_checksum_address(_MAIN)}"
+
+    def test_icon_order_returns_none_when_icon_executor_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            keeper_mod,
+            "config",
+            replace(keeper_mod.config, executor_contract=_MAIN, icon_executor=""),
+        )
+        w3 = _FakeW3()
+        # Icon order with no icon executor → None (skip, don't misroute to main).
+        assert _contract_for(w3, True) is None
+        # Non-icon order still resolves to the main executor.
+        assert _contract_for(w3, False) == f"contract@{Web3.to_checksum_address(_MAIN)}"
 
 
 class TestShouldTrigger:

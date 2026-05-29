@@ -267,6 +267,33 @@ def _get_executor_contract() -> str:
     return config.executor_contract
 
 
+def _get_icon_executor_contract() -> str:
+    return config.icon_executor
+
+
+def _ZERO_ADDR() -> str:
+    return "0x" + "00" * 20
+
+
+def _contract_for(w3: Any, is_icon: bool) -> Any | None:
+    """Return the executor contract instance for this order's venue.
+
+    Icon orders execute against the second executor instance (``ICON_EXECUTOR``,
+    icon hook/router in its "player" slot); everything else uses the main
+    executor. Returns ``None`` when the relevant address is unset — callers
+    must skip the order rather than misroute it to the wrong executor (which
+    would have a different DOMAIN_SEPARATOR and revert / mis-verify).
+
+    Both addresses go through the ``_get_*_executor_contract`` indirections so
+    tests can patch them independently.
+    """
+
+    addr = _get_icon_executor_contract() if is_icon else _get_executor_contract()
+    if not addr or addr == _ZERO_ADDR():
+        return None
+    return w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_executor_abi())
+
+
 def _get_gas_multiplier() -> float:
     return config.gas_multiplier
 
@@ -338,9 +365,11 @@ def _select_armed_orders() -> list[dict[str, Any]]:
         " EXTRACT(EPOCH FROM lo.expires_at)::bigint AS expires_at_ts, "
         " lo.nonce, lo.signature, lo.attempts, "
         " ms.price_country, ms.price_pitch, "
+        " COALESCE(t.is_icon, false) AS is_icon, "
         " COALESCE(us.orders_armed, true) AS armed "
         "FROM limit_orders lo "
         "LEFT JOIN market_state ms ON ms.token_address = lo.token_address "
+        "LEFT JOIN tokens t ON t.address = lo.token_address "
         "LEFT JOIN user_settings us ON us.owner_address = lo.owner_address "
         "WHERE lo.status = 'open' "
         "  AND (lo.retry_after IS NULL OR lo.retry_after <= now()) "
@@ -382,11 +411,13 @@ def _select_executing_orders() -> list[dict[str, Any]]:
     """Rows in ``status='executing'`` we should poll for a receipt."""
 
     sql = (
-        "SELECT id, owner_address, executed_tx_hash, attempts, "
-        " EXTRACT(EPOCH FROM last_attempt_at)::double precision AS last_attempt_ts "
-        "FROM limit_orders "
-        "WHERE status = 'executing' AND executed_tx_hash IS NOT NULL "
-        "ORDER BY last_attempt_at ASC NULLS FIRST LIMIT %s"
+        "SELECT lo.id, lo.owner_address, lo.executed_tx_hash, lo.attempts, "
+        " COALESCE(t.is_icon, false) AS is_icon, "
+        " EXTRACT(EPOCH FROM lo.last_attempt_at)::double precision AS last_attempt_ts "
+        "FROM limit_orders lo "
+        "LEFT JOIN tokens t ON t.address = lo.token_address "
+        "WHERE lo.status = 'executing' AND lo.executed_tx_hash IS NOT NULL "
+        "ORDER BY lo.last_attempt_at ASC NULLS FIRST LIMIT %s"
     )
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (MAX_RECEIPT_POLLS_PER_TICK,))
@@ -694,16 +725,16 @@ def run_recovery() -> None:
 
     try:
         w3 = _w3.get_w3()
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(_get_executor_contract()),
-            abi=_executor_abi(),
-        )
     except Exception:
         log.exception("keeper.recovery_w3_failed")
         return
 
     log.info("keeper.recovery_begin", rows=len(rows))
     for row in rows:
+        contract = _contract_for(w3, bool(row.get("is_icon")))
+        if contract is None:
+            log.warning("keeper.recovery_no_executor", order_id=row.get("id"))
+            continue
         try:
             _poll_receipt(w3, contract, row)
         except Exception:
@@ -733,21 +764,20 @@ def tick() -> int:
         log.exception("keeper.w3_failed")
         return 0
 
-    try:
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(_get_executor_contract()),
-            abi=_executor_abi(),
-        )
-    except Exception:
-        log.exception("keeper.contract_init_failed")
-        return 0
-
     keeper_addr = account.address
     touched = 0
 
     # ── 1. Poll receipts for executing orders first ──
     try:
         for row in _select_executing_orders():
+            contract = _contract_for(w3, bool(row.get("is_icon")))
+            if contract is None:
+                # Icon executor not configured — can't decode/replay this row.
+                # Leave it executing; recovery will handle it once ICON_EXECUTOR
+                # is set. (Should not normally happen: an executing icon order
+                # implies the executor existed when it was sent.)
+                log.warning("keeper.poll_no_executor", order_id=row.get("id"))
+                continue
             try:
                 _poll_receipt(w3, contract, row)
                 touched += 1
@@ -770,6 +800,16 @@ def tick() -> int:
             log.warning("keeper.attempts_exhausted", order_id=order_id, attempts=attempts)
             _mark_failed(order_id, "unknown", "max attempts")
             _emit_notify(order_id)
+            continue
+
+        contract = _contract_for(w3, bool(row.get("is_icon")))
+        if contract is None:
+            # Executor for this venue not configured — leave open, don't
+            # misroute to the wrong executor. For icons this is belt-and-
+            # suspenders (order placement is gated server-side too).
+            log.warning(
+                "keeper.skip_no_executor", order_id=order_id, is_icon=bool(row.get("is_icon"))
+            )
             continue
 
         try:

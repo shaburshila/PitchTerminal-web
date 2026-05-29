@@ -122,10 +122,10 @@ def _insert_events(
 def tick() -> None:
     """One scan tick."""
 
-    if not config.player_hook and not config.country_hook:
-        # Neither hook configured — nothing to scan. Without these envs we
-        # also can't initialize a sensible cursor, so just log once.
-        log.debug("event_loop.skip", reason="no PLAYER_HOOK / COUNTRY_HOOK env")
+    if not config.player_hook and not config.country_hook and not config.icon_hook:
+        # No hook configured — nothing to scan. Without these envs we also
+        # can't initialize a sensible cursor, so just log once.
+        log.debug("event_loop.skip", reason="no PLAYER_HOOK / COUNTRY_HOOK / ICON_HOOK env")
         return
 
     try:
@@ -140,7 +140,9 @@ def tick() -> None:
         if from_block > head:
             return
 
-        hooks: list[str] = [h for h in (config.player_hook, config.country_hook) if h]
+        hooks: list[str] = [
+            h for h in (config.player_hook, config.country_hook, config.icon_hook) if h
+        ]
 
         events = list(
             scan_logs(

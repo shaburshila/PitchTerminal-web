@@ -1,7 +1,7 @@
 """Worker entry point.
 
 Order on boot:
-1. ``seed_tokens.run_if_empty()`` — populate ``tokens`` on first Docker boot.
+1. ``seed_tokens.ensure_seeded()`` — idempotently populate ``tokens`` on every boot.
 2. ``backfill.run_if_needed()`` — stub in B0.6; real implementation in B0.7.
 3. ``access_bootstrap.run_if_needed()`` — pin ``app_state.access_config``
    when ``ACCESS_CONTRACT`` is set.
@@ -83,7 +83,7 @@ def run() -> None:
     _install_signal_handlers()
 
     try:
-        seed_tokens.run_if_empty()
+        seed_tokens.ensure_seeded()
     except Exception:
         log.exception("worker.seed_tokens_failed")
 

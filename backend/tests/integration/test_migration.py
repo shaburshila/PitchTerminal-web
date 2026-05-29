@@ -122,6 +122,21 @@ class TestMigrationRoundTrip:
         assert row[0] == "numeric"
         assert row[1] == "YES"  # nullable for pre-0004 backwards-compat
 
+    def test_tokens_is_icon_column_present(self) -> None:
+        """Migration 0006 adds tokens.is_icon BOOLEAN NOT NULL DEFAULT FALSE."""
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT data_type, is_nullable, column_default "
+                "FROM information_schema.columns "
+                "WHERE table_name = 'tokens' AND column_name = 'is_icon'"
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert row[0] == "boolean"
+        assert row[1] == "NO"  # NOT NULL
+        assert "false" in str(row[2]).lower()
+
     def test_referral_codes_table_present_after_upgrade(self) -> None:
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
             cur.execute(

@@ -260,10 +260,10 @@ def run_if_needed() -> None:
 
         # Empty hook env: nothing to scan. Mark complete so the worker loop
         # doesn't keep retrying — operator will set the envs and re-run.
-        if not config.player_hook and not config.country_hook:
+        if not config.player_hook and not config.country_hook and not config.icon_hook:
             log.warning(
                 "backfill.skip_empty_env",
-                reason="PLAYER_HOOK and COUNTRY_HOOK are both empty",
+                reason="PLAYER_HOOK, COUNTRY_HOOK and ICON_HOOK are all empty",
             )
             state.set_json_key(
                 "backfill_status",
@@ -277,7 +277,9 @@ def run_if_needed() -> None:
             )
             return
 
-        hooks: list[str] = [h for h in (config.player_hook, config.country_hook) if h]
+        hooks: list[str] = [
+            h for h in (config.player_hook, config.country_hook, config.icon_hook) if h
+        ]
 
         w3 = _w3.get_w3()
         head_raw = int(w3.eth.block_number)

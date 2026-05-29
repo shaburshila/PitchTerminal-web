@@ -84,6 +84,8 @@ class SeedCounts:
     skipped_countries: int
     inserted_players: int
     skipped_players: int
+    inserted_icons: int = 0
+    skipped_icons: int = 0
     dry_run: bool = False
 
     def as_log_line(self) -> str:
@@ -92,7 +94,9 @@ class SeedCounts:
             f"{prefix}_countries={self.inserted_countries} "
             f"skipped_countries={self.skipped_countries} "
             f"{prefix}_players={self.inserted_players} "
-            f"skipped_players={self.skipped_players}"
+            f"skipped_players={self.skipped_players} "
+            f"{prefix}_icons={self.inserted_icons} "
+            f"skipped_icons={self.skipped_icons}"
         )
 
 
@@ -145,37 +149,24 @@ def seed_from_data(
 
     countries = data["countries"]
     players = data["players"]
+    icons = data.get("icons", [])
 
     symbol_to_addr = _build_country_symbol_to_address(countries)
 
-    # Pre-validate every player BEFORE touching the DB. Also reject duplicate
-    # player.address inside the JSON itself — silently skipping them via
-    # ON CONFLICT would mask data-quality bugs in the source feed.
+    # Pre-validate every player/icon BEFORE touching the DB. Also reject
+    # duplicate addresses inside the JSON itself (across players AND icons) —
+    # silently skipping them via ON CONFLICT would mask data-quality bugs in
+    # the source feed.
     seen_player_addrs: set[str] = set()
     prepared_players: list[tuple[str, str, str, str, str]] = []
     for p in players:
-        country_sym = p["country"]
-        if country_sym not in symbol_to_addr:
-            raise ValueError(f"player {p.get('symbol')!r}: unknown country symbol {country_sym!r}")
-        role = p["role"]
-        if role not in _VALID_ROLES:
-            raise ValueError(f"player {p.get('symbol')!r}: invalid role {role!r}")
-        addr = _normalize_address(p["address"])
-        if addr in seen_player_addrs:
-            raise ValueError(
-                f"player {p.get('symbol')!r}: duplicate address {addr!r} "
-                "(already used by another player in tokens.json)"
-            )
-        seen_player_addrs.add(addr)
-        prepared_players.append(
-            (
-                addr,
-                str(p["name"]),
-                str(p["symbol"]),
-                symbol_to_addr[country_sym],
-                role,
-            )
-        )
+        prepared_players.append(_prepare_player_row(p, symbol_to_addr, seen_player_addrs, "player"))
+
+    # Icons share the player schema (kind='player', country + role required) but
+    # carry the is_icon flag — they trade on the separate pitchwc IconCurveHook.
+    prepared_icons: list[tuple[str, str, str, str, str]] = []
+    for ic in icons:
+        prepared_icons.append(_prepare_player_row(ic, symbol_to_addr, seen_player_addrs, "icon"))
 
     prepared_countries: list[tuple[str, str, str]] = [
         (_normalize_address(c["address"]), str(c["name"]), str(c["symbol"])) for c in countries
@@ -189,13 +180,45 @@ def seed_from_data(
             skipped_countries=0,
             inserted_players=len(prepared_players),
             skipped_players=0,
+            inserted_icons=len(prepared_icons),
+            skipped_icons=0,
             dry_run=True,
         )
 
     if conn is None:
         with _connect_default() as owned_conn:
-            return _do_insert(owned_conn, prepared_countries, prepared_players)
-    return _do_insert(conn, prepared_countries, prepared_players)
+            return _do_insert(owned_conn, prepared_countries, prepared_players, prepared_icons)
+    return _do_insert(conn, prepared_countries, prepared_players, prepared_icons)
+
+
+def _prepare_player_row(
+    row: dict[str, Any],
+    symbol_to_addr: dict[str, str],
+    seen_addrs: set[str],
+    kind_label: str,
+) -> tuple[str, str, str, str, str]:
+    """Validate + normalize one player/icon JSON row into an insert tuple.
+
+    ``kind_label`` (``"player"`` / ``"icon"``) is only used for error messages.
+    Returns ``(address, name, symbol, country_address, role)``.
+    """
+
+    country_sym = row["country"]
+    if country_sym not in symbol_to_addr:
+        raise ValueError(
+            f"{kind_label} {row.get('symbol')!r}: unknown country symbol {country_sym!r}"
+        )
+    role = row["role"]
+    if role not in _VALID_ROLES:
+        raise ValueError(f"{kind_label} {row.get('symbol')!r}: invalid role {role!r}")
+    addr = _normalize_address(row["address"])
+    if addr in seen_addrs:
+        raise ValueError(
+            f"{kind_label} {row.get('symbol')!r}: duplicate address {addr!r} "
+            "(already used by another player/icon in tokens.json)"
+        )
+    seen_addrs.add(addr)
+    return (addr, str(row["name"]), str(row["symbol"]), symbol_to_addr[country_sym], role)
 
 
 @contextmanager
@@ -220,11 +243,14 @@ def _do_insert(
     conn: psycopg.Connection[Any],
     countries: list[tuple[str, str, str]],
     players: list[tuple[str, str, str, str, str]],
+    icons: list[tuple[str, str, str, str, str]],
 ) -> SeedCounts:
     inserted_c = 0
     skipped_c = 0
     inserted_p = 0
     skipped_p = 0
+    inserted_i = 0
+    skipped_i = 0
 
     # FK is DEFERRABLE INITIALLY DEFERRED per db-schema.sql, so no explicit
     # SET CONSTRAINTS is needed — we insert countries first anyway. Adding an
@@ -259,12 +285,35 @@ def _do_insert(
             else:
                 skipped_p += 1
 
+        # Icons last (FK-safe — country rows already inserted). Same shape as
+        # players but with is_icon=TRUE so the venue resolves to the icon hook.
+        # Self-healing on conflict: if the address already exists with the wrong
+        # flag (e.g. a prior seed put it in players[]), flip is_icon=TRUE. The
+        # WHERE guard makes a re-seed of an already-correct row a no-op
+        # (rowcount 0 → counted as skipped), preserving idempotency.
+        for addr, name, symbol, country_addr, role in icons:
+            cur.execute(
+                """
+                INSERT INTO tokens (address, name, symbol, kind, country_address, role, is_icon)
+                VALUES (%s, %s, %s, 'player', %s, %s::player_role, TRUE)
+                ON CONFLICT (address) DO UPDATE SET is_icon = TRUE
+                WHERE tokens.is_icon IS DISTINCT FROM TRUE
+                """,
+                (addr, name, symbol, country_addr, role),
+            )
+            if cur.rowcount == 1:
+                inserted_i += 1
+            else:
+                skipped_i += 1
+
     conn.commit()
     return SeedCounts(
         inserted_countries=inserted_c,
         skipped_countries=skipped_c,
         inserted_players=inserted_p,
         skipped_players=skipped_p,
+        inserted_icons=inserted_i,
+        skipped_icons=skipped_i,
     )
 
 
