@@ -12,10 +12,12 @@ portable repo, with the structural changes required by the web version:
   country token as the country→PITCH rate (the portable code carried a
   ``countryPricePitch`` field on the player dict — same data, different
   location).
-* ``valueSeries`` uses :func:`shared.price.price_at_pitch` to sample each
-  held token's PITCH price *at the timestamp of every wallet trade*, so the
-  curve reflects historical valuation (not current prices applied to old
-  holdings).
+* ``valueSeries`` samples each held token's PITCH price *at the timestamp of
+  every wallet trade* (so the curve reflects historical valuation, not current
+  prices applied to old holdings). The sampling is done with
+  :class:`shared.price.HistoricalPrices`, which preloads all needed timelines
+  in one query and binary-searches them in memory — same semantics as the
+  per-call :func:`shared.price.price_at_pitch`, without the N*M round-trips.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from app.errors import abort_with_problem
 from app.pagination import clamp_limit, decode_cursor, encode_cursor
 from shared.db import fetch_all
 from shared.log import get_logger
-from shared.price import price_at_pitch, to_display_units
+from shared.price import HistoricalPrices, load_price_timelines, to_display_units
 from shared.types import Event
 
 log = get_logger("app.routes.profile")
@@ -483,9 +485,28 @@ def get_profile() -> Any:
     # portable binary-search semantics in ``server.py:1507``.
     holdings: dict[str, float] = {}
     series_map: dict[int, float] = {}
+
+    # Preload every timeline needed for the historical lookup in ONE query
+    # (held tokens + the country tokens player positions are priced against),
+    # then resolve in memory. The naive per-call ``price_at_pitch`` issued up
+    # to 4 SQL round-trips for *each* (held-token, trade-ts) pair — O(N*M) on
+    # the hot ``events`` table (events audit P1). The ``current_pitch_fallback``
+    # map mirrors ``shared.price._current_price_pitch_fallback`` using the same
+    # ``market_state.price_pitch`` values already loaded into ``token_meta``.
+    timeline_tokens: set[str] = set(token_meta.keys())
+    fallback_pitch: dict[str, float] = {}
+    for tok, meta_ in token_meta.items():
+        fallback_pitch[tok] = float(meta_["price_pitch"])
+        if meta_["kind"] == "player" and meta_.get("country_address"):
+            country_addr = meta_["country_address"]
+            timeline_tokens.add(country_addr)
+            fallback_pitch[country_addr] = float(meta_["country_price_pitch"])
+    hist = HistoricalPrices(load_price_timelines(timeline_tokens), fallback_pitch)
+
     # Memo: (token, ts) → price_pitch. Many trades share the same ts when a
     # wallet buys multiple tokens in one tx, and consecutive ticks often
-    # resolve to the same prior event. Caching saves O(events²) DB hits.
+    # resolve to the same prior event. The lookup is now in-memory, but the
+    # memo still saves redundant bisects across the O(events²) holdings walk.
     price_memo: dict[tuple[str, int], float] = {}
 
     def _memo_price(tok: str, ts: int) -> float:
@@ -497,7 +518,7 @@ def get_profile() -> Any:
         if not meta_:
             price_memo[key] = 0.0
             return 0.0
-        p = price_at_pitch(tok, meta_["kind"], meta_.get("country_address"), ts)
+        p = hist.price_at_pitch(tok, meta_["kind"], meta_.get("country_address"), ts)
         price_memo[key] = p
         return p
 

@@ -11,18 +11,22 @@ price. See ``docs/architecture.md`` and the chart toolbar UX in
 
 Historical lookup (:func:`price_at_pitch`) backs the ``valueSeries`` step of
 ``GET /api/v1/profile`` — see ``docs/api-spec.md`` §6.1. The portable
-implementation kept all events in-memory and did binary search; here we use
-the ``events`` table directly (an index on ``(token_address, ts DESC)`` is
-implied by ``events_token_block_idx`` which orders by ``block_number DESC``
-— close enough since block order ≈ ts order on Base).
+implementation kept all events in-memory and did binary search. The per-call
+:func:`price_at_pitch` reads the ``events`` table directly (served by the
+``events_token_ts_idx`` index on ``(token_address, ts DESC)``); for the hot
+``valueSeries`` path — which resolves a price at *every* wallet trade across
+*every* held token — use :class:`HistoricalPrices`, which preloads all the
+needed timelines in one query and does the same binary search in memory.
 """
 
 from __future__ import annotations
 
+import bisect
+from collections.abc import Iterable
 from decimal import Decimal
 
 from shared.config import WEI
-from shared.db import fetch_one
+from shared.db import fetch_all, fetch_one
 from shared.types import Side
 
 
@@ -212,8 +216,118 @@ def price_at_pitch(
     return current_price_of(base_price, country_pitch)
 
 
+# ─── Batched in-memory historical lookup ─────────────────────────────────────
+
+
+def load_price_timelines(token_addresses: Iterable[str]) -> dict[str, list[tuple[int, float]]]:
+    """Preload per-token historical price timelines in a single query.
+
+    Returns ``{token_address: [(ts, native_market_price), ...]}`` where each
+    list is sorted ascending by ``(ts, block_number, log_index)`` — exactly the
+    order :class:`HistoricalPrices` binary-searches. "Native" price is the base
+    currency of the token (country-units for player tokens, PITCH for country
+    tokens), i.e. :func:`market_price` of the event — the same value
+    :func:`_nearest_event_base_per_token` returns per call.
+
+    Rows with NULL ``ts`` (not-yet-resolved events) are excluded, matching the
+    per-call lookup's ``WHERE ts <= ...`` predicate which never matches NULL.
+    Events with ``token_value <= 0`` are kept (``market_price`` yields ``0.0``
+    for them) so the "nearest" sample matches the per-call query, which also
+    does not filter on ``token_value`` — the resolver then treats a ``<= 0``
+    nearest price as «no data» and falls back, just like :func:`price_at_pitch`.
+    """
+
+    addrs = sorted({a for a in token_addresses})
+    if not addrs:
+        return {}
+    placeholders = ",".join(["%s"] * len(addrs))
+    rows = fetch_all(
+        f"SELECT token_address, side, base_value, token_value, fee, "
+        f"EXTRACT(EPOCH FROM ts)::bigint AS ts "
+        f"FROM events WHERE token_address IN ({placeholders}) AND ts IS NOT NULL "
+        f"ORDER BY token_address, ts ASC, block_number ASC, log_index ASC",
+        tuple(addrs),
+    )
+    out: dict[str, list[tuple[int, float]]] = {}
+    for r in rows:
+        token = r["token_address"].strip()
+        price = market_price(r["side"], int(r["base_value"]), int(r["fee"]), int(r["token_value"]))
+        out.setdefault(token, []).append((int(r["ts"]), price))
+    return out
+
+
+class HistoricalPrices:
+    """In-memory historical price resolver, semantically identical to
+    :func:`price_at_pitch` but without a DB round-trip per lookup.
+
+    Build it once from :func:`load_price_timelines` (the timelines) plus a
+    ``current_pitch_fallback`` map (``token_address → current PITCH price`` in
+    display units, typically ``market_state.price_pitch / 1e18``) which mirrors
+    :func:`_current_price_pitch_fallback`'s last-ditch behaviour. Then call
+    :meth:`price_at_pitch` per ``(token, ts)`` — the ``valueSeries`` loop in
+    ``app/routes/profile.py`` does this O(events * held-tokens) times, which is
+    why the per-call SQL version was the audit's headline N*M round-trip.
+    """
+
+    def __init__(
+        self,
+        timelines: dict[str, list[tuple[int, float]]],
+        current_pitch_fallback: dict[str, float],
+    ) -> None:
+        self._timelines = timelines
+        # Parallel arrays of just the timestamps, for bisect.
+        self._ts_index: dict[str, list[int]] = {
+            tok: [ts for ts, _p in tl] for tok, tl in timelines.items()
+        }
+        self._fallback = current_pitch_fallback
+
+    def _native_at(self, token: str, ts: int) -> float | None:
+        """Native price at ``ts``: the latest sample with ``sample_ts <= ts``
+        (step function); the earliest sample when ``ts`` precedes every trade;
+        ``None`` when the token has no timeline at all.
+
+        Folds the per-call ``_nearest`` → ``_earliest`` fallback chain into one
+        binary search (``bisect_right - 1``): a result ``< 0`` means every
+        sample is newer than ``ts`` → return the earliest.
+        """
+
+        tl = self._timelines.get(token)
+        if not tl:
+            return None
+        idx = bisect.bisect_right(self._ts_index[token], ts) - 1
+        if idx < 0:
+            return tl[0][1]
+        return tl[idx][1]
+
+    def price_at_pitch(
+        self,
+        token_address: str,
+        kind: str,
+        country_address: str | None,
+        ts: int,
+    ) -> float:
+        """Historical PITCH price of ``token_address`` at ``ts`` — same contract
+        as the module-level :func:`price_at_pitch`."""
+
+        base_price = self._native_at(token_address, ts)
+        if base_price is None or base_price <= 0:
+            return self._fallback.get(token_address, 0.0)
+
+        if kind == "country":
+            return base_price
+
+        if not country_address:
+            return 0.0
+        country_pitch = self._native_at(country_address, ts)
+        if country_pitch is None or country_pitch <= 0:
+            country_pitch = self._fallback.get(country_address, 0.0)
+        return current_price_of(base_price, country_pitch)
+
+
 __all__ = [
+    "HistoricalPrices",
     "current_price_of",
+    "load_price_timelines",
     "market_price",
     "price_at_pitch",
     "to_display_units",

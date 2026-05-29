@@ -156,56 +156,122 @@ def _decode_results(plan: list[tuple[str, str]], results: list[bytes]) -> dict[s
     return out
 
 
-def _trades_count(token_addr: str) -> int:
+def _trades_counts_all() -> dict[str, int]:
+    """Per-token total event count for the whole table in ONE query.
+
+    Replaces the per-token ``SELECT COUNT(*) ... WHERE token_address = %s``
+    (one round-trip per token — 192/tick) with a single ``GROUP BY`` (events
+    audit P2). Tokens with no events are simply absent from the map; the caller
+    defaults them to 0.
+    """
+
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS c FROM events WHERE token_address = %s", (token_addr,))
-        row = cur.fetchone()
-        return int(row["c"]) if row is not None else 0
+        cur.execute("SELECT token_address, COUNT(*) AS c FROM events GROUP BY token_address")
+        return {r["token_address"].strip(): int(r["c"]) for r in cur.fetchall()}
 
 
-def _holders_count(token_addr: str) -> int:
-    """Distinct traders with positive net token_value (see port §5.1)."""
+def _holders_counts_all() -> dict[str, int]:
+    """Per-token distinct net-positive holder count for the whole table in ONE
+    query (see port §5.1).
+
+    Same aggregation as the old per-token query but grouped by
+    ``(token_address, trader_address)`` then rolled up per token, so the worker
+    issues one round-trip instead of one per token (events audit P2).
+    """
 
     sql = """
-        SELECT COUNT(*) AS c FROM (
-            SELECT trader_address,
+        SELECT token_address, COUNT(*) AS c FROM (
+            SELECT token_address, trader_address,
                    SUM(CASE side WHEN 'buy' THEN token_value ELSE -token_value END) AS net
             FROM events
-            WHERE token_address = %s
-            GROUP BY trader_address
+            GROUP BY token_address, trader_address
             HAVING SUM(CASE side WHEN 'buy' THEN token_value ELSE -token_value END) > 0
         ) sub
+        GROUP BY token_address
     """
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, (token_addr,))
-        row = cur.fetchone()
-        return int(row["c"]) if row is not None else 0
+        cur.execute(sql)
+        return {r["token_address"].strip(): int(r["c"]) for r in cur.fetchall()}
+
+
+def _load_period_then_prices() -> dict[str, dict[str, float]]:
+    """Reference ("then") native price for every token x every change-pct period.
+
+    Returns ``{token_address: {period_name: p_then_native}}``. Batched as one
+    ``DISTINCT ON (token_address)`` query *per period* (6 total) instead of one
+    per ``(token, period)`` pair (was 6*N — the bulk of the audit-P2 query
+    storm). Semantics are preserved exactly:
+
+    * time-based periods → the latest event with ``ts <= now() - period``,
+      ranked by ``block_number DESC, log_index DESC`` (matching the old
+      per-token ``ORDER BY block_number DESC ... LIMIT 1``);
+    * ``all`` → the very first event ever (``block_number ASC ... LIMIT 1``).
+
+    "Native" = :func:`shared.price.market_price` of the event (country-units
+    for players, PITCH for countries); the per-token caller converts to PITCH.
+    """
+
+    out: dict[str, dict[str, float]] = {}
+    for name, period_sec in _PERIODS:
+        if period_sec is None:
+            sql = (
+                "SELECT DISTINCT ON (token_address) "
+                "token_address, side, base_value, token_value, fee "
+                "FROM events "
+                "ORDER BY token_address, block_number ASC, log_index ASC"
+            )
+            params: tuple[Any, ...] = ()
+        else:
+            sql = (
+                "SELECT DISTINCT ON (token_address) "
+                "token_address, side, base_value, token_value, fee "
+                "FROM events "
+                "WHERE ts <= now() - make_interval(secs => %s) "
+                "ORDER BY token_address, block_number DESC, log_index DESC"
+            )
+            params = (period_sec,)
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        for r in rows:
+            tok = r["token_address"].strip()
+            price = market_price(
+                r["side"], int(r["base_value"]), int(r["fee"]), int(r["token_value"])
+            )
+            out.setdefault(tok, {})[name] = price
+    return out
 
 
 def _change_pct(
-    token_addr: str,
     p_now_pitch: float,
+    then_prices: dict[str, float],
     country_price_pitch_now: float = 1.0,
 ) -> dict[str, float]:
     """Compute change_pct for each period, all in **PITCH-units** (spec §5.1).
 
-    For period ``X``: ``p_then`` = market_price of the latest event with
+    Pure function: ``then_prices`` is the per-token slice of
+    :func:`_load_period_then_prices` (``{period_name: p_then_native}``), so this
+    does no DB I/O — the reference events were already batch-loaded (events
+    audit P2). A missing period key means "no event in that window" → 0.0, the
+    same result the old per-token query produced when it returned no row.
+
+    For period ``X``: ``p_then`` = native market_price of the latest event with
     ``ts <= now() - X`` (for ``all`` — the very first ever event). Then
     ``change_pct_X = (p_now - p_then) / p_then * 100`` (0 if no event).
 
     Unit alignment:
 
-    * For **country** tokens both ``p_now_pitch`` and ``market_price(event)``
+    * For **country** tokens both ``p_now_pitch`` and the event's native price
       are already in PITCH — no conversion needed; caller passes
       ``country_price_pitch_now = 1.0``.
-    * For **player** tokens events are denominated in the country token, so
-      ``market_price(event)`` is in **country-units**. We multiply by the
-      caller-supplied ``country_price_pitch_now`` to bring ``p_then`` into
-      PITCH. This is an *approximation* — the country price at the event
-      block was different — but the schema doesn't store per-event country
-      snapshots, and the country price typically drifts slowly compared to
-      player prices, so the resulting change_pct matches the spec's intent
-      (numbers will be in the same ballpark as the portable my_wallet view).
+    * For **player** tokens events are denominated in the country token, so the
+      native price is in **country-units**. We multiply by the caller-supplied
+      ``country_price_pitch_now`` to bring ``p_then`` into PITCH. This is an
+      *approximation* — the country price at the event block was different —
+      but the schema doesn't store per-event country snapshots, and the country
+      price typically drifts slowly compared to player prices, so the resulting
+      change_pct matches the spec's intent (numbers will be in the same
+      ballpark as the portable my_wallet view).
     """
 
     out: dict[str, float] = {}
@@ -214,35 +280,11 @@ def _change_pct(
             out[name] = 0.0
         return out
 
-    for name, period_sec in _PERIODS:
-        if period_sec is None:
-            sql = """
-                SELECT side, base_value, token_value, fee
-                FROM events
-                WHERE token_address = %s
-                ORDER BY block_number ASC, log_index ASC
-                LIMIT 1
-            """
-            params: tuple[Any, ...] = (token_addr,)
-        else:
-            sql = """
-                SELECT side, base_value, token_value, fee
-                FROM events
-                WHERE token_address = %s AND ts <= now() - make_interval(secs => %s)
-                ORDER BY block_number DESC, log_index DESC
-                LIMIT 1
-            """
-            params = (token_addr, period_sec)
-
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, params)
-            row = cur.fetchone()
-        if row is None:
+    for name, _period_sec in _PERIODS:
+        p_then_native = then_prices.get(name)
+        if p_then_native is None:
             out[name] = 0.0
             continue
-        p_then_native = market_price(
-            row["side"], int(row["base_value"]), int(row["fee"]), int(row["token_value"])
-        )
         # Bring `p_then` into PITCH (multiply by 1.0 for country tokens —
         # they already report market_price in PITCH directly).
         p_then_pitch = p_then_native * country_price_pitch_now
@@ -254,75 +296,51 @@ def _change_pct(
     return out
 
 
-def _upsert_market_state(
-    addr: str,
-    *,
-    price_country_wei: int,
-    price_pitch_wei: int,
-    supply_wei: int,
-    change_pct: dict[str, float],
-    trades_count: int,
-    holders_count: int,
-    ask_quote_per_base_wei: int | None,
-    bid_quote_per_base_wei: int | None,
-) -> None:
-    """UPSERT one row in ``market_state``.
+_UPSERT_SQL = """
+    INSERT INTO market_state (
+        token_address, price_country, price_pitch, supply,
+        change_pct_all, change_pct_1d, change_pct_12h,
+        change_pct_6h, change_pct_1h, change_pct_15m,
+        trades_count, holders_count,
+        ask_quote_per_base, bid_quote_per_base,
+        updated_at
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (token_address) DO UPDATE SET
+        price_country      = EXCLUDED.price_country,
+        price_pitch        = EXCLUDED.price_pitch,
+        supply             = EXCLUDED.supply,
+        change_pct_all     = EXCLUDED.change_pct_all,
+        change_pct_1d      = EXCLUDED.change_pct_1d,
+        change_pct_12h     = EXCLUDED.change_pct_12h,
+        change_pct_6h      = EXCLUDED.change_pct_6h,
+        change_pct_1h      = EXCLUDED.change_pct_1h,
+        change_pct_15m     = EXCLUDED.change_pct_15m,
+        trades_count       = EXCLUDED.trades_count,
+        holders_count      = EXCLUDED.holders_count,
+        ask_quote_per_base = EXCLUDED.ask_quote_per_base,
+        bid_quote_per_base = EXCLUDED.bid_quote_per_base,
+        updated_at         = EXCLUDED.updated_at
+"""
 
-    ``ask_quote_per_base_wei`` and ``bid_quote_per_base_wei`` are NULLable —
-    pass ``None`` when the hook reverted or returned 0 so the keeper can tell
-    "no quote available" apart from "quote = 0" and skip the order rather
-    than falling back to the fee-excluded mid price. Both are denominated in
-    quote-wei per 1 whole base unit (10^18), matching ``price_country`` /
-    ``price_pitch`` semantics (player → country wei; country → PITCH wei).
+
+def _upsert_market_state_batch(param_rows: list[tuple[Any, ...]]) -> None:
+    """UPSERT every ``market_state`` row for the tick in ONE transaction.
+
+    Each tuple matches the ``VALUES`` column order of :data:`_UPSERT_SQL`. This
+    replaces the old one-INSERT-and-commit-per-token loop (192 round-trips +
+    192 commits/tick — events audit P2) with a single ``executemany`` + commit.
+    ``ask_quote_per_base`` / ``bid_quote_per_base`` are NULLable so the keeper
+    can tell "no quote available" apart from "quote = 0" and skip the order
+    rather than falling back to the fee-excluded mid price; both are quote-wei
+    per 1 whole base unit (10^18), matching ``price_country`` / ``price_pitch``
+    semantics (player → country wei; country → PITCH wei).
     """
 
-    now = datetime.now(tz=UTC)
+    if not param_rows:
+        return
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO market_state (
-                token_address, price_country, price_pitch, supply,
-                change_pct_all, change_pct_1d, change_pct_12h,
-                change_pct_6h, change_pct_1h, change_pct_15m,
-                trades_count, holders_count,
-                ask_quote_per_base, bid_quote_per_base,
-                updated_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (token_address) DO UPDATE SET
-                price_country      = EXCLUDED.price_country,
-                price_pitch        = EXCLUDED.price_pitch,
-                supply             = EXCLUDED.supply,
-                change_pct_all     = EXCLUDED.change_pct_all,
-                change_pct_1d      = EXCLUDED.change_pct_1d,
-                change_pct_12h     = EXCLUDED.change_pct_12h,
-                change_pct_6h      = EXCLUDED.change_pct_6h,
-                change_pct_1h      = EXCLUDED.change_pct_1h,
-                change_pct_15m     = EXCLUDED.change_pct_15m,
-                trades_count       = EXCLUDED.trades_count,
-                holders_count      = EXCLUDED.holders_count,
-                ask_quote_per_base = EXCLUDED.ask_quote_per_base,
-                bid_quote_per_base = EXCLUDED.bid_quote_per_base,
-                updated_at         = EXCLUDED.updated_at
-            """,
-            (
-                addr,
-                int(price_country_wei),
-                int(price_pitch_wei),
-                int(supply_wei),
-                change_pct["all"],
-                change_pct["1d"],
-                change_pct["12h"],
-                change_pct["6h"],
-                change_pct["1h"],
-                change_pct["15m"],
-                int(trades_count),
-                int(holders_count),
-                None if ask_quote_per_base_wei is None else int(ask_quote_per_base_wei),
-                None if bid_quote_per_base_wei is None else int(bid_quote_per_base_wei),
-                now,
-            ),
-        )
+        cur.executemany(_UPSERT_SQL, param_rows)
         conn.commit()
 
 
@@ -356,8 +374,21 @@ def tick() -> None:
             if row["kind"] == "country"
         }
 
-        updated = 0
+        # Batch every events-table read for the whole tick up front (events
+        # audit P2): 2 GROUP BY queries for counts + 6 DISTINCT ON queries for
+        # the change-pct reference prices — was ~1536 per-token round-trips.
+        trades_counts = _trades_counts_all()
+        holders_counts = _holders_counts_all()
+        then_prices_by_token = _load_period_then_prices()
+
+        now = datetime.now(tz=UTC)
+        upsert_rows: list[tuple[Any, ...]] = []
         changed: list[str] = []
+        # Staged ``_PREV_PRICES`` updates — applied only after the batch upsert
+        # succeeds, so a failed write doesn't leave the in-memory snapshot
+        # claiming prices were published when they never reached the DB (which
+        # would suppress the NOTIFY on the next tick if prices then held steady).
+        pending_prev: dict[str, tuple[int, int]] = {}
         for row in tokens:
             addr = row["address"]
             kind = row["kind"]
@@ -392,9 +423,11 @@ def tick() -> None:
                 p_now_for_change = float(Decimal(price_pitch_wei) / Decimal(WEI))
                 country_price_pitch_now = float(Decimal(cp_pitch_wei) / Decimal(WEI))
 
-            change_pct = _change_pct(addr, p_now_for_change, country_price_pitch_now)
-            tc = _trades_count(addr)
-            hc = _holders_count(addr)
+            change_pct = _change_pct(
+                p_now_for_change, then_prices_by_token.get(addr, {}), country_price_pitch_now
+            )
+            tc = trades_counts.get(addr, 0)
+            hc = holders_counts.get(addr, 0)
 
             # Directional, fee-INCLUSIVE quotes for keeper trigger evaluation
             # (see docs/api-spec.md §4.5 and worker/keeper.py). Both are
@@ -406,28 +439,46 @@ def tick() -> None:
             ask_wei: int | None = (WEI * WEI) // base_out if base_out > 0 else None
             bid_wei: int | None = quote_out if quote_out > 0 else None
 
-            _upsert_market_state(
-                addr,
-                price_country_wei=price_country_wei,
-                price_pitch_wei=price_pitch_wei,
-                supply_wei=supply_wei,
-                change_pct=change_pct,
-                trades_count=tc,
-                holders_count=hc,
-                ask_quote_per_base_wei=ask_wei,
-                bid_quote_per_base_wei=bid_wei,
+            upsert_rows.append(
+                (
+                    addr,
+                    int(price_country_wei),
+                    int(price_pitch_wei),
+                    int(supply_wei),
+                    change_pct["all"],
+                    change_pct["1d"],
+                    change_pct["12h"],
+                    change_pct["6h"],
+                    change_pct["1h"],
+                    change_pct["15m"],
+                    int(tc),
+                    int(hc),
+                    None if ask_wei is None else int(ask_wei),
+                    None if bid_wei is None else int(bid_wei),
+                    now,
+                )
             )
-            updated += 1
 
             # Delta detection vs the previous in-memory tick. A change in
             # either price_pitch or price_country qualifies — the SSE
-            # subscribers read the full market_state row anyway.
+            # subscribers read the full market_state row anyway. The snapshot
+            # update is staged in ``pending_prev`` and committed below only
+            # after the DB write lands (see ``pending_prev`` comment).
             addr_lc = addr.lower()
             prev = _PREV_PRICES.get(addr_lc)
             curr = (int(price_pitch_wei), int(price_country_wei))
             if prev != curr:
                 changed.append(addr_lc)
-                _PREV_PRICES[addr_lc] = curr
+            pending_prev[addr_lc] = curr
+
+        # Single batched UPSERT for the whole tick (events audit P2) — replaces
+        # the per-token INSERT+commit. One transaction: either the whole tick's
+        # market_state lands or none of it does (the outer except records the
+        # failure), which is also cleaner than the old partial-write behaviour.
+        _upsert_market_state_batch(upsert_rows)
+        updated = len(upsert_rows)
+        # Write landed — now it's safe to advance the in-memory price snapshot.
+        _PREV_PRICES.update(pending_prev)
 
         # One NOTIFY per tick — payload is the list of changed addresses
         # (lowercase) per docs/db-schema.sql NOTIFY section. Empty list

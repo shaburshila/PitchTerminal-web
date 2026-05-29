@@ -215,12 +215,33 @@ def list_tokens() -> Any:
     )
 
 
+# Short-lived in-process cache for the chart event history (events audit P3).
+# ``GET /chart`` is public, unauthenticated, and re-reads a token's *entire*
+# event history on every call (twice for player tokens — the token + its
+# country), with no upper bound. New trades land at most once per keeper tick
+# (~5s), so a few seconds of staleness is acceptable and collapses bursts of
+# chart requests (tf/unit variants, multiple concurrent viewers) onto one read.
+# Keyed by token address → (loaded_at_monotonic_seconds, rows). Bounded by the
+# token count (~192). Callers must treat the returned list as read-only — the
+# chart pipeline does (``build_candles`` / ``_build_chart_points`` read only;
+# ``_scale_events_to_pitch`` copies each dict before mutating).
+_CHART_EVENTS_TTL_SEC = 5.0
+_chart_events_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
 def _load_events_for_chart(token: str) -> list[dict[str, Any]]:
     """Read every event for ``token`` ordered ASC by (block, log_index).
 
     Returns rows shaped like :class:`shared.types.Event` (snake_case keys,
-    integer wei amounts, ``timestamp`` as unix-seconds).
+    integer wei amounts, ``timestamp`` as unix-seconds). Results are cached
+    in-process for :data:`_CHART_EVENTS_TTL_SEC` seconds — see the cache
+    comment above. The returned list is shared; callers must not mutate it.
     """
+
+    now = time.monotonic()
+    cached = _chart_events_cache.get(token)
+    if cached is not None and now - cached[0] < _CHART_EVENTS_TTL_SEC:
+        return cached[1]
 
     rows = fetch_all(
         "SELECT block_number, tx_hash, log_index, token_address, side, "
@@ -235,6 +256,7 @@ def _load_events_for_chart(token: str) -> list[dict[str, Any]]:
         r["base_value"] = int(r["base_value"])
         r["token_value"] = int(r["token_value"])
         r["fee"] = int(r["fee"])
+    _chart_events_cache[token] = (now, rows)
     return rows
 
 
@@ -703,8 +725,14 @@ def get_trades(token: str) -> Any:
 
     items = [_serialize_trade(r) for r in rows]
 
-    total_row = fetch_one("SELECT COUNT(*) AS n FROM events WHERE token_address = %s", (addr,))
-    total_trades = int(total_row["n"]) if total_row else 0
+    # ``totalTrades`` reuses the worker-maintained ``market_state.trades_count``
+    # (refreshed every price tick) instead of a per-request ``COUNT(*)`` over the
+    # hot ``events`` table — it's the same number, kept fresh out-of-band. Falls
+    # back to 0 for tokens the price loop hasn't populated yet (no events ⇒ 0).
+    market_row = fetch_one(
+        "SELECT trades_count FROM market_state WHERE token_address = %s", (addr,)
+    )
+    total_trades = int(market_row["trades_count"]) if market_row else 0
 
     wallets = _aggregate_wallets(addr)
 

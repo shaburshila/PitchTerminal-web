@@ -48,16 +48,23 @@ def _normalize_token_or_404(raw: str) -> str:
     return addr
 
 
-def _load_events(token: str) -> list[Event]:
-    """All events for ``token``, block-sorted ASC. wei amounts cast back to int."""
+def _load_events(token: str, wallet: str) -> list[Event]:
+    """``wallet``'s events on ``token``, block-sorted ASC. wei amounts cast to int.
+
+    Scoped to the single trader: :func:`shared.pnl.wallet_position` discards
+    every event whose ``trader_address`` differs anyway, so loading the whole
+    token's trade history just to throw most of it away wastes a round-trip on
+    active tokens. The full-token aggregation needed for ``holdersCount`` /
+    ``rank`` is loaded separately in :func:`_holders_and_rank`.
+    """
 
     rows = fetch_all(
         "SELECT block_number, tx_hash, log_index, token_address, side, "
         "trader_address, base_value, token_value, fee, "
         "EXTRACT(EPOCH FROM ts)::bigint AS timestamp "
-        "FROM events WHERE token_address = %s "
+        "FROM events WHERE token_address = %s AND trader_address = %s "
         "ORDER BY block_number ASC, log_index ASC",
-        (token,),
+        (token, wallet),
     )
     out: list[Event] = []
     for r in rows:
@@ -121,7 +128,7 @@ def _holders_and_rank(token: str, wallet: str) -> tuple[int, int]:
 def _build_my_wallet(token: str, wallet: str) -> dict[str, Any]:
     """Compose the ``myWallet`` block (camelCase) for ``wallet`` on ``token``."""
 
-    events = _load_events(token)
+    events = _load_events(token, wallet)
     market = _market_row(token)
     supply = float(int(market["supply"])) / 1e18
     current_price = float(int(market["price_pitch"])) / 1e18

@@ -51,4 +51,11 @@ def _clean_tokens_table() -> Iterator[None]:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE tokens CASCADE")
         conn.commit()
+    # The chart endpoint keeps a short-lived in-process event cache keyed by
+    # token address (see app.routes.tokens._chart_events_cache). It survives the
+    # DB truncate, so clear it between tests or one test's events would leak
+    # into another reusing the same address within the TTL window.
+    from app.routes import tokens as _tokens_routes
+
+    _tokens_routes._chart_events_cache.clear()
     yield
