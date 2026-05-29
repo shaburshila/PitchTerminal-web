@@ -63,7 +63,7 @@ import { onAccountChange, getAccount, tryAutoReconnect, setSiweHooks } from './w
 import { getConfig, getTokens, getPortfolio, ApiError, getAccess, logout } from './api.js';
 import { bootstrapReferral } from './referral.js';
 import { merge as mergeConfig } from './config-store.js';
-import { set as setAccessState } from './access-store.js';
+import { set as setAccessState, isPremium as isPremiumAccess } from './access-store.js';
 import { mountProfile } from './profile.js';
 import { mountAccessBanner } from './access.js';
 import { mountSoftLock } from './soft-lock.js';
@@ -107,6 +107,26 @@ export function weiToWhole(weiStr) {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Pick a display float from a /portfolio item: prefer the server-rounded
+ * `*Display` field, else convert the raw wei string. Returns NaN on missing /
+ * unparseable input so callers can fall back to 0. Mirrors my-wallet-tab's
+ * `pickDisplay` (kept local to avoid a cross-module import for one helper).
+ *
+ * @param {Record<string, unknown>} raw
+ * @param {string} displayKey
+ * @param {string} weiKey
+ * @returns {number}
+ */
+function pickPortfolioDisplay(raw, displayKey, weiKey) {
+  const display = raw[displayKey];
+  if (typeof display === 'number' && Number.isFinite(display)) return display;
+  const wei = raw[weiKey];
+  if (typeof wei !== 'string' || !wei || !/^-?\d+$/.test(wei)) return NaN;
+  const val = weiToWhole(wei);
+  return Number.isFinite(val) ? val : NaN;
 }
 
 /**
@@ -593,7 +613,78 @@ async function bootstrapMobile(root) {
     if (walletPanelHandle && typeof walletPanelHandle.setToken === 'function') {
       walletPanelHandle.setToken(token);
     }
+    // Task A (mobile): eager-load this token's position so the chart Net pos
+    // overlay renders without the user opening the My Wallet chip. Skipped when
+    // the My Wallet chip is already mounted (it feeds onBalance itself → no
+    // duplicate /portfolio round-trip). Gated to premium + connected.
+    loadActivePositionMobile(token.address);
     navigateTo(TABS.CHART);
+  }
+
+  // Generation counter for the mobile eager position loader — discards stale
+  // responses when the user switches tokens faster than /portfolio resolves.
+  let mobilePosGen = 0;
+  /**
+   * Fetch the connected wallet's position for `addr` and push the break-even
+   * into the chart's Net pos overlay. Mirrors my-wallet-tab's emitBalance, but
+   * runs independently of the (lazily-mounted) My Wallet chip so the chart line
+   * shows on first token select. Dedups against an already-open My Wallet chip.
+   *
+   * @param {string} addr Lowercase-able token address.
+   */
+  function loadActivePositionMobile(addr) {
+    if (typeof addr !== 'string' || !addr) return;
+    const key = addr.toLowerCase();
+    if (!isPremiumAccess() || !getAccount().isConnected) return;
+    // NOTE (review FIX 4): we intentionally do NOT skip when the My Wallet chip
+    // is the active sub-page. The chip's `setToken` only emits the break-even
+    // from its CACHED /portfolio (it re-fetches own-trade history, not the
+    // portfolio), so on a Markets-driven token switch the chart Net pos line
+    // would otherwise come from a stale snapshot. There is no duplicate
+    // /portfolio round-trip — the chip does not fetch portfolio on setToken —
+    // so running a fresh fetch here is the authoritative source. Both paths key
+    // setOwnBalance by address, and the fresh value resolves after the chip's
+    // synchronous cache-emit, so the freshest number wins.
+    const myGen = ++mobilePosGen;
+    getPortfolio()
+      .then((resp) => {
+        if (myGen !== mobilePosGen) return;
+        if (!chartHandle || typeof chartHandle.setOwnBalance !== 'function') return;
+        const items = Array.isArray(resp?.items) ? resp.items : [];
+        const item = items.find(
+          (it) => typeof it?.token === 'string' && it.token.toLowerCase() === key,
+        );
+        if (!item) {
+          chartHandle.setOwnBalance(key, 0, 0, 0);
+          return;
+        }
+        const balance = pickPortfolioDisplay(item, 'balanceDisplay', 'balance');
+        const breakEven = pickPortfolioDisplay(item, 'breakEvenPitchDisplay', 'breakEvenPitch');
+        const breakEvenBase = pickPortfolioDisplay(
+          item,
+          'breakEvenBaseDisplay',
+          'breakEvenBaseWei',
+        );
+        chartHandle.setOwnBalance(
+          key,
+          Number.isFinite(balance) ? balance : 0,
+          Number.isFinite(breakEven) ? breakEven : 0,
+          Number.isFinite(breakEvenBase) ? breakEvenBase : 0,
+        );
+      })
+      .catch((err) => {
+        if (myGen !== mobilePosGen) return;
+        const status = err && typeof err.status === 'number' ? err.status : null;
+        // 401/402 → session expired / not premium: the previously-drawn line is
+        // no longer valid, clear it (mirrors the desktop My Wallet handle, which
+        // emits 0/0/0 on 401). Transient 5xx/network blips fall through and leave
+        // the existing line untouched (stale-but-correct beats flicker).
+        if (status === 401 || status === 402) {
+          if (chartHandle && typeof chartHandle.setOwnBalance === 'function') {
+            chartHandle.setOwnBalance(key, 0, 0, 0);
+          }
+        }
+      });
   }
 
   let sidebarHandle = null;
@@ -756,6 +847,14 @@ async function bootstrapMobile(root) {
       },
       referralOpts: {},
       myWalletOpts: {
+        // Task A (mobile): feed the chart's Net pos overlay when the My Wallet
+        // chip is open. chartHandle may be null on the very first paint (mounts
+        // are sequential) — guard against that race.
+        onBalance: (addr, balance, breakEven, breakEvenBase) => {
+          if (chartHandle && typeof chartHandle.setOwnBalance === 'function') {
+            chartHandle.setOwnBalance(addr, balance, breakEven, breakEvenBase);
+          }
+        },
         onTokenSelect: (item) => {
           if (!item?.token) return;
           const row = countryTokensByAddr.get(item.token.toLowerCase());
@@ -797,6 +896,20 @@ async function bootstrapMobile(root) {
         const trades = payload?.newTrades ?? [];
         if (trades.length === 0 || !chartHandle) return;
         for (const trade of trades) chartHandle.applyTrade(trade);
+        // Task B (mobile): when a trade is OURS, refresh the My Wallet chip
+        // (portfolio + history) and re-pull the chart Net pos overlay.
+        const myAddr = getAccount()?.address;
+        if (myAddr) {
+          const mine = trades.some(
+            (t) => typeof t?.trader === 'string' && t.trader.toLowerCase() === myAddr.toLowerCase(),
+          );
+          if (mine) {
+            if (walletPanelHandle && typeof walletPanelHandle.refreshMyWallet === 'function') {
+              walletPanelHandle.refreshMyWallet();
+            }
+            if (activeToken?.address) loadActivePositionMobile(activeToken.address);
+          }
+        }
       },
       // Premium `orders` channel — fan out to BOTH Orders-tab instances on
       // mobile (Q2). Each instance filters by its currently-active token so
@@ -973,6 +1086,12 @@ async function bootstrap() {
     chart.setToken(token);
     bottom.setToken(token.address);
     trade.setToken(token);
+    // Task A: eager-load the active token's position so the chart's Net pos
+    // overlay shows for premium users WITHOUT requiring them to open the My
+    // Wallet tab first. ensureMyWalletData mounts the (hidden) My Wallet tab
+    // which fetches /portfolio once and emits onBalance → chart.setOwnBalance.
+    // Idempotent + premium-gated + dedup'd inside the bottom-tabs host.
+    bottom.ensureMyWalletData();
   }
 
   /**
@@ -1373,6 +1492,15 @@ async function bootstrap() {
         const balances = payload?.balances;
         if (Array.isArray(balances) && balances.length > 0) {
           bottom.pushBalances(balances);
+        }
+        // Task B: when one of the new trades is OURS, refresh the My Wallet tab
+        // (portfolio + own-trade history). No-op if the tab isn't mounted yet.
+        const myAddr = getAccount()?.address;
+        if (myAddr) {
+          const mine = trades.some(
+            (t) => typeof t?.trader === 'string' && t.trader.toLowerCase() === myAddr.toLowerCase(),
+          );
+          if (mine) bottom.refreshMyWallet();
         }
       },
       // F0.14: forward premium `orders` channel updates to the Orders tab.

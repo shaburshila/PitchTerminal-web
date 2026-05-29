@@ -257,15 +257,17 @@ export function mountMobileWalletPanel(container, opts = {}) {
       console.error('mountMobileWalletPanel: mountSubpage failed', err);
     }
     activeHandle = handle;
-    // Replay the latest active token when mounting the Orders sub-page so
-    // the list filters by the user's current Markets pick instead of showing
-    // the empty-state placeholder. Other sub-pages don't have a setToken
-    // surface (Profile/Referral/MyWallet are wallet-scoped, not token-scoped).
-    if (next === 'orders' && handle && activeToken && typeof handle.setToken === 'function') {
-      try {
-        handle.setToken(activeToken);
-      } catch (err) {
-        console.error('mountMobileWalletPanel: orders setToken on mount threw', err);
+    // Replay the latest active token when mounting a token-scoped sub-page so
+    // it reflects the user's current Markets pick instead of the empty-state
+    // placeholder. Orders filters its list by token; My Wallet scopes its
+    // position card + own-trade history. Profile/Referral are wallet-scoped.
+    if (handle && activeToken && typeof handle.setToken === 'function') {
+      if (next === 'orders' || next === 'mywallet') {
+        try {
+          handle.setToken(next === 'mywallet' ? (activeToken?.address ?? null) : activeToken);
+        } catch (err) {
+          console.error('mountMobileWalletPanel: setToken on mount threw', err);
+        }
       }
     }
     // Only advance activeSub when the mount succeeded; otherwise leave it
@@ -345,6 +347,22 @@ export function mountMobileWalletPanel(container, opts = {}) {
   }
 
   /**
+   * Refresh the My Wallet sub-page (portfolio + own-trade history) when it's the
+   * active chip. Called by the host after a known PnL-affecting SSE event. No-op
+   * for any other active sub-page — its data isn't affected.
+   */
+  function refreshMyWallet() {
+    if (activeSub !== 'mywallet' || !activeHandle) return;
+    if (typeof activeHandle.refresh !== 'function') return;
+    try {
+      const r = activeHandle.refresh();
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch (err) {
+      console.error('mountMobileWalletPanel: refreshMyWallet threw', err);
+    }
+  }
+
+  /**
    * Store the latest token selection and, if the Orders sub-page is currently
    * mounted, forward it immediately. Null clears the cached selection (so a
    * later Orders mount does not replay a stale token).
@@ -353,10 +371,15 @@ export function mountMobileWalletPanel(container, opts = {}) {
    */
   function setToken(token) {
     activeToken = token ?? null;
-    if (activeSub !== 'orders' || !activeHandle) return;
-    if (typeof activeHandle.setToken !== 'function') return;
+    // Forward to the active token-scoped sub-page: Orders filters its list by
+    // token; My Wallet scopes its position card + own-trade history. Both
+    // expose `setToken(addr|token)`. Other sub-pages are wallet-scoped — skip.
+    if (activeSub !== 'orders' && activeSub !== 'mywallet') return;
+    if (!activeHandle || typeof activeHandle.setToken !== 'function') return;
     try {
-      activeHandle.setToken(activeToken);
+      // My Wallet expects a lowercase address string; Orders accepts the row.
+      const arg = activeSub === 'mywallet' ? (token?.address ?? null) : activeToken;
+      activeHandle.setToken(arg);
     } catch (err) {
       console.error('mountMobileWalletPanel: setToken threw', err);
     }
@@ -377,5 +400,12 @@ export function mountMobileWalletPanel(container, opts = {}) {
     if (root.parentNode === container) container.removeChild(root);
   }
 
-  return { destroy, setActiveSub, pushOrderUpdate, getActiveSub, setToken };
+  return {
+    destroy,
+    setActiveSub,
+    pushOrderUpdate,
+    getActiveSub,
+    setToken,
+    refreshMyWallet,
+  };
 }

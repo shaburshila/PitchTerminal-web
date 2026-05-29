@@ -146,9 +146,7 @@ describe('mountBottomTabs', () => {
   });
 
   it('renders holders pane from wallets[] sorted by position DESC, hides zero-balance', async () => {
-    const api = makeApi(
-      makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }),
-    );
+    const api = makeApi(makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }));
     const handle = mountBottomTabs(container, { apiClient: api });
     await handle.setToken(TOKEN_A);
 
@@ -165,9 +163,7 @@ describe('mountBottomTabs', () => {
   });
 
   it('computes share% across visible holders', async () => {
-    const api = makeApi(
-      makeTradesResponse({ items: [], wallets: sampleWallets() }),
-    );
+    const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
     const handle = mountBottomTabs(container, { apiClient: api });
     await handle.setToken(TOKEN_A);
     container.querySelector('[data-test-id="bottom-tab-holders"]').click();
@@ -179,9 +175,7 @@ describe('mountBottomTabs', () => {
   });
 
   it('highlights own row when myAddress matches trader', async () => {
-    const api = makeApi(
-      makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }),
-    );
+    const api = makeApi(makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }));
     const handle = mountBottomTabs(container, {
       apiClient: api,
       myAddress: '0x0000000000000000000000000000000000000001',
@@ -199,9 +193,7 @@ describe('mountBottomTabs', () => {
   });
 
   it('setMyAddress updates highlighting without re-fetching', async () => {
-    const api = makeApi(
-      makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }),
-    );
+    const api = makeApi(makeTradesResponse({ items: sampleTrades(), wallets: sampleWallets() }));
     const handle = mountBottomTabs(container, { apiClient: api });
     await handle.setToken(TOKEN_A);
     expect(api.getTrades).toHaveBeenCalledTimes(1);
@@ -236,10 +228,7 @@ describe('mountBottomTabs', () => {
       wallets: sampleWallets(),
     });
     const api = {
-      getTrades: vi
-        .fn()
-        .mockResolvedValueOnce(page1)
-        .mockResolvedValueOnce(page2),
+      getTrades: vi.fn().mockResolvedValueOnce(page1).mockResolvedValueOnce(page2),
     };
     const handle = mountBottomTabs(container, { apiClient: api });
     await handle.setToken(TOKEN_A);
@@ -387,7 +376,9 @@ describe('mountBottomTabs', () => {
 
   it('shows error string when getTrades rejects', async () => {
     const api = {
-      getTrades: vi.fn().mockRejectedValue(Object.assign(new Error('boom'), { detail: 'boom-detail' })),
+      getTrades: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('boom'), { detail: 'boom-detail' })),
     };
     const handle = mountBottomTabs(container, { apiClient: api });
     await handle.setToken(TOKEN_A);
@@ -502,9 +493,7 @@ describe('mountBottomTabs', () => {
       expect(myWallet.getAttribute('aria-disabled')).toBe('true');
       expect(orders.getAttribute('aria-disabled')).toBe('true');
       // Lock badge nodes are appended once and revealed via CSS.
-      expect(
-        container.querySelector('[data-test-id="bottom-tab-lock-my-wallet"]'),
-      ).not.toBeNull();
+      expect(container.querySelector('[data-test-id="bottom-tab-lock-my-wallet"]')).not.toBeNull();
       expect(container.querySelector('[data-test-id="bottom-tab-lock-orders"]')).not.toBeNull();
     });
 
@@ -593,7 +582,7 @@ describe('mountBottomTabs', () => {
       return { address, token, wei };
     }
 
-    it('updates an existing holder\'s position when balance arrives for active token', async () => {
+    it("updates an existing holder's position when balance arrives for active token", async () => {
       const api = makeApi(makeTradesResponse({ items: [], wallets: sampleWallets() }));
       const handle = mountBottomTabs(container, { apiClient: api });
       await handle.setToken(TOKEN_A);
@@ -624,11 +613,7 @@ describe('mountBottomTabs', () => {
 
       const initialRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
       handle.pushBalances([
-        balanceEntry(
-          '0x0000000000000000000000000000000000000099',
-          TOKEN_A,
-          '5000000000000000000',
-        ),
+        balanceEntry('0x0000000000000000000000000000000000000099', TOKEN_A, '5000000000000000000'),
       ]);
 
       const finalRows = container.querySelectorAll('[data-test-id="holder-row"]').length;
@@ -704,11 +689,7 @@ describe('mountBottomTabs', () => {
       const handle = mountBottomTabs(container, { apiClient: api });
       // Don't setToken — pushBalances should silently return.
       handle.pushBalances([
-        balanceEntry(
-          '0x0000000000000000000000000000000000000099',
-          TOKEN_A,
-          '5000000000000000000',
-        ),
+        balanceEntry('0x0000000000000000000000000000000000000099', TOKEN_A, '5000000000000000000'),
       ]);
       // No holders pane rendered yet.
       expect(container.querySelectorAll('[data-test-id="holder-row"]').length).toBe(0);

@@ -828,6 +828,35 @@ export function mountBottomTabs(container, options = {}) {
       });
   }
 
+  /**
+   * Eagerly mount the My Wallet sub-tab WITHOUT switching to it, so the chart's
+   * Net pos overlay (fed by My Wallet's `onBalance`) shows for premium users
+   * the moment they pick a token — instead of only after they manually open
+   * the tab. Idempotent: a second call returns the existing handle, so there's
+   * no duplicate `/portfolio` round-trip (the tab fetches once on mount, then
+   * re-emits cached balance on each `setToken` without re-fetching). No-op for
+   * non-premium users (the tab fetch is gated internally; calling it would just
+   * render the locked placeholder off-screen).
+   *
+   * Called by the host (main.js) from `selectToken`.
+   */
+  function ensureMyWalletData() {
+    if (getAccessState() !== 'premium') return;
+    // Only the FIRST mount needs an explicit setToken to seed the freshly-created
+    // handle with the current token. On subsequent token switches the handle is
+    // already kept in sync by `setToken` above (which forwards to the mounted
+    // child handle) — calling setToken here again would fire a duplicate
+    // /portfolio/trades round-trip (the first is cancelled by the gen counter,
+    // but the network request has already left). See review FIX 1.
+    const wasAlreadyMounted = !!myWalletHandle;
+    const handle = ensureMyWalletMounted();
+    if (handle && state.token && !wasAlreadyMounted) {
+      handle.setToken(state.token, state.tokenMeta).catch(() => {
+        /* surfaced */
+      });
+    }
+  }
+
   function destroy() {
     tabs.removeEventListener('click', onTabClick);
     try {
@@ -869,6 +898,7 @@ export function mountBottomTabs(container, options = {}) {
     refresh,
     pushOrderUpdate,
     refreshMyWallet,
+    ensureMyWalletData,
     destroy,
   };
 }
