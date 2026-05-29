@@ -98,6 +98,9 @@ CREATE TABLE events (
 CREATE INDEX events_token_block_idx ON events(token_address, block_number DESC);
 CREATE INDEX events_trader_idx ON events(trader_address);
 CREATE INDEX events_block_idx ON events(block_number DESC);
+-- Покрывает GET /api/v1/portfolio/trades: фильтр (trader, token) + ORDER BY (block, log) DESC.
+CREATE INDEX events_trader_token_block_idx
+    ON events(trader_address, token_address, block_number DESC, log_index DESC);
 
 -- =============================================================================
 -- market_state — derived/cache: динамика по токену

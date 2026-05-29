@@ -13,6 +13,7 @@ import {
   getHealth,
   getOrders,
   getPortfolio,
+  getPortfolioTrades,
   getPosition,
   getProfile,
   getTokens,
@@ -205,9 +206,7 @@ describe('endpoint wrappers — URLs', () => {
       makeResponse({ body: { trades: { items: [], nextCursor: null } } }),
     );
     await getTrades('0xabc', { limit: 50, cursor: 'eyJ0In0' });
-    expect(fetch.mock.calls[0][0]).toBe(
-      `${API_BASE}/tokens/0xabc/trades?limit=50&cursor=eyJ0In0`,
-    );
+    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/tokens/0xabc/trades?limit=50&cursor=eyJ0In0`);
   });
 
   it('getTrades with no opts skips query params', async () => {
@@ -219,7 +218,9 @@ describe('endpoint wrappers — URLs', () => {
   });
 
   it('getAuthNonce POSTs an empty body when called with no args (AppKit/WC path)', async () => {
-    fetch.mockResolvedValueOnce(makeResponse({ body: { nonce: 'abc', issuedAt: 1, expiresAt: 2 } }));
+    fetch.mockResolvedValueOnce(
+      makeResponse({ body: { nonce: 'abc', issuedAt: 1, expiresAt: 2 } }),
+    );
     await getAuthNonce();
 
     const [url, init] = fetch.mock.calls[0];
@@ -231,7 +232,9 @@ describe('endpoint wrappers — URLs', () => {
   });
 
   it('getAuthNonce forwards a legacy address (lowercased) when supplied', async () => {
-    fetch.mockResolvedValueOnce(makeResponse({ body: { nonce: 'abc', issuedAt: 1, expiresAt: 2 } }));
+    fetch.mockResolvedValueOnce(
+      makeResponse({ body: { nonce: 'abc', issuedAt: 1, expiresAt: 2 } }),
+    );
     await getAuthNonce('0x71ECD1a09380cA46CcA741Bc48d04C556674756F');
 
     const [, init] = fetch.mock.calls[0];
@@ -268,9 +271,7 @@ describe('endpoint wrappers — URLs', () => {
   it('getOrders filters by status and token', async () => {
     fetch.mockResolvedValueOnce(makeResponse({ body: { items: [], nextCursor: null } }));
     await getOrders({ status: 'pending', token: '0xabc', limit: 25 });
-    expect(fetch.mock.calls[0][0]).toBe(
-      `${API_BASE}/orders?status=pending&token=0xabc&limit=25`,
-    );
+    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/orders?status=pending&token=0xabc&limit=25`);
   });
 
   it('createOrder POSTs the body and signature', async () => {
@@ -296,6 +297,20 @@ describe('endpoint wrappers — URLs', () => {
     fetch.mockResolvedValueOnce(makeResponse({ body: { items: [] } }));
     await getPortfolio();
     expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/portfolio`);
+  });
+
+  it('getPortfolioTrades encodes token, limit and cursor', async () => {
+    fetch.mockResolvedValueOnce(makeResponse({ body: { items: [], nextCursor: null, limit: 50 } }));
+    await getPortfolioTrades('0xabc', { limit: 50, cursor: 'eyJ0In0' });
+    expect(fetch.mock.calls[0][0]).toBe(
+      `${API_BASE}/portfolio/trades?token=0xabc&limit=50&cursor=eyJ0In0`,
+    );
+  });
+
+  it('getPortfolioTrades with only a token omits limit/cursor', async () => {
+    fetch.mockResolvedValueOnce(makeResponse({ body: { items: [], nextCursor: null, limit: 50 } }));
+    await getPortfolioTrades('0xabc');
+    expect(fetch.mock.calls[0][0]).toBe(`${API_BASE}/portfolio/trades?token=0xabc`);
   });
 });
 

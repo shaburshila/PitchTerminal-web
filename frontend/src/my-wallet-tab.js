@@ -78,6 +78,43 @@ function shortAddr(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+const BASESCAN_TX = 'https://basescan.org/tx/';
+
+/** Format a unix-seconds timestamp as `MM-DD HH:MM` (UTC). */
+function formatTradeTime(ts) {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '—';
+  const d = new Date(ts * 1000);
+  const MM = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const DD = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${MM}-${DD} ${hh}:${mm}`;
+}
+
+/**
+ * Normalise a `/portfolio/trades` item. Numeric fields are coerced; non-finite
+ * values become NaN so the formatters render an em-dash. `type` is constrained
+ * to buy/sell, `tx` kept verbatim for the BaseScan link.
+ *
+ * @param {object} raw
+ * @returns {{ type: 'buy'|'sell'|null, price: number, amount: number,
+ *   feePitch: number, valuePitch: number, timestamp: number, tx: string }|null}
+ */
+function normaliseTrade(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = raw.type === 'buy' || raw.type === 'sell' ? raw.type : null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
+  return {
+    type,
+    price: num(raw.price),
+    amount: num(raw.amount),
+    feePitch: num(raw.feePitch),
+    valuePitch: num(raw.valuePitch),
+    timestamp: num(raw.timestamp),
+    tx: typeof raw.tx === 'string' ? raw.tx : '',
+  };
+}
+
 /**
  * Normalise a portfolio item from the `/portfolio` response. Wei strings are
  * preserved verbatim (BigInt available via `*Wei` accessors); the *Display
@@ -170,7 +207,7 @@ function pickDisplay(raw, displayKey, weiKey) {
 
 /**
  * @typedef {object} MyWalletOpts
- * @property {{ getPortfolio?: typeof defaultApi.getPortfolio }} [apiClient]
+ * @property {{ getPortfolio?: typeof defaultApi.getPortfolio, getPortfolioTrades?: typeof defaultApi.getPortfolioTrades }} [apiClient]
  * @property {string|null} [token]    Initial active token (lowercase address).
  *   Used only for row highlight + Net pos hookup — does NOT trigger a fetch.
  * @property {{ symbol?: string, name?: string, kind?: 'player'|'country' }|null} [tokenMeta]
@@ -236,6 +273,19 @@ export function mountMyWalletTab(container, opts = {}) {
     hasLoaded: false,
     /** Generation counter — discards stale in-flight responses. */
     gen: 0,
+    // ── My Trades (own trade history for the active token) ──────────────────
+    // Loaded independently of the position card: the user wants to see their
+    // history even after fully closing the position (qty=0), so it is keyed on
+    // `state.token` rather than the existence of a portfolio item.
+    /** @type {Array<object>} */
+    tradeItems: [],
+    tradeCursor: null,
+    tradeLoading: false,
+    tradeError: null,
+    /** Have we received at least one successful trades response for `token`? */
+    tradeLoaded: false,
+    /** Generation counter for trade fetches — discards stale responses. */
+    tradeGen: 0,
   };
 
   function emitTabCount() {
@@ -641,7 +691,7 @@ export function mountMyWalletTab(container, opts = {}) {
       className: 'pt-mywallet__thead',
       dataset: { testId: 'mywallet-thead' },
     });
-    for (const label of ['Token', 'Balance', 'Avg entry', 'Current', 'Value', 'PnL']) {
+    for (const label of ['Token', 'Balance', 'Avg entry', 'Current', 'Value', 'Unrealized PnL']) {
       tableHead.appendChild(el('span', { className: 'pt-mywallet__th', text: label }));
     }
     root.appendChild(tableHead);
@@ -662,6 +712,16 @@ export function mountMyWalletTab(container, opts = {}) {
     root.appendChild(list);
   }
 
+  /**
+   * Append the "My Trades" section to the position body when a token is active.
+   * Rendered after the position card/empty-state so it shows even when the
+   * user holds nothing of the selected token (history persists post-close).
+   */
+  function appendTradesSection() {
+    const section = buildTradesSection();
+    if (section) root.appendChild(section);
+  }
+
   function render() {
     if (state.accessState !== 'premium') {
       renderLock();
@@ -675,16 +735,25 @@ export function mountMyWalletTab(container, opts = {}) {
     }
     if (state.loading && !state.hasLoaded) {
       renderLoading();
+      // The My Trades history is keyed off the active token, not the portfolio
+      // load — keep it visible (with its own loader) while /portfolio is still
+      // in flight. See review FIX 2.
+      if (state.token != null) appendTradesSection();
       emitTabCount();
       return;
     }
     if (state.error) {
       renderError();
+      // Trade history depends only on the active token, not on whether the
+      // /portfolio fetch failed — keep it visible alongside the error. See
+      // review FIX 2 (error-branch follow-up).
+      if (state.token != null) appendTradesSection();
       emitTabCount();
       return;
     }
     if (!state.hasLoaded) {
       renderLoading();
+      if (state.token != null) appendTradesSection();
       emitTabCount();
       return;
     }
@@ -693,10 +762,12 @@ export function mountMyWalletTab(container, opts = {}) {
     // no matching position.
     if (visibleItems().length === 0) {
       renderEmpty();
+      appendTradesSection();
       emitTabCount();
       return;
     }
     renderData();
+    appendTradesSection();
     emitTabCount();
   }
 
@@ -737,6 +808,187 @@ export function mountMyWalletTab(container, opts = {}) {
     }
   }
 
+  // ── My Trades (own history for the active token) ──────────────────────────
+  /**
+   * Render the "My Trades" section. Shown whenever a token is active and the
+   * user is premium + connected — independently of whether they currently hold
+   * a position (per product decision: history persists after qty hits 0).
+   *
+   * @returns {HTMLElement|null}
+   */
+  function buildTradesSection() {
+    if (state.token == null) return null;
+
+    const section = el('div', {
+      className: 'pt-mywallet__trades',
+      dataset: { testId: 'mywallet-trades' },
+    });
+    section.appendChild(el('h4', { className: 'pt-mywallet__trades-title', text: 'My Trades' }));
+
+    if (state.tradeError) {
+      section.appendChild(
+        el('div', {
+          className: 'pt-mywallet__trades-msg pt-mywallet__error',
+          dataset: { testId: 'mywallet-trades-error' },
+          text: state.tradeError,
+        }),
+      );
+      return section;
+    }
+
+    if (!state.tradeLoaded && state.tradeLoading) {
+      section.appendChild(
+        el('div', {
+          className: 'pt-mywallet__trades-msg',
+          dataset: { testId: 'mywallet-trades-loading' },
+          text: 'Loading trades…',
+        }),
+      );
+      return section;
+    }
+
+    if (state.tradeLoaded && state.tradeItems.length === 0) {
+      section.appendChild(
+        el('div', {
+          className: 'pt-mywallet__trades-msg',
+          dataset: { testId: 'mywallet-trades-empty' },
+          text: 'No trades in this token yet.',
+        }),
+      );
+      return section;
+    }
+
+    const table = el('table', {
+      className: 'pt-bottom__table pt-mywallet__trades-table',
+      dataset: { testId: 'mywallet-trades-table' },
+    });
+    const thead = el('thead');
+    const headRow = el('tr');
+    for (const label of ['Time', 'Side', 'Amount', 'Price', 'Fee', 'Tx']) {
+      headRow.appendChild(el('th', { text: label }));
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = el('tbody');
+    for (const t of state.tradeItems) {
+      const tr = el('tr', {
+        className: 'pt-bottom__row',
+        dataset: { testId: 'mywallet-trade-row', type: t.type ?? '' },
+      });
+      tr.appendChild(el('td', { className: 'time', text: formatTradeTime(t.timestamp) }));
+      tr.appendChild(
+        el('td', {
+          className: `side side--${t.type}`,
+          text: t.type === 'buy' ? 'Buy' : t.type === 'sell' ? 'Sell' : (t.type ?? '—'),
+        }),
+      );
+      tr.appendChild(el('td', { className: 'num', text: formatNumber(t.amount, 4) }));
+      tr.appendChild(el('td', { className: 'num', text: formatNumber(t.price, 6) }));
+      tr.appendChild(el('td', { className: 'num', text: formatNumber(t.feePitch, 4) }));
+      const txCell = el('td', { className: 'tx' });
+      if (t.tx) {
+        txCell.appendChild(
+          el('a', {
+            attrs: {
+              href: BASESCAN_TX + t.tx,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              'aria-label': 'Transaction on BaseScan',
+            },
+            text: '↗',
+          }),
+        );
+      } else {
+        txCell.textContent = '—';
+      }
+      tr.appendChild(txCell);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    section.appendChild(table);
+
+    if (state.tradeCursor) {
+      const more = el('button', {
+        className: 'pt-btn pt-mywallet__trades-more',
+        dataset: { testId: 'mywallet-trades-more' },
+        attrs: { type: 'button' },
+        text: state.tradeLoading ? 'Loading…' : 'Load more',
+      });
+      if (state.tradeLoading) more.setAttribute('disabled', 'true');
+      more.addEventListener('click', () => {
+        loadMoreTrades().catch(() => {
+          /* surfaced via state.tradeError */
+        });
+      });
+      section.appendChild(more);
+    }
+
+    return section;
+  }
+
+  /**
+   * Fetch the active token's own trade history. `append` keeps the existing
+   * rows and walks the cursor; otherwise it replaces the list (token switch /
+   * SSE refresh). Premium + connected + token required; deduped by gen counter.
+   *
+   * @param {{ append?: boolean }} [opts]
+   */
+  async function fetchTrades({ append = false } = {}) {
+    if (state.accessState !== 'premium' || !state.connected || state.token == null) return;
+    const fn = apiClient.getPortfolioTrades;
+    if (typeof fn !== 'function') return;
+    const token = state.token;
+    const cursor = append ? state.tradeCursor : null;
+    const myGen = ++state.tradeGen;
+    state.tradeLoading = true;
+    if (!append) state.tradeError = null;
+    render();
+    try {
+      const resp = await fn.call(apiClient, token, { limit: 50, cursor });
+      if (myGen !== state.tradeGen) return; // stale (token switched mid-flight)
+      const rawItems = Array.isArray(resp?.items) ? resp.items : [];
+      const items = rawItems.map(normaliseTrade).filter((it) => it != null);
+      state.tradeItems = append ? state.tradeItems.concat(items) : items;
+      state.tradeCursor = resp?.nextCursor ?? null;
+      state.tradeLoaded = true;
+    } catch (err) {
+      if (myGen !== state.tradeGen) return;
+      const status = err && typeof err.status === 'number' ? err.status : null;
+      // 401/402 degrade silently — the host owns premium gating; an empty
+      // history is the graceful fallback (mirrors fetchPortfolio).
+      if (status === 401 || status === 402) {
+        if (!append) state.tradeItems = [];
+        state.tradeCursor = null;
+        state.tradeLoaded = true;
+        state.tradeError = null;
+      } else {
+        const detail = err?.detail || err?.title || err?.message || 'Failed to load trades';
+        state.tradeError = status ? `${detail} (${status})` : detail;
+      }
+    } finally {
+      if (myGen === state.tradeGen) {
+        state.tradeLoading = false;
+        render();
+      }
+    }
+  }
+
+  async function loadMoreTrades() {
+    if (!state.tradeCursor || state.tradeLoading) return;
+    await fetchTrades({ append: true });
+  }
+
+  /** Reset trades state when the active token changes (or clears). */
+  function resetTrades() {
+    state.tradeGen += 1; // invalidate any in-flight fetch
+    state.tradeItems = [];
+    state.tradeCursor = null;
+    state.tradeLoading = false;
+    state.tradeError = null;
+    state.tradeLoaded = false;
+  }
+
   // Subscribe to access state changes — important for the "just paid" flow
   // where the user becomes premium without re-mounting the tab.
   const unsubscribeAccess = subscribeAccess((next) => {
@@ -746,11 +998,17 @@ export function mountMyWalletTab(container, opts = {}) {
       fetchPortfolio().catch(() => {
         /* surfaced via state.error */
       });
+      if (state.token != null) {
+        fetchTrades().catch(() => {
+          /* surfaced via state.tradeError */
+        });
+      }
     } else if (prev === 'premium' && next !== 'premium') {
       state.items = [];
       state.hasLoaded = false;
       state.error = null;
       state.gen += 1;
+      resetTrades();
       render();
     } else {
       render();
@@ -769,6 +1027,7 @@ export function mountMyWalletTab(container, opts = {}) {
         state.hasLoaded = false;
         state.error = null;
         state.gen += 1;
+        resetTrades();
         render();
         if (onBalance && state.token) onBalance(state.token, 0, 0, 0);
         return;
@@ -777,6 +1036,11 @@ export function mountMyWalletTab(container, opts = {}) {
         fetchPortfolio().catch(() => {
           /* surfaced via state.error */
         });
+        if (state.token != null) {
+          fetchTrades().catch(() => {
+            /* surfaced via state.tradeError */
+          });
+        }
       } else {
         render();
       }
@@ -803,10 +1067,21 @@ export function mountMyWalletTab(container, opts = {}) {
     if (onBalance && prevToken && prevToken !== normalized) {
       onBalance(prevToken, 0, 0, 0);
     }
+    const tokenChanged = normalized !== prevToken;
     state.token = normalized;
     state.tokenMeta = newMeta;
+    if (tokenChanged) {
+      // New active token → drop the old history and (re)load it. The trades
+      // section is keyed on the token, independent of the position card.
+      resetTrades();
+    }
     render();
     emitBalance();
+    if (tokenChanged && normalized != null) {
+      fetchTrades().catch(() => {
+        /* surfaced via state.tradeError */
+      });
+    }
   }
 
   async function refresh() {
@@ -814,7 +1089,10 @@ export function mountMyWalletTab(container, opts = {}) {
       render();
       return;
     }
-    await fetchPortfolio();
+    // Portfolio + own-trade history are independent round-trips — fetch them in
+    // parallel. A refresh() typically follows a known PnL-affecting event (own
+    // SSE trade), which also adds a history row. See review FIX 5.
+    await Promise.all([fetchPortfolio(), state.token != null ? fetchTrades() : Promise.resolve()]);
   }
 
   function destroy() {
@@ -850,6 +1128,11 @@ export function mountMyWalletTab(container, opts = {}) {
     fetchPortfolio().catch(() => {
       /* surfaced via state.error */
     });
+    if (state.token != null) {
+      fetchTrades().catch(() => {
+        /* surfaced via state.tradeError */
+      });
+    }
   }
 
   return { setToken, refresh, destroy, getState };

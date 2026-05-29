@@ -36,9 +36,26 @@ function makeItem(overrides = {}) {
   };
 }
 
-function makeApi(items = [makeItem()]) {
+function makeTrade(overrides = {}) {
+  return {
+    symbol: 'FRA',
+    kind: 'country',
+    type: 'buy',
+    price: 12.0,
+    marketPrice: 12.1,
+    amount: 2.5,
+    valuePitch: 30.0,
+    feePitch: 1.5,
+    timestamp: 1716900000,
+    tx: '0xdeadbeef',
+    ...overrides,
+  };
+}
+
+function makeApi(items = [makeItem()], tradesResp = { items: [], nextCursor: null, limit: 50 }) {
   return {
     getPortfolio: vi.fn(async () => ({ items })),
+    getPortfolioTrades: vi.fn(async () => tradesResp),
   };
 }
 
@@ -695,6 +712,203 @@ describe('mountMyWalletTab', () => {
       await handle.setToken(TOKEN);
       expect(c.querySelector('[data-test-id="mywallet-empty"]')).toBeTruthy();
       expect(c.querySelector('[data-test-id="mywallet-card"]')).toBeFalsy();
+    });
+  });
+
+  describe('My Trades section', () => {
+    it('does not render trades section when no token is active', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([], { items: [makeTrade()], nextCursor: null, limit: 50 });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-trades"]')).toBeFalsy();
+      expect(api.getPortfolioTrades).not.toHaveBeenCalled();
+    });
+
+    it('fetches + renders own trade history for the active token', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], {
+        items: [makeTrade({ type: 'buy' }), makeTrade({ type: 'sell', tx: '0xfeed' })],
+        nextCursor: null,
+        limit: 50,
+      });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(api.getPortfolioTrades).toHaveBeenCalledTimes(1);
+      expect(api.getPortfolioTrades).toHaveBeenCalledWith(TOKEN, { limit: 50, cursor: null });
+      expect(c.querySelector('[data-test-id="mywallet-trades-table"]')).toBeTruthy();
+      const rows = c.querySelectorAll('[data-test-id="mywallet-trade-row"]');
+      expect(rows.length).toBe(2);
+    });
+
+    it('shows trade history even when the position is closed (no item)', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      // Portfolio has NO item for TOKEN (qty=0) but history exists.
+      const api = makeApi([], {
+        items: [makeTrade({ type: 'sell' })],
+        nextCursor: null,
+        limit: 50,
+      });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      // Scoped-empty position state AND a populated trade table.
+      expect(c.querySelector('[data-test-id="mywallet-empty"]')).toBeTruthy();
+      expect(c.querySelectorAll('[data-test-id="mywallet-trade-row"]').length).toBe(1);
+    });
+
+    it('re-fetches history on token switch', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], { items: [makeTrade()], nextCursor: null, limit: 50 });
+      const handle = mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(api.getPortfolioTrades).toHaveBeenCalledTimes(1);
+      await handle.setToken(TOKEN_2);
+      await flush();
+      expect(api.getPortfolioTrades).toHaveBeenCalledTimes(2);
+      expect(api.getPortfolioTrades).toHaveBeenLastCalledWith(TOKEN_2, { limit: 50, cursor: null });
+    });
+
+    it('refresh() re-fetches history (SSE path) when a token is active', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], { items: [makeTrade()], nextCursor: null, limit: 50 });
+      const handle = mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(api.getPortfolioTrades).toHaveBeenCalledTimes(1);
+      const portfolioCalls = api.getPortfolio.mock.calls.length;
+      await handle.refresh();
+      await flush();
+      // refresh() runs portfolio + trades in parallel — both fire once more.
+      expect(api.getPortfolio.mock.calls.length).toBe(portfolioCalls + 1);
+      expect(api.getPortfolioTrades).toHaveBeenCalledTimes(2);
+      expect(api.getPortfolioTrades).toHaveBeenLastCalledWith(TOKEN, { limit: 50, cursor: null });
+    });
+
+    it('keeps trades section visible while initial portfolio load is pending', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], { items: [makeTrade()], nextCursor: null, limit: 50 });
+      // Portfolio never resolves → tab stays in the initial loading state.
+      api.getPortfolio = vi.fn(() => new Promise(() => {}));
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      // Portfolio spinner is shown...
+      expect(c.querySelector('[data-test-id="mywallet-loading"]')).toBeTruthy();
+      // ...but the My Trades section is still rendered (keyed off the token).
+      expect(c.querySelector('[data-test-id="mywallet-trades"]')).toBeTruthy();
+      expect(api.getPortfolioTrades).toHaveBeenCalledWith(TOKEN, { limit: 50, cursor: null });
+    });
+
+    it('keeps trades section visible when portfolio load errors', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], { items: [makeTrade()], nextCursor: null, limit: 50 });
+      // Portfolio fetch fails (non-auth) → error branch in render().
+      api.getPortfolio = vi.fn(async () => {
+        const err = new Error('Server down');
+        err.status = 500;
+        throw err;
+      });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      // Error banner is shown...
+      expect(c.querySelector('[data-test-id="mywallet-error"]')).toBeTruthy();
+      // ...but the My Trades section is still rendered (keyed off the token).
+      expect(c.querySelector('[data-test-id="mywallet-trades"]')).toBeTruthy();
+      expect(api.getPortfolioTrades).toHaveBeenCalledWith(TOKEN, { limit: 50, cursor: null });
+    });
+
+    it('renders empty-history message when no trades', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()], { items: [], nextCursor: null, limit: 50 });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      expect(c.querySelector('[data-test-id="mywallet-trades-empty"]')).toBeTruthy();
+    });
+
+    it('paginates history via Load more when nextCursor present', async () => {
+      accessStore.set('premium');
+      const c = makeContainer();
+      const acc = makeAccount();
+      const api = makeApi([makeItem()]);
+      api.getPortfolioTrades = vi
+        .fn()
+        .mockResolvedValueOnce({ items: [makeTrade()], nextCursor: 'CURSOR1', limit: 50 })
+        .mockResolvedValueOnce({
+          items: [makeTrade({ tx: '0xpage2' })],
+          nextCursor: null,
+          limit: 50,
+        });
+      mountMyWalletTab(c, {
+        apiClient: api,
+        token: TOKEN,
+        getAccount: acc.getAccount,
+        onAccountChange: acc.onAccountChange,
+      });
+      await flush();
+      const more = c.querySelector('[data-test-id="mywallet-trades-more"]');
+      expect(more).toBeTruthy();
+      more.click();
+      await flush();
+      expect(api.getPortfolioTrades).toHaveBeenLastCalledWith(TOKEN, {
+        limit: 50,
+        cursor: 'CURSOR1',
+      });
+      expect(c.querySelectorAll('[data-test-id="mywallet-trade-row"]').length).toBe(2);
+      // nextCursor now null → Load more gone.
+      expect(c.querySelector('[data-test-id="mywallet-trades-more"]')).toBeFalsy();
     });
   });
 });

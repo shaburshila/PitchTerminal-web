@@ -2425,6 +2425,45 @@ body.mode-dashboard .pt-profile {
   opacity: 0.85;
 }
 
+/* My Trades — own trade history for the active token (Task B). Sits below the
+   position card / empty state inside the My Wallet pane. The table itself
+   reuses .pt-bottom__table styling (side--buy/sell colours, num alignment,
+   BaseScan link styling). */
+.pt-mywallet__trades {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pt-mywallet__trades-title {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3, var(--text-muted));
+}
+.pt-mywallet__trades-msg {
+  padding: 14px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3, var(--text-muted));
+  background: var(--bg-1, #0f1614);
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+}
+.pt-mywallet__trades-msg.pt-mywallet__error {
+  color: var(--down, var(--danger));
+}
+.pt-mywallet__trades-table {
+  display: table;
+  width: 100%;
+}
+.pt-mywallet__trades-more {
+  align-self: center;
+  margin-top: 2px;
+}
+
 /* Illustrated empty state — matches the mockup's icon + heading + body. */
 .pt-mywallet__empty {
   padding: 36px 18px;

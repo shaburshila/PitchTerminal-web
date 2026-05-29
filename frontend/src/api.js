@@ -314,6 +314,25 @@ export function getPortfolio() {
   return apiFetch('/portfolio');
 }
 
+/**
+ * GET /portfolio/trades — the session wallet's OWN trade history for a single
+ * token (premium). Cursor-paginated, newest-first.
+ *
+ * Response shape:
+ *   { items: [ { symbol, kind, type: 'buy'|'sell', price, marketPrice,
+ *                amount, valuePitch, feePitch, timestamp, tx } ],
+ *     nextCursor: null|string, limit: number }
+ *
+ * Throws ApiError with status 401 (auth.unauthenticated) or 402
+ * (access.payment_required).
+ *
+ * @param {string} token   Lowercase token address.
+ * @param {{ limit?: number, cursor?: string }} [opts]
+ */
+export function getPortfolioTrades(token, { limit, cursor } = {}) {
+  return apiFetch(`/portfolio/trades${buildQuery({ token, limit, cursor })}`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Limit orders (PREMIUM)
 // ─────────────────────────────────────────────────────────────────────────────

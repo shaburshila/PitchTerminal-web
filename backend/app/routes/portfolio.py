@@ -24,13 +24,24 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 
 from app.deps import require_premium
+from app.errors import abort_with_problem
+from app.pagination import decode_cursor, encode_cursor
+from app.routes.profile import _build_trade_item, _load_token_meta
 from shared.config import WEI
-from shared.db import fetch_all
+from shared.db import fetch_all, fetch_one
+from shared.types import Event
 
 bp = Blueprint("portfolio", __name__)
+
+# Per-token trades pagination: spec §6.x. Default 50, capped at 100 so the
+# frontend's "trade history per token" list can page sensibly without ever
+# pulling an unbounded window.
+_TRADES_DEFAULT_LIMIT = 50
+_TRADES_MAX_LIMIT = 100
+_ADDR_RE_LEN = 42
 
 
 def _load_positions(wallet: str) -> list[dict[str, Any]]:
@@ -238,6 +249,174 @@ def get_portfolio() -> Any:
     # Sort by value descending — wei ints, exact compare.
     items.sort(key=lambda it: -int(it["valuePitch"]))
     return jsonify({"items": items})
+
+
+# ─── /api/v1/portfolio/trades — per-token wallet trade history ──────────────
+
+
+def _clamp_trades_limit(value: Any) -> int:
+    """Parse & clamp ``?limit=`` to ``[1, _TRADES_MAX_LIMIT]`` (default 50).
+
+    Mirrors :func:`app.pagination.clamp_limit` but with this endpoint's own
+    default/maximum (the shared clamp defaults to 100/500, which is too wide
+    for a per-token history list).
+    """
+
+    if value is None or value == "":
+        return _TRADES_DEFAULT_LIMIT
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad limit",
+            status=400,
+            detail="limit must be an integer",
+        )
+        raise  # unreachable
+    if n < 1 or n > _TRADES_MAX_LIMIT:
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad limit",
+            status=400,
+            detail=f"limit must be in [1, {_TRADES_MAX_LIMIT}]",
+        )
+    return n
+
+
+def _decode_trades_cursor(cursor_raw: str | None) -> tuple[int, int] | None:
+    """Decode the optional ``cursor`` into ``(block_number, log_index)``.
+
+    Same opaque ``{"b": int, "l": int}`` payload as profile.trades and the
+    per-token tokens/{token}/trades endpoint (api-spec §1.5).
+    """
+
+    if not cursor_raw:
+        return None
+    cursor = decode_cursor(cursor_raw)
+    try:
+        return int(cursor["b"]), int(cursor["l"])
+    except (KeyError, TypeError, ValueError) as err:
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad cursor",
+            status=400,
+            detail='cursor must carry {"b": int, "l": int}',
+        )
+        raise AssertionError("unreachable") from err
+
+
+def _token_exists(token: str) -> bool:
+    """True when ``token`` is a known row in the ``tokens`` table."""
+
+    return fetch_one("SELECT 1 FROM tokens WHERE address = %s", (token,)) is not None
+
+
+def _load_wallet_token_trades(
+    wallet: str,
+    token: str,
+    cursor: tuple[int, int] | None,
+    limit: int,
+) -> tuple[list[Event], str | None]:
+    """Fetch one DESC page of ``wallet``'s trades on ``token``.
+
+    Filtered ``WHERE trader_address = %s AND token_address = %s`` and ordered
+    ``block_number DESC, log_index DESC`` — the keyset window is applied in SQL
+    (``< (cursor_block, cursor_log)`` lexicographically) so we never load the
+    full history into the API process. Fetches ``limit + 1`` rows to detect a
+    next page, then trims and computes ``nextCursor``.
+    """
+
+    params: list[Any] = [wallet, token]
+    where_extra = ""
+    if cursor is not None:
+        b, li = cursor
+        # Lexicographic keyset: (block, log) strictly before the cursor.
+        where_extra = " AND (block_number < %s OR (block_number = %s AND log_index < %s))"
+        params.extend([b, b, li])
+    params.append(limit + 1)
+
+    rows = fetch_all(
+        "SELECT block_number, tx_hash, log_index, token_address, side, "
+        "trader_address, base_value, token_value, fee, "
+        "EXTRACT(EPOCH FROM ts)::bigint AS timestamp "
+        "FROM events WHERE trader_address = %s AND token_address = %s" + where_extra + " "
+        "ORDER BY block_number DESC, log_index DESC LIMIT %s",
+        tuple(params),
+    )
+
+    events: list[Event] = []
+    for r in rows:
+        events.append(
+            {
+                "block_number": int(r["block_number"]),
+                "tx_hash": r["tx_hash"].strip(),
+                "log_index": int(r["log_index"]),
+                "token_address": r["token_address"].strip(),
+                "side": r["side"],
+                "trader_address": r["trader_address"].strip(),
+                "base_value": int(r["base_value"]),
+                "token_value": int(r["token_value"]),
+                "fee": int(r["fee"]),
+                "timestamp": int(r["timestamp"]),
+            }
+        )
+
+    next_cursor: str | None = None
+    if len(events) > limit:
+        events = events[:limit]
+        last = events[-1]
+        next_cursor = encode_cursor({"b": int(last["block_number"]), "l": int(last["log_index"])})
+    return events, next_cursor
+
+
+@bp.get("/api/v1/portfolio/trades")
+@require_premium
+def get_portfolio_trades() -> Any:
+    """Per-token trade history for the authenticated wallet.
+
+    Query params:
+        token: required, lowercase 0x address. ``404`` if unknown, ``400`` if
+            missing.
+        limit: optional, default 50, clamped to ``[1, 100]``.
+        cursor: optional opaque ``{"b": block, "l": log_index}`` keyset cursor.
+
+    Response::
+
+        {"items": [ <trade item, profile §6.1 shape> ], "nextCursor": null|str,
+         "limit": 50}
+
+    Trade items reuse :func:`app.routes.profile._build_trade_item` so the shape
+    is identical to ``GET /api/v1/profile``'s ``trades.items[*]``.
+    """
+
+    wallet = g.address  # lowercased by require_auth
+
+    token_raw = request.args.get("token")
+    if not token_raw:
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Missing token",
+            status=400,
+            detail="token query param is required",
+        )
+        raise AssertionError("unreachable")
+    token = token_raw.lower()
+    if len(token) != _ADDR_RE_LEN or not token.startswith("0x"):
+        abort_with_problem(code="tokens.unknown", title="Unknown token", status=404)
+        raise AssertionError("unreachable")
+    if not _token_exists(token):
+        abort_with_problem(code="tokens.unknown", title="Unknown token", status=404)
+        raise AssertionError("unreachable")
+
+    limit = _clamp_trades_limit(request.args.get("limit"))
+    cursor = _decode_trades_cursor(request.args.get("cursor"))
+
+    events, next_cursor = _load_wallet_token_trades(wallet, token, cursor, limit)
+    meta = _load_token_meta({token}).get(token, {})
+    items = [_build_trade_item(ev, meta) for ev in events]
+
+    return jsonify({"items": items, "nextCursor": next_cursor, "limit": limit})
 
 
 __all__ = ["bp"]
