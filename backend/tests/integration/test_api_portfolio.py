@@ -15,6 +15,7 @@ import psycopg
 import pytest
 
 from app import create_app
+from app.routes import portfolio as portfolio_route
 from shared import access as access_mod
 from shared import jwt as jwt_mod
 
@@ -36,6 +37,19 @@ def _premium(*, has_access: bool):
             yield
         finally:
             access_mod.reset_cache()
+
+
+@contextmanager
+def _onchain_wei(wei_by_token: dict[str, int]):
+    """Stub the on-chain ``balanceOf`` source (bug #11) without RPC.
+
+    CURRENT held quantity now comes from ``balanceOf`` (not event net), so tests
+    asserting positions must declare the on-chain wei held per token. Tokens
+    absent from the map resolve to 0 → dropped as phantom positions.
+    """
+
+    with patch.object(portfolio_route, "_fetch_onchain_wei", return_value=dict(wei_by_token)):
+        yield
 
 
 @pytest.fixture()
@@ -150,6 +164,33 @@ class TestEmptyPortfolio:
         assert resp.get_json() == {"items": []}
 
 
+class TestPhantomOnchainFilter:
+    """Bug #11: a position with net buy events but 0 on-chain balance is hidden."""
+
+    def test_country_consumed_by_player_buy_is_dropped(self, app) -> None:
+        # Wallet bought 5 CTY per events, but on-chain holds 0 (consumed buying a
+        # player — no country Sell event). Must NOT appear in portfolio items.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 5 * 10**18, 5 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_wei({}):  # 0 on-chain
+            resp = client.get("/api/v1/portfolio")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"items": []}
+
+    def test_onchain_qty_overrides_event_overcount(self, app) -> None:
+        # Events say 10 CTY held; on-chain truth is 3. balance/value reflect 3.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 10 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 3 * 10**18}):
+            resp = client.get("/api/v1/portfolio")
+        item = resp.get_json()["items"][0]
+        assert item["balance"] == str(3 * 10**18)
+        # value = 3 * 1 PITCH (fixture) = 3.
+        assert item["valuePitch"] == str(3 * 10**18)
+
+
 class TestMixedPositions:
     def test_country_and_player_positions_present(self, app) -> None:
         # Country: bought 5 for 5 PITCH, fee 0. Position = 5; avg entry 1 PITCH.
@@ -162,7 +203,7 @@ class TestMixedPositions:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 5 * 10**18, _PLAYER: 2 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         assert resp.status_code == 200
         body = resp.get_json()
@@ -220,7 +261,7 @@ class TestPnlMath:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 10 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         assert resp.status_code == 200
         item = resp.get_json()["items"][0]
@@ -238,7 +279,7 @@ class TestPnlMath:
         _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 5 * 10**18, 10**18, 0)
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 10**18}):
             resp = client.get("/api/v1/portfolio")
         assert resp.status_code == 200
         item = resp.get_json()["items"][0]
@@ -258,7 +299,7 @@ class TestBreakEvenAndRealized:
         _insert_event(101, 0, _COUNTRY, _WALLET, "sell", 12 * 10**18, 4 * 10**18, 0)
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 6 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         assert resp.status_code == 200
         item = resp.get_json()["items"][0]
@@ -278,7 +319,7 @@ class TestBreakEvenAndRealized:
         _insert_event(101, 0, _COUNTRY, _WALLET, "sell", 2 * 10**18, 4 * 10**18, 0)
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 6 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         item = resp.get_json()["items"][0]
         assert item["balance"] == str(6 * 10**18)
@@ -298,7 +339,7 @@ class TestBreakEvenAndRealized:
         _insert_event(101, 0, _PLAYER, _WALLET, "sell", 4 * 10**18, 4 * 10**18, 0)
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_PLAYER: 2 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         item = resp.get_json()["items"][0]
         assert item["kind"] == "player"
@@ -326,7 +367,7 @@ class TestBreakEvenAndRealized:
         _insert_event(100, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 0)
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_PLAYER: 2 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         item = resp.get_json()["items"][0]
         assert item["kind"] == "player"
@@ -344,7 +385,7 @@ class TestSortOrder:
         _insert_event(101, 0, _PLAYER, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)  # value 10
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_wei({_COUNTRY: 10**18, _PLAYER: 5 * 10**18}):
             resp = client.get("/api/v1/portfolio")
         items = resp.get_json()["items"]
         assert [it["token"] for it in items] == [_PLAYER, _COUNTRY]

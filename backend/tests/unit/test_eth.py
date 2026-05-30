@@ -9,6 +9,7 @@ import pytest
 
 from shared.eth import (
     _encode_balance_of_calldata,
+    balances_of,
     chk,
     is_address,
     lc,
@@ -184,3 +185,37 @@ class TestWalletBalances:
             country_addresses=[],
         )
         assert bals.pitch_wei == 5
+
+
+class TestBalancesOf:
+    """Generic ``balanceOf`` multicall over an arbitrary token list (bug #11)."""
+
+    def test_empty_list_no_rpc(self) -> None:
+        w3 = _make_w3(eth_balance=0, multicall_returns=[])
+        assert balances_of(w3, _WALLET, []) == {}
+        w3.eth.contract.assert_not_called()
+
+    def test_maps_each_token_to_balance(self) -> None:
+        returns = [_wei_to_returndata(11), _wei_to_returndata(22)]
+        w3 = _make_w3(eth_balance=0, multicall_returns=returns)
+        out = balances_of(w3, _WALLET, [_BRA, _GER])
+        assert out == {_BRA: 11, _GER: 22}
+
+    def test_failed_call_is_zero(self) -> None:
+        returns = [_wei_to_returndata(7), b""]
+        w3 = _make_w3(eth_balance=0, multicall_returns=returns)
+        out = balances_of(w3, _WALLET, [_BRA, _GER])
+        assert out == {_BRA: 7, _GER: 0}
+
+    def test_duplicates_collapse(self) -> None:
+        # Duplicate target collapses to one call/entry (order preserved).
+        returns = [_wei_to_returndata(9)]
+        w3 = _make_w3(eth_balance=0, multicall_returns=returns)
+        out = balances_of(w3, _WALLET, [_BRA, _BRA])
+        assert out == {_BRA: 9}
+
+    def test_mixed_case_tokens_normalized(self) -> None:
+        returns = [_wei_to_returndata(3)]
+        w3 = _make_w3(eth_balance=0, multicall_returns=returns)
+        out = balances_of(w3, _WALLET, [_BRA.upper().replace("0X", "0x")])
+        assert out == {_BRA: 3}

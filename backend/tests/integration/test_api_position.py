@@ -11,6 +11,7 @@ import psycopg
 import pytest
 
 from app import create_app
+from app.routes import position as position_route
 from shared import access as access_mod
 from shared import jwt as jwt_mod
 
@@ -38,6 +39,14 @@ def _premium(*, has_access: bool):
             yield
         finally:
             access_mod.reset_cache()
+
+
+@contextmanager
+def _onchain_qty(qty: float | None):
+    """Stub the per-token on-chain ``balanceOf`` source (bug #11), in display units."""
+
+    with patch.object(position_route, "_onchain_qty", return_value=qty):
+        yield
 
 
 @pytest.fixture()
@@ -172,7 +181,8 @@ class TestEnvelope:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        # On-chain held qty matches event net (0.5) for this scenario.
+        with _premium(has_access=True), _onchain_qty(0.5):
             resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
         assert resp.status_code == 200
         body = resp.get_json()
@@ -192,3 +202,24 @@ class TestEnvelope:
         assert body["ownershipPct"] == pytest.approx(0.5)
         # firstTradeTs present (non-zero from to_timestamp seed)
         assert body["firstTradeTs"] is not None
+
+    def test_onchain_zero_balance_zeroes_position_and_value(self, app) -> None:
+        # Bug #11: bought 1 token per events, but on-chain balance is 0 (the
+        # tokens were consumed / transferred away). position + positionValue +
+        # unrealized must reflect 0, while realized (event-derived) is kept.
+        _insert_event(100, 0, _PLAYER, _WALLET, "buy", 10**18, 10**18, 0)
+        _insert_event(101, 0, _PLAYER, _WALLET, "sell", 6 * 10**17, 5 * 10**17, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty(0.0):
+            resp = client.get(f"/api/v1/tokens/{_PLAYER}/position")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["position"] == pytest.approx(0.0, abs=1e-9)
+        assert body["positionValue"] == pytest.approx(0.0, abs=1e-9)
+        assert body["unrealizedPnl"] == pytest.approx(0.0, abs=1e-9)
+        # Realized stays event-based even though on-chain balance is 0:
+        # received 0.6 - avg_buy 1.0 * sold 0.5 = 0.1 (base units), NOT zeroed
+        # along with the position.
+        assert body["realizedPnl"] == pytest.approx(0.1, abs=1e-4)

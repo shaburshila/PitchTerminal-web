@@ -21,6 +21,7 @@ from app.deps import require_premium
 from app.errors import abort_with_problem
 from shared.db import fetch_all, fetch_one
 from shared.pnl import wallet_position
+from shared.price import to_display_units
 from shared.types import Event
 
 bp = Blueprint("position", __name__)
@@ -103,6 +104,14 @@ def _holders_and_rank(token: str, wallet: str) -> tuple[int, int]:
     Same aggregation logic as ``tokens.py:_aggregate_wallets`` but trimmed to
     the two scalars we need; running the full per-trader summary just to count
     rows would be wasteful for premium hot-paths.
+
+    NOTE (bug #11): holders/rank stay **event-derived** (net buys minus sells),
+    unlike the position card's held ``qty`` which now uses on-chain ``balanceOf``.
+    A wallet that consumed its country tokens buying player tokens (no Sell on
+    the country hook) can therefore rank as a holder here while its on-chain
+    balance — and the card's ``position`` — is 0. Reconciling rank against chain
+    would need a per-wallet ``balanceOf`` (no multicall over all holders), so
+    this is an accepted divergence, not a bug.
     """
 
     rows = fetch_all(
@@ -125,6 +134,25 @@ def _holders_and_rank(token: str, wallet: str) -> tuple[int, int]:
     return holders, rank
 
 
+def _onchain_qty(token: str, wallet: str) -> float | None:
+    """On-chain ``balanceOf(wallet)`` for ``token`` in display units (bug #11).
+
+    The truth for CURRENT held quantity — the event net over-counts (player
+    buys burn the parent country with no Sell; transfers emit no events).
+    Returns ``None`` on RPC failure so the caller falls back to the event net
+    rather than zeroing the card on a transient blip.
+    """
+
+    try:
+        from shared.eth import balances_of as _balances_of
+        from shared.eth import get_w3 as _get_w3
+
+        wei = _balances_of(_get_w3(), wallet, [token]).get(token, 0)
+    except Exception:  # pragma: no cover - network path
+        return None
+    return to_display_units(wei)
+
+
 def _build_my_wallet(token: str, wallet: str) -> dict[str, Any]:
     """Compose the ``myWallet`` block (camelCase) for ``wallet`` on ``token``."""
 
@@ -143,12 +171,26 @@ def _build_my_wallet(token: str, wallet: str) -> dict[str, Any]:
         }
 
     holders, rank = _holders_and_rank(token, wallet)
-    position = pos["position"]
-    sold = max(pos["bought"] - position, 0.0)
+    event_position = pos["position"]
+    # CURRENT held quantity from on-chain balanceOf; fall back to event net on
+    # RPC failure. Cost-basis fields (avgBuy, breakEven, realized, sold) stay
+    # event-derived — only the held-quantity / value / unrealized layer changes.
+    onchain = _onchain_qty(token, wallet)
+    position = event_position if onchain is None else onchain
+    avg_buy = pos["avg_buy"]
+    # Sold is event-derived (cost-basis layer): bought - event net position.
+    sold = max(pos["bought"] - event_position, 0.0)
     position_value = position * current_price
+    # Unrealized re-derived against the on-chain held qty (cost basis applies
+    # only to the event-bought portion still held; on-chain excess has none).
+    cost_qty = min(position, event_position)
+    if current_price > 0 and position > 1e-9:
+        unrealized = position * current_price - avg_buy * cost_qty
+    else:
+        unrealized = 0.0
     spent = pos["spent"]
     avg_net = pos["avg_net"]
-    total_pnl = pos["total_pnl"]
+    total_pnl = pos["realized_pnl"] + unrealized
     first_ts = pos["first_trade_ts"]
     now = int(time.time())
 
@@ -172,7 +214,7 @@ def _build_my_wallet(token: str, wallet: str) -> dict[str, Any]:
         "breakEven": round(max(avg_net, 0.0), 6),
         "currentPrice": round(current_price, 6),
         "realizedPnl": round(pos["realized_pnl"], 4),
-        "unrealizedPnl": round(pos["unrealized_pnl"], 4),
+        "unrealizedPnl": round(unrealized, 4),
         "totalPnl": round(total_pnl, 4),
         "totalPnlPct": round(total_pnl_pct, 2),
         "breakEvenDistPct": round(break_even_dist_pct, 2),

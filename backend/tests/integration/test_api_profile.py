@@ -40,6 +40,20 @@ def _premium(*, has_access: bool):
             access_mod.reset_cache()
 
 
+@contextmanager
+def _onchain_qty(qty_by_token: dict[str, float]):
+    """Stub the on-chain ``balanceOf`` qty source (bug #11) without RPC.
+
+    CURRENT positions are now sourced from ``balanceOf`` (not event net), so
+    tests that assert event-derived positions must declare the on-chain held
+    quantity for each token. Tokens absent from ``qty_by_token`` resolve to 0
+    (fully exited / phantom) — that is the regression-proving path.
+    """
+
+    with patch.object(profile_route, "_fetch_onchain_qty", return_value=dict(qty_by_token)):
+        yield
+
+
 @pytest.fixture()
 def app():
     return create_app(test_overrides={"RATELIMIT_ENABLED": False})
@@ -167,6 +181,52 @@ class TestEmptyProfile:
         assert body["stats"]["totalTrades"] == 0
 
 
+class TestOnchainQtyOverridesPhantom:
+    """Bug #11: CURRENT positions come from on-chain balanceOf, not event net.
+
+    Buying a player token burns the parent country token without emitting a
+    country Sell, so the event-derived country position is phantom. The on-chain
+    balance is the truth: a country with net-positive buy events but 0 on-chain
+    balance must be reported closed, not as an open position.
+    """
+
+    def test_country_with_buys_but_zero_onchain_is_closed(self, app) -> None:
+        # Wallet bought 5 BRA (15 PITCH) per events, but on-chain holds 0 — the
+        # tokens were consumed buying a player (no country Sell event). Without
+        # the fix this shows a phantom 5-BRA / 15-PITCH open position.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # On-chain balance of BRA is 0 (not in the qty map).
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # No phantom open position; value must be 0.
+        assert body["summary"]["openPositions"] == 0
+        assert body["positions"] == []
+        assert body["summary"]["totalValuePitch"] == pytest.approx(0.0, abs=0.01)
+        assert body["summary"]["unrealizedPnlPitch"] == pytest.approx(0.0, abs=0.01)
+        # The token still appears as closed (it had buy activity).
+        assert {c["symbol"] for c in body["closed"]} == {"BRA"}
+
+    def test_partial_onchain_qty_caps_value_and_cost(self, app) -> None:
+        # Events say 10 BRA held; on-chain truth is only 3 (rest consumed
+        # buying players). value/unrealized must use 3, not 10.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 10 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 3.0}):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        pos = next(p for p in body["positions"] if p["symbol"] == "BRA")
+        assert pos["qty"] == pytest.approx(3.0, abs=1e-4)
+        # value = 3 * 3 PITCH (fixture price) = 9.
+        assert pos["valuePitch"] == pytest.approx(9.0, abs=0.01)
+
+
 class TestProfileAggregates:
     """Wallet has activity on both a player and a country token."""
 
@@ -178,7 +238,7 @@ class TestProfileAggregates:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_qty({_PLAYER: 1.0, _COUNTRY: 5.0}):
             resp = client.get("/api/v1/profile")
         assert resp.status_code == 200
         body = resp.get_json()
@@ -414,7 +474,8 @@ class TestValueSeriesHistorical:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        # Wallet currently holds 5 CTY + 4 PLR (matches event net here).
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0, _PLAYER: 4.0}):
             resp = client.get("/api/v1/profile")
         body = resp.get_json()
         series = body["valueSeries"]
@@ -512,7 +573,7 @@ class TestAddressParam:
 
         client = app.test_client()
         _set_session(client, _WALLET)  # viewer = _WALLET (premium)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
             resp = client.get(f"/api/v1/profile?address={self._OTHER}")
         assert resp.status_code == 200
         body = resp.get_json()
@@ -527,7 +588,7 @@ class TestAddressParam:
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        with _premium(has_access=True):
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
             resp = client.get("/api/v1/profile")
         assert resp.status_code == 200
         body = resp.get_json()

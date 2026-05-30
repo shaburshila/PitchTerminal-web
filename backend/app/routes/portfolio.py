@@ -120,16 +120,29 @@ def _to_float(wei_value: int | Decimal) -> float:
     return float(Decimal(int(wei_value)) / Decimal(WEI))
 
 
-def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict[str, Any]:
+def _build_item(
+    row: dict[str, Any],
+    country_prices_wei: dict[str, int],
+    onchain_wei: int,
+) -> dict[str, Any]:
     """Translate one aggregation row into the response shape.
 
     All wei-string fields are computed from NUMERIC(78,0) sums so they stay
     exact. Float fields are derived from the wei values for UI ergonomics.
+
+    ``onchain_wei`` is the wallet's *current* ``balanceOf`` for this token (bug
+    #11). It is the source of truth for the held quantity, value, and value-side
+    PnL — the event net position over-counts (buying a player burns the parent
+    country with no Sell event; wallet-to-wallet transfers emit no events). The
+    cost-basis layer (avgEntry, break-even, realized, sold) stays event-derived.
     """
 
     token = row["token_address"].strip()
     kind = row["kind"]
-    net_tokens_wei = int(row["net_tokens_wei"])
+    # Event net position drives the cost-basis layer (break-even / realized).
+    event_net_wei = int(row["net_tokens_wei"])
+    # Held quantity (balance / value / value-side PnL) comes from the chain.
+    net_tokens_wei = onchain_wei
     bought_wei = int(row["bought_wei"])
     spent_wei = int(row["spent_wei"])  # base-denominated (country for players, PITCH for countries)
     received_wei = int(row["received_wei"])
@@ -160,18 +173,23 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
         current_price_pitch_wei = price_pitch_wei
 
     # ─── Value + PnL (all in pitch-wei) ─────────────────────────────────────
-    # value = position * current_price (both 1e18-scaled → divide by WEI once).
+    # value = held position * current_price (both 1e18-scaled → divide by WEI).
+    # Held position is the on-chain balance (``net_tokens_wei``); cost basis
+    # applies only to the event-bought portion still held — any on-chain excess
+    # (transferred in, never bought) carries zero cost basis.
+    cost_qty_wei = min(net_tokens_wei, event_net_wei) if event_net_wei > 0 else 0
     value_pitch_wei = (net_tokens_wei * current_price_pitch_wei) // 10**18
-    cost_basis_pitch_wei = (net_tokens_wei * avg_entry_pitch_wei) // 10**18
+    cost_basis_pitch_wei = (cost_qty_wei * avg_entry_pitch_wei) // 10**18
     pnl_pitch_wei = value_pitch_wei - cost_basis_pitch_wei  # may be negative
 
     # ─── Break-even (net cost per held token, *base* currency, wei) ──────────
-    # (spent - received) / position — the per-token price at which selling the
-    # whole remaining position nets zero total PnL. Floored at 0 (a position
-    # that has already returned more than it cost has no positive break-even).
-    sold_wei = bought_wei - net_tokens_wei  # gross tokens sold
+    # (spent - received) / event-net-position — the per-token price at which
+    # selling the whole remaining (event-tracked) position nets zero total PnL.
+    # Floored at 0. Uses the EVENT net (cost-basis layer), not the on-chain
+    # balance, so break-even/realized stay consistent with the trade history.
+    sold_wei = bought_wei - event_net_wei  # gross tokens sold (event-derived)
     break_even_base_wei = (
-        max((spent_wei - received_wei) * 10**18 // net_tokens_wei, 0) if net_tokens_wei > 0 else 0
+        max((spent_wei - received_wei) * 10**18 // event_net_wei, 0) if event_net_wei > 0 else 0
     )
 
     # ─── Realized PnL (already-locked profit/loss, *base* currency, wei) ─────
@@ -225,6 +243,29 @@ def _build_item(row: dict[str, Any], country_prices_wei: dict[str, int]) -> dict
     }
 
 
+_DUST_WEI = 10**9  # ~1e-9 token; below this an on-chain balance is "empty".
+
+
+def _fetch_onchain_wei(wallet: str, token_addrs: list[str]) -> dict[str, int] | None:
+    """On-chain ``balanceOf(wallet)`` (wei) for ``token_addrs``, one multicall.
+
+    Source of truth for CURRENT held quantity (bug #11). Returns
+    ``{lowercase_address → wei}`` on success, or ``None`` on any RPC failure —
+    the caller then falls back to event-derived positions rather than hiding the
+    whole portfolio on a transient RPC blip.
+    """
+
+    if not token_addrs:
+        return {}
+    try:
+        from shared.eth import balances_of as _balances_of
+        from shared.eth import get_w3 as _get_w3
+
+        return _balances_of(_get_w3(), wallet, token_addrs)
+    except Exception:  # pragma: no cover - network path
+        return None
+
+
 @bp.get("/api/v1/portfolio")
 @require_premium
 def get_portfolio() -> Any:
@@ -232,6 +273,11 @@ def get_portfolio() -> Any:
 
     Order: by ``valuePitch`` descending (largest holdings first) — same UX as
     the profile.positions block; saves the frontend a sort.
+
+    CURRENT held quantity + value come from on-chain ``balanceOf`` (bug #11);
+    the event aggregation provides only the cost-basis layer. Positions whose
+    on-chain balance is dust are dropped (phantom country positions left behind
+    by player buys / transfers).
     """
 
     wallet = g.address  # lowercased by require_auth
@@ -245,7 +291,22 @@ def get_portfolio() -> Any:
     }
     country_prices_wei = _country_pitch_prices(country_addrs)
 
-    items = [_build_item(r, country_prices_wei) for r in rows]
+    # One multicall for every candidate token's on-chain balance.
+    tokens = [r["token_address"].strip() for r in rows]
+    onchain = _fetch_onchain_wei(wallet, tokens)
+
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        token = r["token_address"].strip()
+        if onchain is None:
+            # RPC unavailable → fall back to the event net position.
+            held_wei = int(r["net_tokens_wei"])
+        else:
+            held_wei = onchain.get(token, 0)
+            if held_wei <= _DUST_WEI:
+                # Phantom position (consumed by a player buy / transferred away).
+                continue
+        items.append(_build_item(r, country_prices_wei, held_wei))
     # Sort by value descending — wei ints, exact compare.
     items.sort(key=lambda it: -int(it["valuePitch"]))
     return jsonify({"items": items})

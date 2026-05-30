@@ -147,6 +147,34 @@ def _fetch_balances(wallet: str) -> dict[str, Any]:
     }
 
 
+def _fetch_onchain_qty(wallet: str, token_addrs: list[str]) -> dict[str, float] | None:
+    """On-chain ``balanceOf(wallet)`` for ``token_addrs``, in display units.
+
+    The authoritative source for a position's *current quantity* (bug #11):
+    buying a player token burns the parent country token but emits no Sell on
+    the country hook, and wallet-to-wallet transfers emit no events at all, so
+    the event-derived net position over-counts holdings. ``balanceOf`` is ground
+    truth.
+
+    One Multicall3 batch for every held token (no N round-trips). Returns
+    ``{lowercase_address → qty_display}`` on success, or ``None`` on any RPC
+    failure — callers then fall back to the event-derived position rather than
+    zeroing the whole portfolio on a transient RPC blip.
+    """
+
+    if not token_addrs:
+        return {}
+    try:
+        from shared.eth import balances_of as _balances_of
+
+        w3 = _get_w3()
+        wei_map = _balances_of(w3, wallet, token_addrs)
+    except Exception as exc:
+        log.warning("profile.onchain_qty_failed", wallet=wallet, error=repr(exc))
+        return None
+    return {addr: to_display_units(wei) for addr, wei in wei_map.items()}
+
+
 def _load_token_meta(token_addrs: set[str]) -> dict[str, dict[str, Any]]:
     """For each token in ``token_addrs`` build the metadata + pricing tuple.
 
@@ -411,6 +439,10 @@ def get_profile() -> Any:
 
     token_meta = _load_token_meta(set(agg.keys()))
 
+    # On-chain quantity is the source of truth for CURRENT positions (bug #11).
+    # ``None`` ⇒ RPC unavailable; fall back to event-derived position per token.
+    onchain_qty = _fetch_onchain_qty(wallet, sorted(agg.keys()))
+
     # Historical PITCH price lookup, shared by the fee layer + valueSeries.
     hist = _build_hist(token_meta)
 
@@ -468,15 +500,34 @@ def get_profile() -> Any:
         bought = float(a["bought"])
         spent = float(a["spent"])
         received = float(a["received"])
-        position = max(float(a["position"]), 0.0)
-        sold = max(bought - position, 0.0)
+        # Event-derived net position: still drives realized/sold (cost-basis
+        # layer, correct as-is).
+        event_position = max(float(a["position"]), 0.0)
+        sold = max(bought - event_position, 0.0)
         avg_buy = (spent / bought) if bought > 0 else 0.0
 
         realized = received - avg_buy * sold
+
+        # CURRENT quantity = on-chain balanceOf (bug #11). When the RPC read
+        # failed (``onchain_qty is None``) fall back to the event net position so
+        # a transient RPC blip doesn't wipe the portfolio. A token with no
+        # on-chain entry maps to 0 (exited / transferred away).
+        if onchain_qty is None:
+            position = event_position
+        else:
+            position = onchain_qty.get(token, 0.0)
+            if position <= 1e-9:
+                position = 0.0
+
+        # Cost basis applies only to the event-bought portion still held: if the
+        # wallet transferred tokens *in* (on-chain qty > event net), that excess
+        # has zero cost basis (we never paid for it via a tracked Buy).
+        cost_qty = min(position, event_position)
+
         # Unrealized is denominated in the token's *base* (country for players,
         # PITCH for countries). Multiply by ``rate`` to convert to PITCH.
         unreal_base = (
-            position * meta["price_pitch"] / rate - avg_buy * position if rate > 0 else 0.0
+            position * meta["price_pitch"] / rate - avg_buy * cost_qty if rate > 0 else 0.0
         )
         realized_pitch += realized * rate
         spent_pitch += spent * rate
@@ -489,7 +540,7 @@ def get_profile() -> Any:
             pv = position * meta["price_pitch"]
             value_pitch += pv
             unrealized_pitch += unreal_base * rate
-            cost = avg_buy * position
+            cost = avg_buy * cost_qty
             positions.append(
                 {
                     "token": token,

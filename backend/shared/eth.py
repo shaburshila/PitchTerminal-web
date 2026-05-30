@@ -186,6 +186,56 @@ def _encode_balance_of_calldata(holder: str) -> bytes:
     return _BALANCE_OF_SELECTOR + b"\x00" * 12 + raw
 
 
+def balances_of(
+    w3: Web3,
+    wallet: str,
+    token_addresses: list[str],
+) -> dict[str, int]:
+    """Read ERC20 ``balanceOf(wallet)`` for an arbitrary token list in ONE batch.
+
+    Unlike :func:`wallet_balances` (which has the fixed ETH/PITCH/country shape
+    of the profile ``balances`` block), this is a flat ``{address → wei}`` map
+    over *any* tokens — player + country alike — so callers that need the
+    on-chain quantity of held positions (profile/portfolio/position routes) can
+    source ``qty`` from the chain in a single Multicall3 round-trip instead of
+    summing trade events (which over-counts; see bug #11).
+
+    Args:
+        w3: Connected Web3 client.
+        wallet: 0x-prefixed wallet address (lowercase or mixed-case).
+        token_addresses: 0x token addresses (lowercase). Duplicates collapse to
+            a single result entry; order is irrelevant.
+
+    Returns:
+        ``{lowercase_address → balance_wei}`` for every queried token. A token
+        whose call reverted (``allow_failure=True``) maps to ``0``. Empty input
+        yields ``{}`` with no RPC call.
+
+    Raises:
+        Any web3 error propagated from ``aggregate3``. Route callers should wrap
+        with try/except to degrade gracefully (fail-soft), mirroring
+        :func:`wallet_balances`.
+    """
+
+    holder = lc(wallet)
+    # De-dup while preserving a stable order for de-multiplexing results.
+    seen: dict[str, None] = {}
+    for t in token_addresses:
+        seen.setdefault(lc(t), None)
+    targets = list(seen.keys())
+    if not targets:
+        return {}
+
+    calldata = _encode_balance_of_calldata(holder)
+    calls: list[tuple[str, bytes]] = [(t, calldata) for t in targets]
+    results = multicall3_aggregate(w3, calls, allow_failure=True)
+
+    out: dict[str, int] = {}
+    for addr, raw in zip(targets, results, strict=True):
+        out[addr] = int.from_bytes(raw[:32], "big") if len(raw) >= 32 else 0
+    return out
+
+
 @dataclass(frozen=True)
 class WalletBalances:
     """ETH + PITCH + per-country ERC20 balances for one wallet, in wei.
@@ -274,6 +324,7 @@ def wallet_balances(
 __all__ = [
     "MULTICALL3_ABI",
     "WalletBalances",
+    "balances_of",
     "chk",
     "get_w3",
     "is_address",
