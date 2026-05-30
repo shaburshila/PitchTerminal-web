@@ -74,9 +74,9 @@
   outline-offset: 2px;
 }
 
-/* Mobile sub-1024 viewports render the mobile-stub instead, so we don't
- * need a tablet/mobile variant. If header crowding becomes a problem in the
- * 1024-1280 range, hide the text and keep just the dot + button.
+/* Mobile sub-1024 viewports render the dedicated mobile layout, so we don't
+ * need a tablet/mobile variant here. If header crowding becomes a problem in
+ * the 1024-1280 range, hide the text and keep just the dot + button.
  */
 @media (max-width: 1280px) {
   .pt-version-check__text {

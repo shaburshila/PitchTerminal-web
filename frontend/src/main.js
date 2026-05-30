@@ -40,17 +40,13 @@ import './styles/modals-batch7.css';
 import './styles/trade-panel-batch5.css';
 // Onboarding welcome modal + header help button (`?`).
 import './styles/onboarding.css';
-// Mobile stub — full-screen takeover for sub-1024px viewports (MVP-time
-// fallback, see mobile-stub.js for rationale). Loaded eagerly because
-// bootstrap() decides whether to mount the stub vs the full app synchronously.
-import './styles/mobile-stub.css';
 // Version-check banner — shown in header center on backend↔bundle SHA
 // mismatch (see version-check.js for the trigger logic + threat model).
 import './styles/version-check.css';
 // Mobile layout overrides — must load LAST among style imports so its
 // `body.is-mobile` selectors win the cascade against component stylesheets.
 import './styles/mobile.css';
-import { isMobileViewport, mountMobileStub, needsDesktopStub } from './mobile-stub.js';
+import { isMobileViewport } from './mobile-stub.js';
 import { mountLayout } from './layout.js';
 import { mountResizable } from './resizable.js';
 import { mountSidebar } from './sidebar.js';
@@ -1018,14 +1014,11 @@ async function bootstrap() {
   if (isMobileViewport()) {
     return bootstrapMobile(root);
   }
-  // Desktop viewport WITHOUT an injected wallet provider — render the
-  // desktop-only stub. wagmi's `injected()` connector throws "Provider not
-  // found." on contexts without `window.ethereum`, which would otherwise
-  // surface as a red banner. See mobile-stub.js for the rationale.
-  if (needsDesktopStub()) {
-    mountMobileStub(root);
-    return;
-  }
+  // Desktop viewport — mount the full app. A missing injected wallet provider
+  // (`window.ethereum` absent) is fine: wallet init is lazy via AppKit (built
+  // on first wallet-chip mount, not eagerly), so the site loads and Connect
+  // opens the AppKit modal (WalletConnect works without an extension). The
+  // free surface (markets / charts / prices) needs no wallet at all.
   // F0.12a: parse `?ref=` and resolve it asynchronously. Fire-and-forget —
   // pay-flow reads `localStorage.referralWallet` lazily, and the user is
   // overwhelmingly unlikely to click "Pay" in the few hundred ms it takes

@@ -154,8 +154,8 @@ body.is-mobile .pt-header__action[data-test-id='header-help-btn'] {
 
 /* ─── Wallet Connect mobile modal ───────────────────────────────────────── */
 
-/* Backdrop pinned to viewport, dimmed. z-index 10000 sits above mobile-stub
- * (9999) — the picker can legitimately open over any other surface. */
+/* Backdrop pinned to viewport, dimmed. z-index 10000 sits above every other
+ * surface so the picker can legitimately open over anything. */
 .pt-modal-overlay--wc-mobile {
   position: fixed;
   inset: 0;
