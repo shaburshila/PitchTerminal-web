@@ -245,7 +245,6 @@ def _aggregate_per_token(events: list[Event]) -> dict[str, dict[str, float | int
     for ev in events:
         base_val = to_display_units(ev["base_value"])
         token_val = to_display_units(ev["token_value"])
-        fee_val = to_display_units(ev["fee"])
         token = ev["token_address"]
         a = agg.get(token)
         if a is None:
@@ -256,12 +255,10 @@ def _aggregate_per_token(events: list[Event]) -> dict[str, dict[str, float | int
                 "spent": 0.0,
                 "received": 0.0,
                 "bought": 0.0,
-                "fees": 0.0,
                 "first_ts": ev["timestamp"],
                 "last_ts": ev["timestamp"],
             }
             agg[token] = a
-        a["fees"] = float(a["fees"]) + fee_val
         # ``timestamp`` may be 0 for not-yet-resolved events; keep last_ts as
         # the latest non-zero we see, first_ts as the earliest non-zero.
         ts = ev["timestamp"]
@@ -327,8 +324,14 @@ def _resolve_target_wallet(raw: str | None) -> str:
         raise AssertionError("unreachable") from err
 
 
-def _build_trade_item(ev: Event, meta: dict[str, Any]) -> dict[str, Any]:
-    """Serialize a single wallet trade per spec §6.1 ``trades.items[*]``."""
+def _build_trade_item(ev: Event, meta: dict[str, Any], fee_pitch: float) -> dict[str, Any]:
+    """Serialize a single wallet trade per spec §6.1 ``trades.items[*]``.
+
+    ``fee_pitch`` is the PITCH-denominated commission for this trade, converted
+    at the trade's *historical* country→PITCH rate by the caller (see
+    ``_fee_pitch``). ``valuePitch`` still uses the current rate — that's the
+    volume layer, migrated to historical separately.
+    """
 
     base_val = to_display_units(ev["base_value"])
     token_val = to_display_units(ev["token_value"])
@@ -346,10 +349,51 @@ def _build_trade_item(ev: Event, meta: dict[str, Any]) -> dict[str, Any]:
         "marketPrice": round(market_price, 6),
         "amount": round(token_val, 4),
         "valuePitch": round(value_pitch, 2),
-        "feePitch": round(fee_val * rate, 4),
+        "feePitch": round(fee_pitch, 4),
         "timestamp": ev["timestamp"] if ev["timestamp"] > 0 else None,
         "tx": ev["tx_hash"],
     }
+
+
+def _build_hist(token_meta: dict[str, dict[str, Any]]) -> HistoricalPrices:
+    """Build the historical-price index for a set of tokens.
+
+    Preloads every timeline needed for historical conversion in ONE query (held
+    tokens + the country tokens player positions are priced against), resolving
+    in memory — avoids the naive per-call ``price_at_pitch`` O(N*M) round-trips
+    on the hot ``events`` table (events audit P1). Shared by ``/profile`` (fees
+    + valueSeries) and ``/portfolio/trades`` (per-trade fee).
+    """
+
+    timeline_tokens: set[str] = set(token_meta.keys())
+    fallback_pitch: dict[str, float] = {}
+    for tok, m in token_meta.items():
+        fallback_pitch[tok] = float(m["price_pitch"])
+        if m["kind"] == "player" and m.get("country_address"):
+            timeline_tokens.add(m["country_address"])
+            fallback_pitch[m["country_address"]] = float(m["country_price_pitch"])
+    return HistoricalPrices(load_price_timelines(timeline_tokens), fallback_pitch)
+
+
+def _fee_pitch(ev: Event, meta: dict[str, Any], hist: HistoricalPrices) -> float:
+    """Commission of one trade in PITCH, at the trade's *historical* rate.
+
+    Country tokens: ``fee`` is already PITCH (rate is identically 1). Player
+    tokens: the fee was paid in country tokens, so convert at the country→PITCH
+    price as of the trade timestamp. Falls back to the current rate only when
+    the event has no usable timestamp.
+    """
+
+    fee_d = to_display_units(ev["fee"])
+    if fee_d == 0.0:
+        return 0.0
+    if meta.get("kind") == "country":
+        return fee_d
+    country_addr = meta.get("country_address")
+    ts = int(ev["timestamp"])
+    if not country_addr or ts <= 0:
+        return fee_d * float(meta.get("country_price_pitch", 0.0))
+    return fee_d * hist.price_at_pitch(country_addr, "country", None, ts)
 
 
 @bp.get("/api/v1/profile")
@@ -367,13 +411,45 @@ def get_profile() -> Any:
 
     token_meta = _load_token_meta(set(agg.keys()))
 
+    # Historical PITCH price lookup, shared by the fee layer + valueSeries.
+    hist = _build_hist(token_meta)
+
+    # Memo: (token, ts) → price_pitch. Many trades share a ts (one tx, many
+    # tokens) and consecutive ticks often resolve to the same prior event.
+    price_memo: dict[tuple[str, int], float] = {}
+
+    def _memo_price(tok: str, ts: int) -> float:
+        key = (tok, ts)
+        cached = price_memo.get(key)
+        if cached is not None:
+            return cached
+        meta_ = token_meta.get(tok)
+        if not meta_:
+            price_memo[key] = 0.0
+            return 0.0
+        p = hist.price_at_pitch(tok, meta_["kind"], meta_.get("country_address"), ts)
+        price_memo[key] = p
+        return p
+
+    # Per-trade commission in PITCH, converted at each trade's historical
+    # country→PITCH rate (country-token fees are already PITCH). Computed once
+    # per event and keyed by (block, log_index) so the trades-page slice reuses
+    # it instead of re-converting. This is the fee layer of the profile migrated
+    # off the current-rate approximation.
+    fee_pitch_by_ev: dict[tuple[int, int], float] = {
+        (int(ev["block_number"]), int(ev["log_index"])): _fee_pitch(
+            ev, token_meta.get(ev["token_address"], {}), hist
+        )
+        for ev in events
+    }
+    fees_pitch = sum(fee_pitch_by_ev.values())
+
     positions: list[dict[str, Any]] = []
     closed: list[dict[str, Any]] = []
     realized_pitch = 0.0
     unrealized_pitch = 0.0
     value_pitch = 0.0
     spent_pitch = 0.0
-    fees_pitch = 0.0
     closed_count = 0
     closed_wins = 0
     pnl_by_symbol: dict[str, float] = {}
@@ -403,7 +479,6 @@ def get_profile() -> Any:
             position * meta["price_pitch"] / rate - avg_buy * position if rate > 0 else 0.0
         )
         realized_pitch += realized * rate
-        fees_pitch += float(a["fees"]) * rate
         spent_pitch += spent * rate
         pnl_by_symbol[meta["symbol"]] = pnl_by_symbol.get(meta["symbol"], 0.0) + (
             (realized + unreal_base) * rate
@@ -482,7 +557,14 @@ def get_profile() -> Any:
         last = page[-1]
         next_cursor = encode_cursor({"b": int(last["block_number"]), "l": int(last["log_index"])})
 
-    trade_items = [_build_trade_item(ev, token_meta.get(ev["token_address"], {})) for ev in page]
+    trade_items = [
+        _build_trade_item(
+            ev,
+            token_meta.get(ev["token_address"], {}),
+            fee_pitch_by_ev[(int(ev["block_number"]), int(ev["log_index"]))],
+        )
+        for ev in page
+    ]
 
     # ─── Stats ─────────────────────────────────────────────────────────────
     buys = sum(int(a["buys"]) for a in agg.values())
@@ -510,42 +592,6 @@ def get_profile() -> Any:
     # portable binary-search semantics in ``server.py:1507``.
     holdings: dict[str, float] = {}
     series_map: dict[int, float] = {}
-
-    # Preload every timeline needed for the historical lookup in ONE query
-    # (held tokens + the country tokens player positions are priced against),
-    # then resolve in memory. The naive per-call ``price_at_pitch`` issued up
-    # to 4 SQL round-trips for *each* (held-token, trade-ts) pair — O(N*M) on
-    # the hot ``events`` table (events audit P1). The ``current_pitch_fallback``
-    # map mirrors ``shared.price._current_price_pitch_fallback`` using the same
-    # ``market_state.price_pitch`` values already loaded into ``token_meta``.
-    timeline_tokens: set[str] = set(token_meta.keys())
-    fallback_pitch: dict[str, float] = {}
-    for tok, meta_ in token_meta.items():
-        fallback_pitch[tok] = float(meta_["price_pitch"])
-        if meta_["kind"] == "player" and meta_.get("country_address"):
-            country_addr = meta_["country_address"]
-            timeline_tokens.add(country_addr)
-            fallback_pitch[country_addr] = float(meta_["country_price_pitch"])
-    hist = HistoricalPrices(load_price_timelines(timeline_tokens), fallback_pitch)
-
-    # Memo: (token, ts) → price_pitch. Many trades share the same ts when a
-    # wallet buys multiple tokens in one tx, and consecutive ticks often
-    # resolve to the same prior event. The lookup is now in-memory, but the
-    # memo still saves redundant bisects across the O(events²) holdings walk.
-    price_memo: dict[tuple[str, int], float] = {}
-
-    def _memo_price(tok: str, ts: int) -> float:
-        key = (tok, ts)
-        cached = price_memo.get(key)
-        if cached is not None:
-            return cached
-        meta_ = token_meta.get(tok)
-        if not meta_:
-            price_memo[key] = 0.0
-            return 0.0
-        p = hist.price_at_pitch(tok, meta_["kind"], meta_.get("country_address"), ts)
-        price_memo[key] = p
-        return p
 
     for ev in events:  # block-sorted ASC
         tv = to_display_units(ev["token_value"])

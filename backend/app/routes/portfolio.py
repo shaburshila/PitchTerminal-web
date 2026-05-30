@@ -29,7 +29,7 @@ from flask import Blueprint, g, jsonify, request
 from app.deps import require_premium
 from app.errors import abort_with_problem
 from app.pagination import decode_cursor, encode_cursor
-from app.routes.profile import _build_trade_item, _load_token_meta
+from app.routes.profile import _build_hist, _build_trade_item, _fee_pitch, _load_token_meta
 from shared.config import WEI
 from shared.db import fetch_all, fetch_one
 from shared.types import Event
@@ -413,8 +413,11 @@ def get_portfolio_trades() -> Any:
     cursor = _decode_trades_cursor(request.args.get("cursor"))
 
     events, next_cursor = _load_wallet_token_trades(wallet, token, cursor, limit)
-    meta = _load_token_meta({token}).get(token, {})
-    items = [_build_trade_item(ev, meta) for ev in events]
+    token_meta = _load_token_meta({token})
+    meta = token_meta.get(token, {})
+    # Historical country→PITCH conversion for per-trade fee (matches /profile).
+    hist = _build_hist(token_meta)
+    items = [_build_trade_item(ev, meta, _fee_pitch(ev, meta, hist)) for ev in events]
 
     return jsonify({"items": items, "nextCursor": next_cursor, "limit": limit})
 

@@ -462,6 +462,45 @@ class TestValueSeriesHistorical:
         assert by_time[ts_player] == pytest.approx(16.0, abs=0.01)
 
 
+class TestFeesHistorical:
+    """feesPaidPitch / feePitch convert at each trade's HISTORICAL rate."""
+
+    def test_player_fee_uses_historical_country_rate(self, app) -> None:
+        # Country price history (from country trades): block 100 → 2 PITCH
+        # (base 10 / token 5), block 200 → 4 PITCH (base 20 / token 5).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(200, 0, _COUNTRY, _WALLET, "sell", 20 * 10**18, 5 * 10**18, 0)
+        # Player buy at block 300: nearest country price (ts <= trade) is block
+        # 200 = 4. Fee = 0.5 country tokens → historical PITCH = 0.5 * 4 = 2.0.
+        # Current market_state country price is 3 (seed) → current-rate (the old
+        # bug) would give 0.5 * 3 = 1.5.
+        _insert_event(300, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 5 * 10**17)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["summary"]["feesPaidPitch"] == pytest.approx(2.0, abs=0.01)
+        assert body["stats"]["feesPaidPitch"] == pytest.approx(2.0, abs=0.01)
+        # The player trade's per-trade feePitch uses the same historical rate.
+        player_trade = next(t for t in body["trades"]["items"] if t["kind"] == "player")
+        assert player_trade["feePitch"] == pytest.approx(2.0, abs=0.01)
+
+    def test_country_fee_is_pitch_denominated(self, app) -> None:
+        # Country-token fee is already PITCH (rate is identically 1).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 5 * 10**17)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        # fee 0.5 PITCH → feesPaidPitch 0.5 (no rate multiply).
+        assert body["summary"]["feesPaidPitch"] == pytest.approx(0.5, abs=0.01)
+
+
 class TestAddressParam:
     """``?address=`` lets a premium viewer inspect any wallet's portfolio."""
 
