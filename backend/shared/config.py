@@ -34,15 +34,16 @@ USDC_ADDR: Final[str] = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 ERC20_TRANSFER_TOPIC: Final[str] = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 )
-# Default start block for the external-PITCH scanner cursor. PITCH and its
-# Uniswap pools predate HOOK_DEPLOY_BLOCK; using the hook deploy block keeps
-# the cold-start backfill bounded while still covering the period the app
-# cares about (in-app trading started at HOOK_DEPLOY_BLOCK). Override with
-# DEX_SCAN_FROM_BLOCK env to go further back. NOTE: a full backfill from a
-# very early block is expensive (the scanner reads a receipt per PITCH-touching
-# tx, and the worker caps each tick at _MAX_BLOCKS_PER_TICK so the backfill
-# catches up gradually) — lower this only with intent.
-DEX_SCAN_FROM_BLOCK_DEFAULT: Final[int] = 46_167_000
+# Default start block for the external-PITCH scanner cursor = the PITCH token's
+# deployment block (verified on-chain via eth_getCode binary search). PITCH and
+# its Uniswap pools PREDATE the in-app hook deploy block, so external DEX trading
+# (and the very first known external buy, at block 46157923 — the block the V3
+# PITCH/WETH pool was created) happens BEFORE HOOK_DEPLOY_BLOCK. Starting at the
+# token deploy block guarantees no external trade is missed, for any wallet.
+# Override with DEX_SCAN_FROM_BLOCK env. NOTE: a full backfill is expensive (the
+# scanner reads a receipt per PITCH-touching tx); the worker caps each tick at
+# _MAX_BLOCKS_PER_TICK so it catches up gradually — lower this only with intent.
+DEX_SCAN_FROM_BLOCK_DEFAULT: Final[int] = 46_126_828
 
 # Load .env once at module import (idempotent; production injects env directly).
 load_dotenv()
