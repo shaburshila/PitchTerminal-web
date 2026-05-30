@@ -25,6 +25,8 @@
 import * as defaultApi from './api.js';
 
 const TIMEFRAMES = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d']);
+// Max pixel distance from a trade marker for the hover/tap trade card to show.
+const TRADE_HOVER_PX = 14;
 const DEFAULT_TF = '1h';
 const TYPES = Object.freeze(['candles', 'line']);
 // Order is the on-screen toggle order: Country first, PITCH second.
@@ -178,6 +180,12 @@ function readCandleColors() {
     up: readToken('--up', '#3ddb8e'),
     down: readToken('--down', '#ff5a5f'),
     accent: readToken('--accent', '#3ddb8e'),
+    // Neutral line colour — kept distinct from --up so the line doesn't blend
+    // with the green buy markers (see tokens.css --chart-line).
+    line: readToken('--chart-line', '#9caea6'),
+    // Muted buy/sell for OTHERS' circle markers.
+    upSoft: readToken('--up-soft', 'rgba(61, 219, 142, 0.5)'),
+    downSoft: readToken('--down-soft', 'rgba(255, 90, 95, 0.5)'),
   };
 }
 
@@ -211,16 +219,36 @@ function isPlayerToken(token) {
   return typeof token.countryAddress === 'string' && token.countryAddress.length > 0;
 }
 
-/** Map a chart trade-point or events-channel trade to a series marker. */
-function pointToMarker(point, colors) {
+/**
+ * Map a chart trade-point or events-channel trade to a series marker.
+ *
+ * `mine` splits the visual treatment so own trades stand out from the rest:
+ *   - own → bold bright arrow (--up/--down), size 2, offset below/above the
+ *     point so the arrow points AT it from outside — direction by shape.
+ *   - others → small muted circle (--up-soft/--down-soft) sitting ON the line
+ *     (inBar) at the trade price, so it isn't floated above/below the graph.
+ *     Direction by colour (green=buy / red=sell).
+ */
+function pointToMarker(point, colors, mine = false) {
   if (!point || point.type === 'spot') return null;
   if (point.type !== 'buy' && point.type !== 'sell') return null;
   const c = colors ?? readCandleColors();
+  const isBuy = point.type === 'buy';
+  if (mine) {
+    return {
+      time: point.time,
+      position: isBuy ? 'belowBar' : 'aboveBar',
+      color: isBuy ? c.up : c.down,
+      shape: isBuy ? 'arrowUp' : 'arrowDown',
+      size: 2,
+    };
+  }
   return {
     time: point.time,
-    position: point.type === 'buy' ? 'belowBar' : 'aboveBar',
-    color: point.type === 'buy' ? c.up : c.down,
-    shape: point.type === 'buy' ? 'arrowUp' : 'arrowDown',
+    position: 'inBar',
+    color: isBuy ? c.upSoft : c.downSoft,
+    shape: 'circle',
+    size: 1,
   };
 }
 
@@ -508,6 +536,49 @@ export function mountChart(container, options = {}) {
   ohlcCard.appendChild(ohlcTime);
   canvasHost.appendChild(ohlcCard);
 
+  // ── Trade card (hover/tap a trade marker) ───────────────────────────────
+  // Shown when the cursor (or a tap) lands on a buy/sell marker. Mirrors the
+  // OHLC card's pinned floating-card style. Fields are all derived from the
+  // point so they stay consistent with the chart: Price is the same value
+  // that positions the marker on the axis, and Total = Price × Size (so the
+  // card never contradicts where the dot sits — see the "match the graph"
+  // decision). Only one of {OHLC, trade} card is visible at a time.
+  const tradeCard = el('div', {
+    className: 'pt-chart__trade-card',
+    dataset: { testId: 'chart-trade-card' },
+    attrs: { 'aria-hidden': 'true', hidden: '' },
+  });
+  const tradeType = el('span', {
+    className: 'pt-chart__trade-type',
+    dataset: { testId: 'chart-trade-type' },
+    text: '',
+  });
+  function tradeCell(label, key) {
+    const cell = el('span', { className: 'pt-chart__ohlc-cell' });
+    cell.appendChild(el('span', { className: 'pt-chart__ohlc-label', text: label }));
+    const v = el('span', {
+      className: 'pt-chart__ohlc-value',
+      dataset: { testId: `chart-trade-${key}` },
+      text: '—',
+    });
+    cell.appendChild(v);
+    return { cell, value: v };
+  }
+  const tradePrice = tradeCell('Price', 'price');
+  const tradeTotal = tradeCell('Total', 'total');
+  const tradeSize = tradeCell('Size', 'size');
+  const tradeTime = el('span', {
+    className: 'pt-chart__ohlc-time',
+    dataset: { testId: 'chart-trade-time' },
+    text: '',
+  });
+  tradeCard.appendChild(tradeType);
+  tradeCard.appendChild(tradePrice.cell);
+  tradeCard.appendChild(tradeTotal.cell);
+  tradeCard.appendChild(tradeSize.cell);
+  tradeCard.appendChild(tradeTime);
+  canvasHost.appendChild(tradeCard);
+
   // Status line (empty/loading/error). Sibling, hidden by default.
   const status = el('div', {
     className: 'pt-chart__status',
@@ -580,7 +651,7 @@ export function mountChart(container, options = {}) {
     }
     chartInstance = null;
     series = null;
-    hideOhlcCard();
+    hideCards();
   }
 
   function createSeries() {
@@ -600,7 +671,7 @@ export function mountChart(container, options = {}) {
       });
     }
     if (typeof chartInstance.addLineSeries === 'function') {
-      return chartInstance.addLineSeries({ color: c.accent, lineWidth: 2 });
+      return chartInstance.addLineSeries({ color: c.line, lineWidth: 2 });
     }
     return null;
   }
@@ -625,7 +696,7 @@ export function mountChart(container, options = {}) {
         if (!mine && !state.show.others) return false;
         return true;
       })
-      .map((p) => pointToMarker(p, colors))
+      .map((p) => pointToMarker(p, colors, isOwnTrade(p.trader, state.ownAddress)))
       .filter(Boolean)
       .sort((a, b) => a.time - b.time);
   }
@@ -717,13 +788,105 @@ export function mountChart(container, options = {}) {
     ohlcCard.hidden = false;
   }
 
+  function hideTradeCard() {
+    if (!tradeCard.hidden) tradeCard.hidden = true;
+  }
+
+  // Hide both floating cards — used on series rebuild, token switch and
+  // pan/zoom so neither card lingers with stale data.
+  function hideCards() {
+    hideOhlcCard();
+    hideTradeCard();
+  }
+
   /**
-   * lightweight-charts crosshair handler. `param.time` is the bucket
-   * timestamp of the hovered candle (matches state.candles[i].time);
-   * `param.point` is the pixel coordinate or null when the cursor is
-   * outside the chart area. We hide the card if either is missing.
+   * Populate + show the trade card for a buy/sell point. All numbers derive
+   * from the point so the card matches the marker on the axis: Price is the
+   * value that positions the dot, Total = Price × Size. Hides the OHLC card —
+   * the two share the pinned slot and only one shows at a time.
+   */
+  function showTradeCardForPoint(p) {
+    if (!p || (p.type !== 'buy' && p.type !== 'sell')) {
+      hideTradeCard();
+      return;
+    }
+    const isBuy = p.type === 'buy';
+    tradeType.textContent = isBuy ? 'BUY' : 'SELL';
+    tradeType.classList.toggle('is-up', isBuy);
+    tradeType.classList.toggle('is-down', !isBuy);
+    const price = Number(p.price);
+    const size = Number(p.volume);
+    tradePrice.value.textContent = formatPrice(price);
+    tradeSize.value.textContent = formatCompact(size);
+    const total = Number.isFinite(price) && Number.isFinite(size) ? price * size : NaN;
+    tradeTotal.value.textContent = formatPrice(total);
+    // points carry a sub-second offset (log_index); floor to a whole second
+    // for the UTC label.
+    tradeTime.textContent = formatCrosshairTime(Math.floor(Number(p.time)));
+    hideOhlcCard();
+    tradeCard.hidden = false;
+  }
+
+  /**
+   * Find the buy/sell point closest to a crosshair/tap position, within
+   * TRADE_HOVER_PX. Uses the time axis (timeToCoordinate) for X and, when
+   * available, the series price axis (priceToCoordinate) for Y so stacked
+   * trades at the same time are disambiguated. Returns null when nothing is
+   * close enough, or when the lib lacks coordinate mapping (e.g. test stub) —
+   * the caller then falls back to the OHLC card.
+   */
+  function findTradeNearPoint(param) {
+    if (!param || !param.point || !chartInstance) return null;
+    const ts = typeof chartInstance.timeScale === 'function' ? chartInstance.timeScale() : null;
+    if (!ts || typeof ts.timeToCoordinate !== 'function') return null;
+    const px = param.point.x;
+    const py = param.point.y;
+    if (typeof px !== 'number') return null;
+    const canMapY =
+      typeof py === 'number' && series && typeof series.priceToCoordinate === 'function';
+    let best = null;
+    let bestDist = Infinity;
+    for (const p of state.points) {
+      if (!p || (p.type !== 'buy' && p.type !== 'sell')) continue;
+      let x;
+      try {
+        x = ts.timeToCoordinate(p.time);
+      } catch {
+        continue;
+      }
+      if (typeof x !== 'number') continue;
+      const dx = x - px;
+      let dist = Math.abs(dx);
+      if (canMapY) {
+        let y;
+        try {
+          y = series.priceToCoordinate(Number(p.price));
+        } catch {
+          y = null;
+        }
+        if (typeof y === 'number') dist = Math.hypot(dx, y - py);
+      }
+      if (dist < bestDist) {
+        best = p;
+        bestDist = dist;
+      }
+    }
+    return bestDist <= TRADE_HOVER_PX ? best : null;
+  }
+
+  /**
+   * lightweight-charts crosshair handler. Prefers a trade marker under the
+   * cursor (trade card, any chart type); otherwise falls back to the OHLC
+   * candle card. `param.time` is the bucket timestamp; `param.point` is the
+   * pixel coordinate or null when the cursor is outside the chart area.
    */
   function onCrosshairMove(param) {
+    const trade = findTradeNearPoint(param);
+    if (trade) {
+      showTradeCardForPoint(trade);
+      return;
+    }
+    hideTradeCard();
     if (!param || !param.time || !param.point) {
       hideOhlcCard();
       return;
@@ -959,13 +1122,13 @@ export function mountChart(container, options = {}) {
       try {
         const ts = chartInstance.timeScale();
         if (ts && typeof ts.subscribeVisibleTimeRangeChange === 'function') {
-          const ret = ts.subscribeVisibleTimeRangeChange(hideOhlcCard);
+          const ret = ts.subscribeVisibleTimeRangeChange(hideCards);
           if (typeof ret === 'function') {
             visibleRangeUnsub = ret;
           } else if (typeof ts.unsubscribeVisibleTimeRangeChange === 'function') {
             visibleRangeUnsub = () => {
               try {
-                ts.unsubscribeVisibleTimeRangeChange(hideOhlcCard);
+                ts.unsubscribeVisibleTimeRangeChange(hideCards);
               } catch {
                 /* ignore */
               }
@@ -1009,6 +1172,10 @@ export function mountChart(container, options = {}) {
    */
   async function rebuildSeries(seq) {
     rebuilding = true;
+    // The series is about to be replaced — drop any open floating card so it
+    // can't linger with data from the old series (type/unit toggle reach here
+    // directly, without setToken's hideCards()).
+    hideCards();
     try {
       await ensureChartInstance();
       if (typeof seq === 'number' && seq !== state.reqSeq) return;
@@ -1224,19 +1391,25 @@ export function mountChart(container, options = {}) {
   // pan/zoom via the visibleTimeRangeChange subscription.
   function onCanvasTap(e) {
     if (!chartInstance || !state.candles.length) return;
-    // Toggle off when already visible — saves a second tap to dismiss when
-    // the user just wants to clear the card.
-    if (!ohlcCard.hidden) {
-      hideOhlcCard();
+    // Toggle off when either card is visible — saves a second tap to dismiss.
+    if (!ohlcCard.hidden || !tradeCard.hidden) {
+      hideCards();
+      return;
+    }
+    // happy-dom doesn't compute layout, so getBoundingClientRect returns
+    // zeros under test — fall back to clientX/Y directly. Real browsers
+    // report a non-zero rect.
+    const rect = canvasHost.getBoundingClientRect();
+    const x = (e?.clientX ?? 0) - (rect?.left ?? 0);
+    const y = (e?.clientY ?? 0) - (rect?.top ?? 0);
+    // Tapped a trade marker? Show the trade card (mirrors hover behaviour).
+    const trade = findTradeNearPoint({ point: { x, y } });
+    if (trade) {
+      showTradeCardForPoint(trade);
       return;
     }
     const ts = typeof chartInstance.timeScale === 'function' ? chartInstance.timeScale() : null;
     if (!ts || typeof ts.coordinateToTime !== 'function') return;
-    // happy-dom doesn't compute layout, so getBoundingClientRect returns
-    // zeros under test — fall back to clientX directly. Real browsers report
-    // a non-zero rect.
-    const rect = canvasHost.getBoundingClientRect();
-    const x = (e?.clientX ?? 0) - (rect?.left ?? 0);
     let time;
     try {
       time = ts.coordinateToTime(x);
@@ -1291,9 +1464,9 @@ export function mountChart(container, options = {}) {
       state.unit = 'country';
     }
     applyUnitVisibility();
-    // Previous candles are about to be replaced — drop stale OHLC text so
-    // the floating card doesn't flash old data before the next hover.
-    hideOhlcCard();
+    // Previous candles are about to be replaced — drop stale card text so
+    // neither floating card flashes old data before the next hover.
+    hideCards();
     // Mobile CTA visibility tracks whether a token is set.
     if (mobileCta) mobileCta.hidden = !state.token;
     renderStats();

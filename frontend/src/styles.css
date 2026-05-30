@@ -1152,7 +1152,8 @@ body.mode-dashboard .pt-profile {
    the cursor. Tokens (tokens.css) own the colour values — we never
    hardcode hex here. */
 
-.pt-chart__ohlc {
+.pt-chart__ohlc,
+.pt-chart__trade-card {
   position: absolute;
   top: 10px;
   left: 12px;
@@ -1175,8 +1176,24 @@ body.mode-dashboard .pt-profile {
   box-shadow: var(--shadow-popover, 0 4px 12px rgba(0, 0, 0, 0.3));
 }
 
-.pt-chart__ohlc[hidden] {
+.pt-chart__ohlc[hidden],
+.pt-chart__trade-card[hidden] {
   display: none;
+}
+
+/* Trade card BUY/SELL badge — colour-codes direction (mirrors marker colour). */
+.pt-chart__trade-type {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pt-chart__trade-type.is-up {
+  color: var(--up, var(--success));
+}
+
+.pt-chart__trade-type.is-down {
+  color: var(--down, var(--danger));
 }
 
 .pt-chart__ohlc-cell {

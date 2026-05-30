@@ -263,8 +263,12 @@ describe('mountChart', () => {
     ]);
     // Markers: only buy + sell points, "spot" is filtered out.
     expect(series.markers.length).toBe(2);
-    expect(series.markers[0].position).toBe('belowBar'); // buy
-    expect(series.markers[1].position).toBe('aboveBar'); // sell
+    // Anon viewer → others' markers: circles sitting ON the line (inBar);
+    // direction reads from colour, not vertical offset.
+    expect(series.markers[0].shape).toBe('circle');
+    expect(series.markers[1].shape).toBe('circle');
+    expect(series.markers[0].position).toBe('inBar');
+    expect(series.markers[1].position).toBe('inBar');
   });
 
   it('default chart type is line (aria-pressed=true on line button)', () => {
@@ -413,7 +417,9 @@ describe('mountChart', () => {
     expect(blob).not.toMatch(/#ff5c5c/i);
   });
 
-  it('default line series uses --accent from tokens.css (B1)', async () => {
+  it('default line series uses neutral --chart-line (NOT --accent/--up)', async () => {
+    // The line is deliberately a muted grey-green (--chart-line) so it doesn't
+    // blend with the green buy markers (which share --up = --accent = #3ddb8e).
     const { lib, created } = makeChartLib();
     const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
     chart.setToken(makePlayer());
@@ -421,7 +427,8 @@ describe('mountChart', () => {
     const chartInst = created.charts[0];
     const lineOpts = chartInst.addLineSeries.mock.calls.at(-1)?.[0];
     expect(lineOpts).toBeDefined();
-    expect(lineOpts.color).toBe('#3ddb8e');
+    expect(lineOpts.color).toBe('#9caea6');
+    expect(lineOpts.color).not.toBe('#3ddb8e');
   });
 
   it('trade markers use --up / --down from tokens.css (B1)', async () => {
@@ -446,6 +453,48 @@ describe('mountChart', () => {
     const sellMarker = series.markers.find((m) => m.shape === 'arrowDown');
     expect(buyMarker.color).toBe('#3ddb8e');
     expect(sellMarker.color).toBe('#ff5a5f');
+  });
+
+  it('own trades render as bold arrows, others as small muted circles', async () => {
+    const { lib, created } = makeChartLib();
+    const payload = makeChartPayload({
+      points: [
+        { time: 1709000100, price: 10.7, volume: 5, type: 'buy', trader: '0xMe' },
+        { time: 1709000200, price: 11.2, volume: 3, type: 'sell', trader: '0xOther' },
+      ],
+    });
+    const chart = mountChart(container, { apiClient: makeApi(payload), chartLibFactory: () => lib });
+    chart.setOwnAddress('0xme');
+    container.querySelector('[data-test-id="chart-overlay-others"]').click(); // show others too
+    chart.setToken(makePlayer());
+    await flush();
+    const series = created.charts[0].seriesList[0];
+
+    // Mine: bold bright arrow, size 2, solid --up.
+    const mine = series.markers.find((m) => m.shape === 'arrowUp');
+    expect(mine).toBeDefined();
+    expect(mine.size).toBe(2);
+    expect(mine.color).toBe('#3ddb8e');
+    expect(mine.position).toBe('belowBar');
+
+    // Others: small muted circle, size 1, --down-soft (sell).
+    const other = series.markers.find((m) => m.shape === 'circle');
+    expect(other).toBeDefined();
+    expect(other.size).toBe(1);
+    expect(other.color).toBe('rgba(255, 90, 95, 0.5)');
+    expect(other.position).toBe('inBar'); // others sit on the line
+  });
+
+  it('with no wallet connected every trade renders as an others-circle', async () => {
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    // No setOwnAddress → anon: nothing is "mine", so all markers are circles.
+    chart.setToken(makePlayer());
+    await flush();
+    const series = created.charts[0].seriesList[0];
+    // Default payload: buy + sell (spot filtered out).
+    expect(series.markers.length).toBe(2);
+    expect(series.markers.every((m) => m.shape === 'circle')).toBe(true);
   });
 
   it('unit toggle is hidden for country tokens, visible for players', () => {
@@ -758,7 +807,7 @@ describe('mountChart', () => {
 
     chart.applyTrade({ token: '0xaaa1', type: 'buy', time: 1709000500, price: 12.0 });
     expect(series.markers.length).toBe(3);
-    expect(series.markers[2].position).toBe('belowBar');
+    expect(series.markers[2].position).toBe('inBar'); // anon → others-circle on the line
   });
 
   it('applyTrade updates markers only — never the line series itself (invariant)', async () => {
@@ -796,7 +845,7 @@ describe('mountChart', () => {
 
     chart.applyTrade({ token: '0xaaa1', type: 'sell', timestamp: 1709000600, price: 11.5 });
     expect(series.markers.length).toBe(before + 1);
-    expect(series.markers[series.markers.length - 1].position).toBe('aboveBar');
+    expect(series.markers[series.markers.length - 1].position).toBe('inBar'); // anon → circle
   });
 
   it('applyTrade keeps setMarkers sorted ascending by time', async () => {
@@ -893,7 +942,7 @@ describe('mountChart', () => {
     // Toggle Others back ON → only others marker.
     container.querySelector('[data-test-id="chart-overlay-others"]').click();
     expect(series.markers.length).toBe(1);
-    expect(series.markers[0].position).toBe('aboveBar'); // other=sell
+    expect(series.markers[0].position).toBe('inBar'); // other=sell circle, on the line
   });
 
   it('toggling "Avg" creates a price-line at volume-weighted own-trade average', async () => {
@@ -1270,6 +1319,114 @@ describe('mountChart', () => {
       expect(c.crosshairHandlers.length).toBe(1);
       chart.destroy();
       expect(c.crosshairHandlers.length).toBe(0);
+    });
+  });
+
+  // ── Trade card (hover/tap a trade marker) ────────────────────────────────
+  describe('trade card', () => {
+    it('hovering a trade marker shows the trade card with price/total/size/time', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      // Map each trade time → an X pixel so findTradeNearPoint can locate it.
+      // (default stub has no timeToCoordinate → trade card never shows.)
+      c.timeScaleStub.timeToCoordinate = (t) =>
+        t === 1709000100 ? 100 : t === 1709000200 ? 200 : 500;
+
+      // Hover near the buy point (x≈100).
+      c._emitCrosshair({ time: 1709000150, point: { x: 102, y: 40 } });
+
+      const card = container.querySelector('[data-test-id="chart-trade-card"]');
+      expect(card.hidden).toBe(false);
+      expect(container.querySelector('[data-test-id="chart-trade-type"]').textContent).toBe('BUY');
+      // Price = point.price (the value that positions the dot on the axis).
+      expect(container.querySelector('[data-test-id="chart-trade-price"]').textContent).toBe(
+        '10.70',
+      );
+      // Total = price × size = 10.7 × 5 = 53.5 (consistent with the graph).
+      expect(container.querySelector('[data-test-id="chart-trade-total"]').textContent).toBe(
+        '53.50',
+      );
+      // Size = volume (token count).
+      expect(container.querySelector('[data-test-id="chart-trade-size"]').textContent).toBe('5.00');
+      expect(container.querySelector('[data-test-id="chart-trade-time"]').textContent).not.toBe('');
+      // OHLC card hidden while the trade card shows (single pinned slot).
+      expect(container.querySelector('[data-test-id="chart-ohlc"]').hidden).toBe(true);
+    });
+
+    it('hovering away from any trade falls back to the OHLC card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c.timeScaleStub.timeToCoordinate = (t) =>
+        t === 1709000100 ? 100 : t === 1709000200 ? 200 : 500;
+
+      // x=350 is >14px from every trade (100/200/500) → no trade card.
+      c._emitCrosshair({ time: 1709000300, point: { x: 350, y: 40 } });
+
+      expect(container.querySelector('[data-test-id="chart-trade-card"]').hidden).toBe(true);
+      // OHLC card shows for the candle at 1709000300.
+      expect(container.querySelector('[data-test-id="chart-ohlc"]').hidden).toBe(false);
+    });
+
+    it('sell trade shows a red SELL card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c.timeScaleStub.timeToCoordinate = (t) => (t === 1709000200 ? 200 : 999);
+
+      c._emitCrosshair({ time: 1709000200, point: { x: 201, y: 40 } });
+
+      const type = container.querySelector('[data-test-id="chart-trade-type"]');
+      expect(type.textContent).toBe('SELL');
+      expect(type.classList.contains('is-down')).toBe(true);
+    });
+
+    it('mobile: tapping a trade marker shows the trade card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, {
+        apiClient: makeApi(),
+        chartLibFactory: () => lib,
+        isMobile: true,
+      });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c.timeScaleStub.timeToCoordinate = (t) => (t === 1709000100 ? 80 : 300);
+      const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+
+      canvas.dispatchEvent(new MouseEvent('click', { clientX: 82, clientY: 30, bubbles: true }));
+
+      expect(container.querySelector('[data-test-id="chart-trade-card"]').hidden).toBe(false);
+      expect(container.querySelector('[data-test-id="chart-trade-type"]').textContent).toBe('BUY');
+    });
+
+    it('mobile: a second tap dismisses the open trade card', async () => {
+      const { lib, created } = makeChartLib();
+      const chart = mountChart(container, {
+        apiClient: makeApi(),
+        chartLibFactory: () => lib,
+        isMobile: true,
+      });
+      chart.setToken(makePlayer());
+      await flush();
+      const c = created.charts[0];
+      c.timeScaleStub.timeToCoordinate = (t) => (t === 1709000100 ? 80 : 300);
+      const canvas = container.querySelector('[data-test-id="chart-canvas"]');
+      const tap = () =>
+        canvas.dispatchEvent(new MouseEvent('click', { clientX: 82, clientY: 30, bubbles: true }));
+
+      tap();
+      expect(container.querySelector('[data-test-id="chart-trade-card"]').hidden).toBe(false);
+      // Second tap → toggle off (hideCards branch).
+      tap();
+      expect(container.querySelector('[data-test-id="chart-trade-card"]').hidden).toBe(true);
     });
   });
 

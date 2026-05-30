@@ -29,6 +29,12 @@
   --up-dim: rgba(61, 219, 142, 0.15);
   --down: #ff5a5f;
   --down-dim: rgba(255, 90, 95, 0.13);
+  /* Muted-but-visible buy/sell — used for OTHERS' trade markers (small
+     circles) so they read as context, not noise. Brighter than the -dim
+     badge fills (which are too faint as standalone dots on --bg-0), dimmer
+     than the solid --up/--down used for the user's own (bold) arrows. */
+  --up-soft: rgba(61, 219, 142, 0.5);
+  --down-soft: rgba(255, 90, 95, 0.5);
   --warn: #e0a93a;
   --warn-dim: rgba(224, 169, 58, 0.12);
   --info: #5fb0ff;
@@ -39,6 +45,12 @@
 
   /* Brand — primary accent (matches --up by design). */
   --accent: #3ddb8e;
+
+  /* Chart line (line-mode trend). Deliberately NOT --accent/--up: the line
+     used to share #3ddb8e with buy markers and they blended. This neutral
+     grey-green (= --text-2) sits in the theme but stays out of the way so
+     the coloured trade markers read on top of it. */
+  --chart-line: #9caea6;
 
   /* Role colors — player role badges (best/captain/rookie) in sidebar. */
   --best: #e0a93a;
