@@ -174,12 +174,18 @@ def _count_rows() -> int:
 
 
 def test_tick_inserts_external_buy_and_advances_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_cfg(monkeypatch, dex_scan_from_block=_FROM, reorg_lag_blocks=0, chunk_blocks_default=5000)
+    _patch_cfg(
+        monkeypatch, dex_scan_from_block=_FROM, reorg_lag_blocks=0, chunk_blocks_default=5000
+    )
     block = _FROM + 100
     tx = "0x" + "11" * 32
     logs = [
-        _transfer_log(token=WETH, frm=TRADER, to=POOL, value=5 * 10**17, block=block, log_index=0, tx=tx),
-        _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=100 * 10**18, block=block, log_index=1, tx=tx),
+        _transfer_log(
+            token=WETH, frm=TRADER, to=POOL, value=5 * 10**17, block=block, log_index=0, tx=tx
+        ),
+        _transfer_log(
+            token=PITCH, frm=POOL, to=TRADER, value=100 * 10**18, block=block, log_index=1, tx=tx
+        ),
     ]
     head = block + 3
     fake = _install(monkeypatch, head, logs)
@@ -187,8 +193,13 @@ def test_tick_inserts_external_buy_and_advances_cursor(monkeypatch: pytest.Monke
     dex_pitch_loop.tick()
 
     assert _count_rows() == 1
-    with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn, conn.cursor() as cur:
-        cur.execute("SELECT direction, pitch_amount, quote_token, quote_amount FROM dex_pitch_trades")
+    with (
+        psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT direction, pitch_amount, quote_token, quote_amount FROM dex_pitch_trades"
+        )
         r = cur.fetchone()
         assert r is not None
         assert r["direction"] == "buy"
@@ -215,8 +226,12 @@ def test_tick_idempotent_rescan(monkeypatch: pytest.MonkeyPatch) -> None:
     block = _FROM + 10
     tx = "0x" + "22" * 32
     logs = [
-        _transfer_log(token=WETH, frm=TRADER, to=POOL, value=1 * 10**17, block=block, log_index=0, tx=tx),
-        _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=9 * 10**18, block=block, log_index=1, tx=tx),
+        _transfer_log(
+            token=WETH, frm=TRADER, to=POOL, value=1 * 10**17, block=block, log_index=0, tx=tx
+        ),
+        _transfer_log(
+            token=PITCH, frm=POOL, to=TRADER, value=9 * 10**18, block=block, log_index=1, tx=tx
+        ),
     ]
     head = block + 1
     _install(monkeypatch, head, logs)
@@ -237,7 +252,9 @@ def test_tick_native_eth_buy_consults_get_transaction(monkeypatch: pytest.Monkey
     tx = "0x" + "33" * 32
     # PITCH-in only, no WETH/USDC leg → native-ETH candidate.
     logs = [
-        _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=50 * 10**18, block=block, log_index=0, tx=tx),
+        _transfer_log(
+            token=PITCH, frm=POOL, to=TRADER, value=50 * 10**18, block=block, log_index=0, tx=tx
+        ),
     ]
     head = block + 1
     fake = _install(monkeypatch, head, logs, txs={tx: 3 * 10**17})
@@ -246,7 +263,10 @@ def test_tick_native_eth_buy_consults_get_transaction(monkeypatch: pytest.Monkey
 
     assert fake.eth.get_tx_calls == [tx], "getTransaction must be called for the candidate tx"
     assert _count_rows() == 1
-    with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         cur.execute("SELECT quote_token, quote_amount FROM dex_pitch_trades")
         r = cur.fetchone()
         assert r is not None

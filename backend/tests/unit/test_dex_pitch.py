@@ -126,9 +126,7 @@ def test_external_buy_native_eth() -> None:
             _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=50 * 10**18, tx=tx, log_index=3),
         ]
     )
-    trades = classify_external_pitch_trades(
-        logs, tx_value={tx: 3 * 10**17}, tx_from={tx: TRADER}
-    )
+    trades = classify_external_pitch_trades(logs, tx_value={tx: 3 * 10**17}, tx_from={tx: TRADER})
     assert len(trades) == 1
     t = trades[0]
     assert t.direction == "buy"
@@ -271,15 +269,21 @@ def test_output_sorted_by_block_and_log_index() -> None:
     tx_b = "0x" + "bb" * 32
     logs = _decode(
         [
-            _transfer_log(token=WETH, frm=TRADER, to=POOL, value=1, tx=tx_b, block=2000, log_index=0),
-            _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=10, tx=tx_b, block=2000, log_index=1),
-            _transfer_log(token=WETH, frm=TRADER, to=POOL, value=1, tx=tx_a, block=1000, log_index=0),
-            _transfer_log(token=PITCH, frm=POOL, to=TRADER, value=10, tx=tx_a, block=1000, log_index=1),
+            _transfer_log(
+                token=WETH, frm=TRADER, to=POOL, value=1, tx=tx_b, block=2000, log_index=0
+            ),
+            _transfer_log(
+                token=PITCH, frm=POOL, to=TRADER, value=10, tx=tx_b, block=2000, log_index=1
+            ),
+            _transfer_log(
+                token=WETH, frm=TRADER, to=POOL, value=1, tx=tx_a, block=1000, log_index=0
+            ),
+            _transfer_log(
+                token=PITCH, frm=POOL, to=TRADER, value=10, tx=tx_a, block=1000, log_index=1
+            ),
         ]
     )
-    trades = classify_external_pitch_trades(
-        logs, tx_from={tx_a: TRADER, tx_b: TRADER}
-    )
+    trades = classify_external_pitch_trades(logs, tx_from={tx_a: TRADER, tx_b: TRADER})
     assert [t.block_number for t in trades] == [1000, 2000]
 
 
