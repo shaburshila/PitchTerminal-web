@@ -43,6 +43,7 @@ import {
   onAccountChange as defaultOnAccountChange,
 } from './wallet.js';
 import { flagSrc, hasFlag } from './flags.js';
+import { shortenAddress } from './utils/address.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -71,11 +72,6 @@ function formatSigned(value, digits = 4) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   const sign = value > 0 ? '+' : '';
   return `${sign}${formatNumber(value, digits)}`;
-}
-
-function shortAddr(addr) {
-  if (typeof addr !== 'string' || addr.length < 10) return addr ?? '—';
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 const BASESCAN_TX = 'https://basescan.org/tx/';
@@ -498,7 +494,7 @@ export function mountMyWalletTab(container, opts = {}) {
       );
     }
     const ident = el('div', { className: 'pt-mywallet__ident' });
-    const name = item.symbol || shortAddr(item.token);
+    const name = item.symbol || shortenAddress(item.token) || '—';
     ident.appendChild(el('div', { className: 'pt-mywallet__name', text: name }));
     const tickLabel = item.kind || 'token';
     ident.appendChild(
@@ -579,7 +575,7 @@ export function mountMyWalletTab(container, opts = {}) {
     ident.appendChild(
       el('span', {
         className: 'pt-mywallet__card-sym',
-        text: item.symbol || shortAddr(item.token),
+        text: item.symbol || shortenAddress(item.token) || '—',
       }),
     );
     const kindLabel = item.kind || 'token';

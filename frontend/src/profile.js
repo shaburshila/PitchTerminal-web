@@ -19,8 +19,10 @@
  */
 
 import * as defaultApi from './api.js';
+import { shortenAddress } from './utils/address.js';
 
 const TRADES_PAGE_LIMIT = 100;
+const BASESCAN_ADDR = 'https://basescan.org/address/';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -134,6 +136,15 @@ export function mountProfile(container, opts = {}) {
   });
   wrapper.appendChild(status);
 
+  // When viewing someone else's portfolio, a header names whose wallet it is
+  // and links to BaseScan (own view leaves this empty). Populated in
+  // renderAddrHeader() from state.isOwn/state.address.
+  const addrHeader = el('div', {
+    className: 'pt-profile__addr-header',
+    dataset: { testId: 'profile-addr-header' },
+  });
+  wrapper.appendChild(addrHeader);
+
   // ── Block containers ────────────────────────────────────────────────────
   const summary = buildCard('Summary', 'profile-summary');
   // Referral section was removed from Profile — referral surface now lives
@@ -169,6 +180,12 @@ export function mountProfile(container, opts = {}) {
     loading: false,
     error: null,
     reqSeq: 0,
+    // Target wallet for this view. null = the session wallet (own portfolio).
+    address: typeof opts.address === 'string' ? opts.address : null,
+    // Own view vs. someone else's. Defaults to own; main.js passes false when
+    // navigating to another trader's address. Gates the Limit-orders card +
+    // the address header.
+    isOwn: opts.isOwn !== false,
   };
 
   // Chart lib (lazy).
@@ -300,7 +317,9 @@ export function mountProfile(container, opts = {}) {
       );
       ul.appendChild(li);
     }
-    row('ETH', b.ethWei, 'profile-balance-eth');
+    // ETH intentionally omitted — portfolio shows only the pitch ecosystem
+    // (PITCH + country + player holdings). Player holdings appear under
+    // Open positions; this list covers PITCH + country-token balances.
     row('PITCH', b.pitchWei, 'profile-balance-pitch');
     for (const c of Array.isArray(b.countries) ? b.countries : []) {
       row(
@@ -596,6 +615,30 @@ export function mountProfile(container, opts = {}) {
     orders.body.appendChild(table);
   }
 
+  function renderAddrHeader() {
+    addrHeader.replaceChildren();
+    // Own portfolio: no header (the page chrome already says "Portfolio").
+    if (state.isOwn || !state.address) return;
+    addrHeader.appendChild(
+      el('span', {
+        className: 'pt-profile__addr-label',
+        text: 'Viewing portfolio of ',
+      }),
+    );
+    addrHeader.appendChild(
+      el('a', {
+        className: 'pt-profile__addr-link',
+        dataset: { testId: 'profile-addr-link' },
+        attrs: {
+          href: BASESCAN_ADDR + state.address,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+        },
+        text: shortenAddress(state.address),
+      }),
+    );
+  }
+
   async function renderValueChart(series) {
     valueChart.body.replaceChildren();
     if (!Array.isArray(series) || series.length === 0) {
@@ -659,9 +702,11 @@ export function mountProfile(container, opts = {}) {
     state.trades.history = [];
     setStatus('Loading portfolio…', false);
 
+    renderAddrHeader();
+
     let resp;
     try {
-      resp = await apiClient.getProfile({ tradesLimit, tradesCursor });
+      resp = await apiClient.getProfile({ tradesLimit, tradesCursor, address: state.address });
     } catch (err) {
       if (seq !== state.reqSeq) return;
       state.loading = false;
@@ -693,9 +738,15 @@ export function mountProfile(container, opts = {}) {
     state.trades.nextCursor = t.nextCursor ?? null;
     renderTrades();
 
-    // Orders may be embedded in profile (future) or fetched separately.
-    // Render whatever's there; absence = empty stub.
-    renderOrders(Array.isArray(resp?.orders) ? resp.orders : []);
+    // Limit orders are private — only shown for one's own portfolio. (The
+    // endpoint never returns `orders`; the card is a stub fed by the separate
+    // Orders tab's data model. For another wallet we hide the card entirely.)
+    if (state.isOwn) {
+      orders.card.style.display = '';
+      renderOrders(Array.isArray(resp?.orders) ? resp.orders : []);
+    } else {
+      orders.card.style.display = 'none';
+    }
 
     // Value-over-time chart — async, doesn't block other blocks.
     renderValueChart(resp?.valueSeries).catch((err) => {
@@ -712,7 +763,11 @@ export function mountProfile(container, opts = {}) {
     state.loading = true;
     setStatus('Loading trades…', false);
     try {
-      const resp = await apiClient.getProfile({ tradesLimit, tradesCursor: cursor });
+      const resp = await apiClient.getProfile({
+        tradesLimit,
+        tradesCursor: cursor,
+        address: state.address,
+      });
       // history is a stack of cursors used to load each page; first page
       // used `undefined`. Push the cursor that produced the page we're now
       // leaving so "prev" can re-request it.
@@ -744,7 +799,11 @@ export function mountProfile(container, opts = {}) {
     state.loading = true;
     setStatus('Loading trades…', false);
     try {
-      const resp = await apiClient.getProfile({ tradesLimit, tradesCursor: cursor });
+      const resp = await apiClient.getProfile({
+        tradesLimit,
+        tradesCursor: cursor,
+        address: state.address,
+      });
       const t = resp?.trades || {};
       state.trades.items = Array.isArray(t.items) ? t.items : [];
       state.trades.nextCursor = t.nextCursor ?? null;
@@ -775,7 +834,15 @@ export function mountProfile(container, opts = {}) {
   }
 
   return {
-    reload: () => {
+    // reload() refreshes the current target. Pass { address, isOwn } to re-point
+    // the view at another wallet (address=null → own portfolio) before loading.
+    reload: (reloadOpts = {}) => {
+      if (reloadOpts.address !== undefined) {
+        state.address = typeof reloadOpts.address === 'string' ? reloadOpts.address : null;
+      }
+      if (reloadOpts.isOwn !== undefined) {
+        state.isOwn = reloadOpts.isOwn !== false;
+      }
       return loadProfile();
     },
     destroy,

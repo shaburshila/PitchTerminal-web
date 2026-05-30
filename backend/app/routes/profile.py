@@ -23,7 +23,7 @@ portable repo, with the structural changes required by the web version:
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, cast
 
 from flask import Blueprint, g, jsonify, request
 
@@ -31,6 +31,7 @@ from app.deps import require_premium
 from app.errors import abort_with_problem
 from app.pagination import clamp_limit, decode_cursor, encode_cursor
 from shared.db import fetch_all
+from shared.eth import lc
 from shared.log import get_logger
 from shared.price import HistoricalPrices, load_price_timelines, to_display_units
 from shared.types import Event
@@ -302,6 +303,30 @@ def _decode_trades_cursor(cursor_raw: str | None) -> tuple[int, int] | None:
         raise AssertionError("unreachable") from err
 
 
+def _resolve_target_wallet(raw: str | None) -> str:
+    """Resolve which wallet the portfolio view is for.
+
+    Empty/missing ``address`` query param → the authenticated viewer
+    (``g.address``). A supplied address is normalized to lowercase and
+    validated; malformed input aborts 400. Premium gating stays on the *viewer*
+    (``@require_premium`` checks ``g.address``), so any premium user may view any
+    address — only the *data target* changes here.
+    """
+
+    if not raw or not raw.strip():
+        return cast(str, g.address)  # already lowercased by require_auth
+    try:
+        return lc(raw.strip())
+    except ValueError as err:
+        abort_with_problem(
+            code="validation.bad_request",
+            title="Bad address",
+            status=400,
+            detail="address must be a 0x-prefixed 20-byte hex address",
+        )
+        raise AssertionError("unreachable") from err
+
+
 def _build_trade_item(ev: Event, meta: dict[str, Any]) -> dict[str, Any]:
     """Serialize a single wallet trade per spec §6.1 ``trades.items[*]``."""
 
@@ -332,7 +357,7 @@ def _build_trade_item(ev: Event, meta: dict[str, Any]) -> dict[str, Any]:
 def get_profile() -> Any:
     """Portfolio-wide view for the authenticated wallet (spec §6.1)."""
 
-    wallet = g.address  # already lowercased by require_auth
+    wallet = _resolve_target_wallet(request.args.get("address"))
 
     limit = clamp_limit(request.args.get("tradesLimit"))
     cursor = _decode_trades_cursor(request.args.get("tradesCursor"))

@@ -170,9 +170,9 @@ describe('mountProfile', () => {
     mountProfile(container, { apiClient: api, chartLibFactory: () => lib });
     await flush();
 
+    // ETH is intentionally omitted — portfolio shows only the pitch ecosystem.
     const eth = container.querySelector('[data-test-id="profile-balance-eth"]');
-    // 12.345 ETH
-    expect(eth.textContent).toBe('12.345');
+    expect(eth).toBeNull();
     const pitch = container.querySelector('[data-test-id="profile-balance-pitch"]');
     expect(pitch.textContent).toBe('98.765');
     const bra = container.querySelector('[data-test-id="profile-balance-bra"]');
@@ -383,5 +383,69 @@ describe('mountProfile', () => {
     await flush();
     handle.destroy();
     expect(container.children.length).toBe(0);
+  });
+
+  // ── Address-parameterized view (any wallet's portfolio) ──────────────────
+  const OTHER = '0x1111111111111111111111111111111111111111';
+
+  it('passes address to getProfile when viewing another wallet', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    mountProfile(container, {
+      apiClient: api,
+      chartLibFactory: () => lib,
+      address: OTHER,
+      isOwn: false,
+    });
+    await flush();
+    expect(api.getProfile).toHaveBeenCalledWith(expect.objectContaining({ address: OTHER }));
+  });
+
+  it('defaults to own view (address null) when no address given', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    mountProfile(container, { apiClient: api, chartLibFactory: () => lib });
+    await flush();
+    expect(api.getProfile).toHaveBeenCalledWith(expect.objectContaining({ address: null }));
+  });
+
+  it('hides the Limit orders card and shows an address header for another wallet', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    mountProfile(container, {
+      apiClient: api,
+      chartLibFactory: () => lib,
+      address: OTHER,
+      isOwn: false,
+    });
+    await flush();
+    const ordersCard = container.querySelector('[data-test-id="profile-orders"]');
+    expect(ordersCard.style.display).toBe('none');
+    const link = container.querySelector('[data-test-id="profile-addr-link"]');
+    expect(link).not.toBeNull();
+    expect(link.textContent).toBe('0x1111…1111');
+    expect(link.getAttribute('href')).toContain(OTHER);
+  });
+
+  it('shows the Limit orders card and no address header for own view', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    mountProfile(container, { apiClient: api, chartLibFactory: () => lib });
+    await flush();
+    const ordersCard = container.querySelector('[data-test-id="profile-orders"]');
+    expect(ordersCard.style.display).not.toBe('none');
+    expect(container.querySelector('[data-test-id="profile-addr-link"]')).toBeNull();
+  });
+
+  it('reload({ address, isOwn }) re-points the view at another wallet', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi();
+    const handle = mountProfile(container, { apiClient: api, chartLibFactory: () => lib });
+    await flush();
+    expect(api.getProfile).toHaveBeenLastCalledWith(expect.objectContaining({ address: null }));
+    handle.reload({ address: OTHER, isOwn: false });
+    await flush();
+    expect(api.getProfile).toHaveBeenLastCalledWith(expect.objectContaining({ address: OTHER }));
+    expect(container.querySelector('[data-test-id="profile-addr-link"]')).not.toBeNull();
   });
 });

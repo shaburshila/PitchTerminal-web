@@ -1127,6 +1127,8 @@ async function bootstrap() {
       chart.setOwnBalance(addr, balance, breakEven, breakEvenBase),
     onTokenSelect: (item) =>
       selectByAddress(item?.token, { symbol: item?.symbol, kind: item?.kind }),
+    // Clicking a trader/holder address opens that wallet's portfolio page.
+    onAddressClick: (addr) => navigateToPortfolio(addr),
   });
 
   // F1.1: Market trade panel — read-only quote in this phase. Approve/swap
@@ -1298,20 +1300,72 @@ async function bootstrap() {
   // re-loaded on subsequent activations. Clicking a token inside profile
   // switches back to the dashboard with that token selected.
   let profileHandle = null;
-  function activateProfile() {
+  const PORTFOLIO_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+  // Activate the Portfolio (Profile) zone for `address` (null = own wallet).
+  // `isOwn` (own portfolio vs. another trader's) gates the Limit-orders card +
+  // address header inside the view. Does NOT touch the URL — callers that
+  // navigate use navigateToPortfolio(); this is the pure view-activation step.
+  function activateProfile(address = null) {
+    const acc = getAccount();
+    const connected = acc?.address ? acc.address.toLowerCase() : null;
+    const target = typeof address === 'string' ? address.toLowerCase() : null;
+    const isOwn = !target || (connected !== null && target === connected);
     if (profileHandle) {
-      profileHandle.reload();
+      profileHandle.reload({ address: target, isOwn });
     } else {
       profileHandle = mountProfile(layout.profile, {
+        address: target,
+        isOwn,
         onTokenSelect: (token) => {
           if (!token?.address) return;
-          layout.setMode('dashboard');
+          navigateToDashboard();
           chart.setToken(token);
           bottom.setToken(token.address);
         },
       });
     }
     layout.setMode('profile');
+  }
+
+  // ── Path-based routing for the Portfolio page (desktop) ───────────────────
+  // History-API layer over the existing setMode body-class mechanic. Routes:
+  //   /                  → dashboard
+  //   /portfolio         → own portfolio
+  //   /portfolio/0x…     → that wallet's portfolio
+  //   /portfolio/<bad>   → dashboard (invalid address)
+  function navigateToPortfolio(address = null) {
+    const target =
+      typeof address === 'string' && PORTFOLIO_ADDR_RE.test(address) ? address.toLowerCase() : null;
+    const path = target ? `/portfolio/${target}` : '/portfolio';
+    if (typeof history !== 'undefined' && history.pushState) {
+      history.pushState({}, '', path);
+    }
+    activateProfile(target);
+  }
+
+  function navigateToDashboard() {
+    if (typeof history !== 'undefined' && history.pushState) {
+      history.pushState({}, '', '/');
+    }
+    layout.setMode('dashboard');
+  }
+
+  function routeFromPath() {
+    const path = typeof location !== 'undefined' ? location.pathname : '/';
+    const m = path.match(/^\/portfolio(?:\/(.+))?$/);
+    if (!m) {
+      layout.setMode('dashboard');
+      return;
+    }
+    const raw = m[1] ? decodeURIComponent(m[1]) : null;
+    const target = raw && PORTFOLIO_ADDR_RE.test(raw) ? raw.toLowerCase() : null;
+    // /portfolio/<garbage> — unparseable address → fall back to dashboard.
+    if (raw && !target) {
+      layout.setMode('dashboard');
+      return;
+    }
+    activateProfile(target);
   }
 
   // Phase 1.5 batch 2: wire header Profile + Referral buttons (closes
@@ -1324,7 +1378,7 @@ async function bootstrap() {
     mountHeaderActions({
       profileBtn,
       referralBtn,
-      onProfile: activateProfile,
+      onProfile: () => navigateToPortfolio(),
     });
   }
 
@@ -1352,11 +1406,29 @@ async function bootstrap() {
   if (logoBtn instanceof HTMLElement) {
     logoBtn.addEventListener('click', () => {
       try {
-        layout.setMode('dashboard');
+        navigateToDashboard();
       } catch (err) {
-        console.error('logo click: setMode failed', err);
+        console.error('logo click: navigateToDashboard failed', err);
       }
     });
+  }
+
+  // Back/forward navigation re-routes from the URL. Combined with the initial
+  // routeFromPath() below, this makes /portfolio[/0x…] deep-linkable and the
+  // browser history work across dashboard ↔ portfolio.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', () => {
+      try {
+        routeFromPath();
+      } catch (err) {
+        console.error('popstate routing failed', err);
+      }
+    });
+  }
+  try {
+    routeFromPath();
+  } catch (err) {
+    console.error('initial routing failed', err);
   }
 
   // F0.9/F0.10: header wallet area. We need `/config` for the WC projectId

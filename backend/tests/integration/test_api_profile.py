@@ -460,3 +460,66 @@ class TestValueSeriesHistorical:
         assert by_time[ts_sell] == pytest.approx(0.0, abs=0.01)
         # @300: only 2 PLR held; CTY no longer contributes. 2 * (2 * 4) = 16.
         assert by_time[ts_player] == pytest.approx(16.0, abs=0.01)
+
+
+class TestAddressParam:
+    """``?address=`` lets a premium viewer inspect any wallet's portfolio."""
+
+    _OTHER = "0x" + "cd" * 20
+
+    def test_address_param_targets_other_wallet(self, app) -> None:
+        # Activity belongs to _OTHER, not the authenticated viewer (_WALLET).
+        _insert_event(100, 0, _COUNTRY, self._OTHER, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)  # viewer = _WALLET (premium)
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/profile?address={self._OTHER}")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Response is for the *target*, not the viewer.
+        assert body["address"] == self._OTHER
+        assert body["summary"]["openPositions"] == 1
+        assert {p["symbol"] for p in body["positions"]} == {"BRA"}
+
+    def test_no_address_defaults_to_viewer(self, app) -> None:
+        # Viewer has their own activity; _OTHER has none.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["address"] == _WALLET
+        assert body["summary"]["openPositions"] == 1
+
+    def test_uppercase_address_is_normalized(self, app) -> None:
+        _insert_event(100, 0, _COUNTRY, self._OTHER, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get(f"/api/v1/profile?address={self._OTHER.upper().replace('0X', '0x')}")
+        assert resp.status_code == 200
+        assert resp.get_json()["address"] == self._OTHER  # lowercased
+
+    def test_bad_address_returns_400(self, app) -> None:
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile?address=not-an-address")
+        assert resp.status_code == 400
+        assert resp.get_json()["code"] == "validation.bad_request"
+
+    def test_premium_gate_is_on_viewer_not_target(self, app) -> None:
+        # Non-premium viewer cannot inspect anyone, even a valid target.
+        _insert_event(100, 0, _COUNTRY, self._OTHER, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=False):
+            resp = client.get(f"/api/v1/profile?address={self._OTHER}")
+        assert resp.status_code == 402
+        assert resp.get_json()["code"] == "access.payment_required"

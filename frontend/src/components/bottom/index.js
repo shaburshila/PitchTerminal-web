@@ -27,6 +27,7 @@
 import * as defaultApi from '../../api.js';
 import { mountMyWalletTab } from '../../my-wallet-tab.js';
 import { mountOrdersTab } from '../../orders-tab.js';
+import { shortenAddress } from '../../utils/address.js';
 import {
   get as defaultGetAccessState,
   subscribe as defaultSubscribeAccess,
@@ -69,11 +70,6 @@ function el(tag, { className, dataset, attrs, text } = {}) {
   }
   if (text != null) node.textContent = text;
   return node;
-}
-
-function shortAddress(addr) {
-  if (typeof addr !== 'string' || addr.length < 10) return addr ?? '';
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 function sameAddress(a, b) {
@@ -172,6 +168,32 @@ export function mountBottomTabs(container, options = {}) {
     typeof softLockOpts.openPayModal === 'function'
       ? softLockOpts.openPayModal
       : defaultOpenPayModal;
+  // When provided, trader/holder addresses become internal portfolio links
+  // (click → onAddressClick(addr)). Without it they fall back to BaseScan.
+  const onAddressClick =
+    typeof options.onAddressClick === 'function' ? options.onAddressClick : null;
+
+  // Render a wallet address: internal portfolio link when onAddressClick is
+  // wired (href stays /portfolio/<addr> so middle-click/open-in-new-tab work),
+  // else an external BaseScan link.
+  function buildAddrLink(address) {
+    if (onAddressClick) {
+      const a = el('a', {
+        className: 'addr-link',
+        attrs: { href: `/portfolio/${address}` },
+        text: shortenAddress(address),
+      });
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        onAddressClick(address);
+      });
+      return a;
+    }
+    return el('a', {
+      attrs: { href: BASESCAN_ADDR + address, target: '_blank', rel: 'noopener noreferrer' },
+      text: shortenAddress(address),
+    });
+  }
 
   container.replaceChildren();
 
@@ -438,15 +460,7 @@ export function mountBottomTabs(container, options = {}) {
 
         const traderCell = el('td', { className: 'addr' });
         if (trade.trader) {
-          const a = el('a', {
-            attrs: {
-              href: BASESCAN_ADDR + trade.trader,
-              target: '_blank',
-              rel: 'noopener noreferrer',
-            },
-            text: shortAddress(trade.trader),
-          });
-          traderCell.appendChild(a);
+          traderCell.appendChild(buildAddrLink(trade.trader));
         } else {
           traderCell.textContent = '—';
         }
@@ -518,15 +532,7 @@ export function mountBottomTabs(container, options = {}) {
 
         const addrCell = el('td', { className: 'addr' });
         if (wallet.address) {
-          const a = el('a', {
-            attrs: {
-              href: BASESCAN_ADDR + wallet.address,
-              target: '_blank',
-              rel: 'noopener noreferrer',
-            },
-            text: shortAddress(wallet.address),
-          });
-          addrCell.appendChild(a);
+          addrCell.appendChild(buildAddrLink(wallet.address));
         } else {
           addrCell.textContent = '—';
         }

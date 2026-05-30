@@ -257,7 +257,7 @@ describe('mountBottomTabs', () => {
       items: [
         {
           type: 'buy',
-          trader: '0xfff',
+          trader: '0xfff1000000000000000000000000000000000001',
           baseValue: 1,
           tokenValue: 1,
           price: 1,
@@ -284,7 +284,7 @@ describe('mountBottomTabs', () => {
 
     const rows = container.querySelectorAll('[data-test-id="trade-row"]');
     expect(rows.length).toBe(1);
-    expect(rows[0].textContent).toContain('0xfff');
+    expect(rows[0].textContent).toContain('0xfff1…0001');
   });
 
   it('pushTrades prepends matching token trades and ignores others', async () => {
@@ -296,7 +296,7 @@ describe('mountBottomTabs', () => {
       {
         token: TOKEN_A,
         type: 'buy',
-        trader: '0xnew',
+        trader: '0xabc2000000000000000000000000000000000002',
         baseValue: 1,
         tokenValue: 1,
         price: 1,
@@ -307,7 +307,7 @@ describe('mountBottomTabs', () => {
       {
         token: TOKEN_B,
         type: 'sell',
-        trader: '0xother',
+        trader: '0xdef3000000000000000000000000000000000003',
         baseValue: 1,
         tokenValue: 1,
         price: 1,
@@ -319,7 +319,7 @@ describe('mountBottomTabs', () => {
 
     const rows = container.querySelectorAll('[data-test-id="trade-row"]');
     expect(rows.length).toBe(3);
-    expect(rows[0].textContent).toContain('0xnew');
+    expect(rows[0].textContent).toContain('0xabc2…0002');
   });
 
   it('pushTrades dedupes by tx hash', async () => {
@@ -347,7 +347,7 @@ describe('mountBottomTabs', () => {
       {
         token: TOKEN_A,
         type: 'buy',
-        trader: '0xsse',
+        trader: '0xabc4000000000000000000000000000000000004',
         baseValue: 1,
         tokenValue: 1,
         price: 1,
@@ -362,7 +362,7 @@ describe('mountBottomTabs', () => {
 
     const rows = container.querySelectorAll('[data-test-id="trade-row"]');
     expect(rows.length).toBe(3);
-    expect(rows[0].textContent).toContain('0xsse');
+    expect(rows[0].textContent).toContain('0xabc4…0004');
   });
 
   it('renders empty states for trades and holders when none exist', async () => {
@@ -722,5 +722,37 @@ describe('mountBottomTabs', () => {
     await handle.setToken(TOKEN_A);
     handle.destroy();
     expect(container.children.length).toBe(0);
+  });
+
+  describe('clickable addresses', () => {
+    it('trader address calls onAddressClick instead of navigating to BaseScan', async () => {
+      const onAddressClick = vi.fn();
+      const api = makeApi(makeTradesResponse({ items: sampleTrades(), wallets: [] }));
+      const handle = mountBottomTabs(container, { apiClient: api, onAddressClick });
+      await handle.setToken(TOKEN_A);
+
+      const link = container.querySelector('[data-test-id="trade-row"] td.addr a');
+      expect(link).not.toBeNull();
+      // Internal portfolio link, not an external BaseScan tab.
+      expect(link.getAttribute('href')).toBe(
+        '/portfolio/0x0000000000000000000000000000000000000001',
+      );
+      expect(link.getAttribute('target')).toBeNull();
+
+      const evt = new window.MouseEvent('click', { bubbles: true, cancelable: true });
+      link.dispatchEvent(evt);
+      expect(onAddressClick).toHaveBeenCalledWith('0x0000000000000000000000000000000000000001');
+      expect(evt.defaultPrevented).toBe(true);
+    });
+
+    it('falls back to a BaseScan link when onAddressClick is absent', async () => {
+      const api = makeApi(makeTradesResponse({ items: sampleTrades(), wallets: [] }));
+      const handle = mountBottomTabs(container, { apiClient: api });
+      await handle.setToken(TOKEN_A);
+
+      const link = container.querySelector('[data-test-id="trade-row"] td.addr a');
+      expect(link.getAttribute('href')).toContain('basescan.org/address/');
+      expect(link.getAttribute('target')).toBe('_blank');
+    });
   });
 });

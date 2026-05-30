@@ -289,11 +289,12 @@ export function deleteRefMe() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /profile — portfolio view of the session wallet.
- * @param {{ tradesLimit?: number, tradesCursor?: string }} [opts]
+ * GET /profile — portfolio view. Defaults to the session wallet; pass `address`
+ * to view any wallet's portfolio (still premium-gated on the viewer).
+ * @param {{ tradesLimit?: number, tradesCursor?: string, address?: string }} [opts]
  */
-export function getProfile({ tradesLimit, tradesCursor } = {}) {
-  return apiFetch(`/profile${buildQuery({ tradesLimit, tradesCursor })}`);
+export function getProfile({ tradesLimit, tradesCursor, address } = {}) {
+  return apiFetch(`/profile${buildQuery({ tradesLimit, tradesCursor, address })}`);
 }
 
 /**

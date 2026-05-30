@@ -48,6 +48,7 @@ import {
 import { set as setAccessState } from './access-store.js';
 import { getAccount } from './wallet.js';
 import { showToast } from './ui/toast.js';
+import { shortenAddress } from './utils/address.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const STORAGE_RAW = 'referralRaw';
@@ -112,15 +113,6 @@ export function formatPitch(wei, digits = 4) {
   const fracTrim = frac.slice(0, Math.max(0, digits)).replace(/0+$/, '');
   const out = fracTrim ? `${whole}.${fracTrim}` : whole;
   return neg ? `-${out}` : out;
-}
-
-/**
- * Truncate an address `0xabc…7f9`. Returns `''` for falsy input.
- * @param {string|null|undefined} addr
- */
-function shortenAddress(addr) {
-  if (typeof addr !== 'string' || addr.length < 10) return '';
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 /**
