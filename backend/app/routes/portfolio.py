@@ -78,7 +78,13 @@ def _load_positions(wallet: str) -> list[dict[str, Any]]:
         LEFT JOIN market_state m ON m.token_address = e.token_address
         WHERE e.trader_address = %s
         GROUP BY e.token_address, t.symbol, t.kind, t.country_address,
-                 m.price_pitch
+                 COALESCE(m.price_pitch, 0)
+        -- HAVING net > 0 drops FULLY-SOLD tokens (bug #1 asymmetry). This is
+        -- INTENTIONAL: /portfolio is a CURRENT-holdings view (post-#11 it
+        -- further filters to on-chain balance > dust), so fully-exited tokens
+        -- don't belong here. Closed-position history lives in /profile's
+        -- ``closed[]`` (which DOES include zero-buy airdrop sells). Do not add
+        -- closed positions to My Wallet.
         HAVING SUM(CASE WHEN e.side='buy' THEN e.token_value::numeric
                         ELSE -e.token_value::numeric END) > 0
         ORDER BY e.token_address

@@ -370,6 +370,7 @@ def _build_trade_item(ev: Event, meta: dict[str, Any], fee_pitch: float) -> dict
     gross = base_val - fee_val if ev["side"] == "buy" else base_val + fee_val
     market_price = (gross / token_val) if token_val > 0 else 0.0
     return {
+        "token": ev["token_address"],  # bug #5: linkable trade rows
         "symbol": meta.get("symbol", ""),
         "kind": meta.get("kind", ""),
         "type": ev["side"],
@@ -503,7 +504,16 @@ def get_profile() -> Any:
         # Event-derived net position: still drives realized/sold (cost-basis
         # layer, correct as-is).
         event_position = max(float(a["position"]), 0.0)
-        sold = max(bought - event_position, 0.0)
+        # Tokens actually sold (bug #6). Derive from the UNCLAMPED net
+        # (``a["position"]`` before the ``max(...,0)`` floor) so that
+        # airdrop/zero-cost distributions sold for more than were bought
+        # (raw net goes negative) still count every sold token. Then clamp to
+        # ``[0, bought]`` so realized never over-counts the cost-basis side:
+        # the proceeds beyond ``bought`` are pure zero-cost gain captured by
+        # ``avg_buy == 0`` (received), not by subtracting cost.
+        sold = max(bought - float(a["position"]), 0.0)
+        if bought > 0:
+            sold = min(sold, bought)
         avg_buy = (spent / bought) if bought > 0 else 0.0
 
         realized = received - avg_buy * sold
@@ -556,6 +566,12 @@ def get_profile() -> Any:
                     "valuePitch": round(pv, 2),
                     "unrealizedPnlPitch": round(unreal_base * rate, 2),
                     "unrealizedPct": round((unreal_base / cost * 100) if cost > 0 else 0.0, 1),
+                    # Bug #4: signal "no price data" instead of a misleading
+                    # 0.000000 when the (country) PITCH rate is missing. A
+                    # player whose country has no recorded price (rate == 0) or
+                    # a token with no market_state price contributes 0 value
+                    # silently — the frontend uses this to render "—".
+                    "priceUnavailable": (rate == 0 or meta["price_pitch"] == 0),
                 }
             )
             alloc_country[meta["country"]] = alloc_country.get(meta["country"], 0.0) + pv
@@ -564,7 +580,17 @@ def get_profile() -> Any:
                 alloc_players += pv
             else:
                 alloc_countries += pv
-        elif bought > 0:
+        elif bought > 0 or received > 0:
+            # Closed position. ``received > 0`` (with ``bought == 0``) catches
+            # airdrop/icon-pack distributions the wallet sold but never bought
+            # (e.g. USA, HAKIMI) — bug #1. Those have ``avg_buy == 0`` so
+            # ``realized == received`` (pure proceeds, no cost basis). Product
+            # decision: a profitable zero-cost sell IS a win.
+            # Invariant: a token only enters ``agg`` via a buy (→ bought > 0) or
+            # a sell (→ received > 0) event, so ``bought == 0 and received == 0``
+            # is unreachable from current event data — this branch never silently
+            # drops a token. (Would need a new non-buy/sell event side to break.)
+            zero_cost = bought <= 0
             closed_count += 1
             if realized > 0:
                 closed_wins += 1
@@ -575,6 +601,7 @@ def get_profile() -> Any:
                     "kind": meta["kind"],
                     "country": meta["country"],
                     "realizedPnlPitch": round(realized * rate, 2),
+                    "zeroCost": zero_cost,
                     "buys": int(a["buys"]),
                     "sells": int(a["sells"]),
                     "lastTs": int(a["last_ts"]) if a["last_ts"] else None,

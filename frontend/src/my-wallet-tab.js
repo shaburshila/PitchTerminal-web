@@ -445,10 +445,21 @@ export function mountMyWalletTab(container, opts = {}) {
     const meta = el('div', { className: 'pt-mywallet__meta' });
     if (Number.isFinite(totalPnl)) {
       const isPositive = totalPnl >= 0;
+      // This pill aggregates `it.pnl` = UNREALIZED PnL only (realized is not
+      // summed here). Label it explicitly so multi-token mode can't be misread
+      // as total (realized + unrealized) PnL — bug #2. Mirrors the single-token
+      // card's "Unrealized PnL" label.
       const pill = el('span', {
         className: `pt-mywallet__pnl${isPositive ? ' is-positive' : ' is-negative'}`,
         dataset: { testId: 'mywallet-head-pnl' },
+        attrs: { 'aria-label': `Unrealized PnL ${formatSigned(totalPnl, 4)} PITCH` },
       });
+      pill.appendChild(
+        el('span', {
+          className: 'pt-mywallet__pnl-label',
+          text: 'Unrealized',
+        }),
+      );
       pill.appendChild(
         el('span', {
           className: 'pt-mywallet__pnl-abs',

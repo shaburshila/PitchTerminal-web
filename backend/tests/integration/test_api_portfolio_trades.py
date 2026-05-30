@@ -236,6 +236,7 @@ class TestFieldShape:
             resp = client.get(f"/api/v1/portfolio/trades?token={_COUNTRY}")
         item = resp.get_json()["items"][0]
         assert set(item.keys()) == {
+            "token",
             "symbol",
             "kind",
             "type",
@@ -247,6 +248,7 @@ class TestFieldShape:
             "timestamp",
             "tx",
         }
+        assert item["token"] == _COUNTRY
         # price = base/token = 10/5 = 2. marketPrice (fee-excluded buy) = 9/5 = 1.8.
         assert item["price"] == pytest.approx(2.0)
         assert item["marketPrice"] == pytest.approx(1.8)

@@ -603,6 +603,26 @@ describe('mountMyWalletTab', () => {
     expect(pill.textContent).toContain('-3.5');
   });
 
+  it('labels the header PnL pill as Unrealized (bug #2)', async () => {
+    accessStore.set('premium');
+    const c = makeContainer();
+    const acc = makeAccount();
+    mountMyWalletTab(c, {
+      apiClient: makeApi([makeItem({ pnlPitchDisplay: 4.2 })]),
+      getAccount: acc.getAccount,
+      onAccountChange: acc.onAccountChange,
+    });
+    await flush();
+    const pill = c.querySelector('[data-test-id="mywallet-head-pnl"]');
+    expect(pill).toBeTruthy();
+    // Visible "Unrealized" qualifier so it can't be misread as total PnL.
+    const label = pill.querySelector('.pt-mywallet__pnl-label');
+    expect(label).toBeTruthy();
+    expect(label.textContent).toMatch(/Unrealized/i);
+    // And surfaced to assistive tech via aria-label.
+    expect(pill.getAttribute('aria-label')).toMatch(/Unrealized/i);
+  });
+
   describe('single-token position card', () => {
     it('renders the card (not the table/head) when an active token is held', async () => {
       accessStore.set('premium');

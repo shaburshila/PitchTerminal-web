@@ -562,6 +562,102 @@ class TestFeesHistorical:
         assert body["summary"]["feesPaidPitch"] == pytest.approx(0.5, abs=0.01)
 
 
+class TestZeroBuyClosedPositions:
+    """Bug #1: tokens SOLD with zero buy events (airdrops / icon-packs) must
+    still surface as closed positions and count toward win-rate."""
+
+    def test_zero_buy_sell_appears_closed_with_zerocost(self, app) -> None:
+        # Wallet received 5 BRA via an airdrop (no Buy event) then sold them for
+        # 12 PITCH. Only a Sell event exists; ``bought == 0``.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "sell", 12 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # No on-chain balance (fully exited).
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+
+        # No open position; the token is reported closed.
+        assert body["positions"] == []
+        closed_syms = {c["symbol"] for c in body["closed"]}
+        assert closed_syms == {"BRA"}
+        bra = next(c for c in body["closed"] if c["symbol"] == "BRA")
+        assert bra["zeroCost"] is True
+        # avg_buy == 0 → realized == received = 12 PITCH (country rate ≡ 1).
+        assert bra["realizedPnlPitch"] == pytest.approx(12.0, abs=0.01)
+        # Counted as a closed position and a win (profitable zero-cost sell).
+        assert body["stats"]["closedPositions"] == 1
+        assert body["stats"]["winRatePct"] == pytest.approx(100.0, abs=0.1)
+
+    def test_zero_buy_zerocost_flag_false_for_bought_positions(self, app) -> None:
+        # A normally-bought-then-sold position is closed with zeroCost == False.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(101, 0, _COUNTRY, _WALLET, "sell", 12 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        bra = next(c for c in body["closed"] if c["symbol"] == "BRA")
+        assert bra["zeroCost"] is False
+        # realized = received(12) - avg_buy(2) * sold(5) = 2.
+        assert bra["realizedPnlPitch"] == pytest.approx(2.0, abs=0.01)
+
+
+class TestPriceUnavailableFlag:
+    """Bug #4: positions[] carries ``priceUnavailable`` when the rate is 0."""
+
+    def test_price_unavailable_true_when_country_price_zero(self, app) -> None:
+        # Player held, but its country has price_pitch = 0 → rate 0 → 0 value.
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE market_state SET price_pitch = 0 WHERE token_address = %s",
+                    (_COUNTRY,),
+                )
+            conn.commit()
+        _insert_event(100, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({_PLAYER: 4.0}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        pel = next(p for p in body["positions"] if p["symbol"] == "PEL")
+        assert pel["priceUnavailable"] is True
+
+    def test_price_unavailable_false_when_priced(self, app) -> None:
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        bra = next(p for p in body["positions"] if p["symbol"] == "BRA")
+        assert bra["priceUnavailable"] is False
+
+
+class TestTradeItemCarriesToken:
+    """Bug #5: trades.items rows carry the token address (linkable rows)."""
+
+    def test_trade_items_have_token(self, app) -> None:
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 15 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        items = body["trades"]["items"]
+        assert len(items) == 1
+        assert items[0]["token"] == _COUNTRY
+
+
 class TestAddressParam:
     """``?address=`` lets a premium viewer inspect any wallet's portfolio."""
 
