@@ -11,6 +11,7 @@ Then loop forever every 5 seconds:
 * ``event_loop.tick()``
 * ``access_event_loop.tick()``
 * ``dex_pitch_loop.tick()`` — external PITCH<->ETH/WETH/USDC DEX swaps.
+  (TEMPORARILY DISABLED — see the call site; cold-start hung the worker.)
 * ``nonces.cleanup()``
 * ``expiry.tick()`` — sub-tick, runs at most once every
   :data:`worker.expiry.EXPIRY_TICK_INTERVAL_SEC` (30 s) via a timestamp gate.
@@ -39,7 +40,6 @@ from worker import (
     access_bootstrap,
     access_event_loop,
     backfill,
-    dex_pitch_loop,
     event_loop,
     expiry,
     keeper,
@@ -122,7 +122,10 @@ def run() -> None:
         price_loop.tick()
         event_loop.tick()
         access_event_loop.tick()
-        dex_pitch_loop.tick()
+        # dex_pitch_loop.tick() TEMPORARILY DISABLED (incident 2026-05-31): the
+        # cold-start backfill blocked the worker on an RPC call without a
+        # timeout, starving price_loop/keeper. Re-enable once the scanner has
+        # per-call RPC timeouts. The table + indexer code stay in place.
         nonces.cleanup()
 
         # Expiry tick: 30s cadence (per docs/plans/backend.md B2.4).
