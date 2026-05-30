@@ -1077,21 +1077,21 @@ describe('mountChart', () => {
 
     const series = created.charts[0].seriesList[0];
     // netPos default = on, but no balance set → no line.
-    let netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    let netLines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(netLines.length).toBe(0);
 
     // Supply a balance + break-even → line appears at the break-even price
     // (NOT the spot/last-candle-close of 11.8), styled orange via --net-pos.
     // Player default unit is 'country' → the base value (4th arg) is drawn.
     chart.setOwnBalance(player.address, 5, 8.5, 8.5);
-    netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    netLines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(netLines.length).toBe(1);
     expect(netLines[0].opts.price).toBeCloseTo(8.5, 5);
     expect(netLines[0].opts.color).toBe('#ff9500');
 
     // Disconnect → net pos line cleared (ownAddress null → no position).
     chart.setOwnAddress(null);
-    netLines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    netLines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(netLines.length).toBe(0);
   });
 
@@ -1110,15 +1110,15 @@ describe('mountChart', () => {
     // Player default unit is 'country' → renderNetPosLine picks the base
     // (4th) arg. Balance held but break-even floored at 0 → nothing to draw.
     chart.setOwnBalance(player.address, 5, 0, 0);
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(0);
 
     // Break-even omitted (defaults to 0) → still no line.
     chart.setOwnBalance(player.address, 5);
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(0);
 
     // Supplying a positive base break-even draws it.
     chart.setOwnBalance(player.address, 5, 9.25, 9.25);
-    const lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    const lines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(lines.length).toBe(1);
     expect(lines[0].opts.price).toBeCloseTo(9.25, 5);
   });
@@ -1139,7 +1139,7 @@ describe('mountChart', () => {
 
     // Player default unit is 'country' → line drawn at the base value (7).
     let series = created.charts[0].seriesList[0];
-    let lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    let lines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(lines.length).toBe(1);
     expect(lines[0].opts.price).toBeCloseTo(7, 5);
 
@@ -1148,7 +1148,7 @@ describe('mountChart', () => {
     container.querySelector('[data-test-id="chart-unit-pitch"]').click();
     await flush();
     series = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
-    lines = series.priceLines.filter((l) => l.opts?.title === 'Pos');
+    lines = series.priceLines.filter((l) => l.opts?.title === 'B/E');
     expect(lines.length).toBe(1);
     expect(lines[0].opts.price).toBeCloseTo(14, 5);
   });
@@ -1166,13 +1166,13 @@ describe('mountChart', () => {
     await flush();
 
     const series = created.charts[0].seriesList[0];
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(1);
 
     container.querySelector('[data-test-id="chart-overlay-netPos"]').click(); // off
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(0);
 
     container.querySelector('[data-test-id="chart-overlay-netPos"]').click(); // on
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(1);
   });
 
   it('stale fetch does not overwrite newer response', async () => {
@@ -1474,7 +1474,7 @@ describe('mountChart', () => {
     const seriesAfter = created.charts[0].seriesList[created.charts[0].seriesList.length - 1];
     expect(seriesAfter).not.toBe(seriesBefore);
     // Post-rebuild renderNetPosLine ran against the FRESH series.
-    expect(seriesAfter.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(1);
+    expect(seriesAfter.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(1);
   });
 
   it('setOwnBalance ignores wei-magnitude inputs and warns (issue #6 guard)', async () => {
@@ -1495,7 +1495,7 @@ describe('mountChart', () => {
     chart.setOwnBalance(player.address, 1e18);
 
     const series = created.charts[0].seriesList[0];
-    expect(series.priceLines.filter((l) => l.opts?.title === 'Pos').length).toBe(0);
+    expect(series.priceLines.filter((l) => l.opts?.title === 'B/E').length).toBe(0);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });

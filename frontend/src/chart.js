@@ -50,7 +50,7 @@ const UNIT_LABEL = { pitch: 'PITCH', country: 'Country' };
 // data (batch 4.5). Defaults reproduce mockup state: My on, Others off,
 // Avg off, Net pos on.
 const OVERLAYS = Object.freeze(['my', 'others', 'avg', 'netPos']);
-const OVERLAY_LABEL = { my: 'My', others: 'Others', avg: 'Avg buy', netPos: 'Net pos' };
+const OVERLAY_LABEL = { my: 'My', others: 'Others', avg: 'Avg buy', netPos: 'Break-even' };
 const OVERLAY_STORAGE_KEY = 'pt:chart:overlays';
 
 function readPersistedOverlays() {
@@ -991,7 +991,7 @@ export function mountChart(container, options = {}) {
         lineWidth: 1,
         lineStyle: 2, // dashed
         axisLabelVisible: true,
-        title: 'Pos',
+        title: 'B/E',
       });
     } catch {
       netPosPriceLine = null;
