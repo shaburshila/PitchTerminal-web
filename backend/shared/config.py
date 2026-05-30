@@ -24,6 +24,26 @@ MULTICALL3: Final[str] = "0xca11bde05977b3631167028862be2a173976ca11"
 WEI: Final[int] = 10**18
 FEE_BPS: Final[int] = 500
 
+# ─── External-PITCH DEX trade indexer (dex_pitch_loop) ──────────────────────
+# Base mainnet addresses involved in external PITCH<->ETH/WETH/USDC swaps.
+# These route through Uniswap V3 + V4 (we classify by token flow, NOT pool).
+PITCH_TOKEN_ADDR: Final[str] = "0xeae13ea73bec936664a51734c8c01ec7c3b0699c"
+WETH_ADDR: Final[str] = "0x4200000000000000000000000000000000000006"
+USDC_ADDR: Final[str] = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+# ERC20 Transfer(address,address,uint256) topic0.
+ERC20_TRANSFER_TOPIC: Final[str] = (
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+)
+# Default start block for the external-PITCH scanner cursor. PITCH and its
+# Uniswap pools predate HOOK_DEPLOY_BLOCK; using the hook deploy block keeps
+# the cold-start backfill bounded while still covering the period the app
+# cares about (in-app trading started at HOOK_DEPLOY_BLOCK). Override with
+# DEX_SCAN_FROM_BLOCK env to go further back. NOTE: a full backfill from a
+# very early block is expensive (the scanner reads a receipt per PITCH-touching
+# tx, and the worker caps each tick at _MAX_BLOCKS_PER_TICK so the backfill
+# catches up gradually) — lower this only with intent.
+DEX_SCAN_FROM_BLOCK_DEFAULT: Final[int] = 46_167_000
+
 # Load .env once at module import (idempotent; production injects env directly).
 load_dotenv()
 
@@ -143,6 +163,7 @@ class Config:
     order_cooldown_sec: int
     receipt_timeout_sec: int
     access_deploy_block: int  # start block for access_event_loop (0 = current head)
+    dex_scan_from_block: int  # start block for dex_pitch_loop external-PITCH scan
 
     # ─── Logging ─────────────────────────────────────────────────────────
     log_level: str
@@ -206,6 +227,7 @@ def _load() -> Config:
         # ReferralSplitUpdated. Default 0 means "use head at first start"
         # (access_bootstrap will pin it then).
         access_deploy_block=_int("ACCESS_DEPLOY_BLOCK", 0),
+        dex_scan_from_block=_int("DEX_SCAN_FROM_BLOCK", DEX_SCAN_FROM_BLOCK_DEFAULT),
         # Logging
         log_level=_optional("LOG_LEVEL", "INFO").upper(),
         # gevent detection (worker uses sync-flask; api uses gunicorn-gevent)
@@ -218,10 +240,15 @@ config: Config = _load()
 
 
 __all__ = [
+    "DEX_SCAN_FROM_BLOCK_DEFAULT",
+    "ERC20_TRANSFER_TOPIC",
     "FEE_BPS",
     "HOOK_DEPLOY_BLOCK",
     "MULTICALL3",
+    "PITCH_TOKEN_ADDR",
+    "USDC_ADDR",
     "WEI",
+    "WETH_ADDR",
     "Config",
     "ConfigError",
     "config",

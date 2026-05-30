@@ -103,6 +103,34 @@ CREATE INDEX events_trader_token_block_idx
     ON events(trader_address, token_address, block_number DESC, log_index DESC);
 
 -- =============================================================================
+-- dex_pitch_trades — внешние PITCH<->ETH/WETH/USDC свопы на DEX (Uniswap V3/V4)
+-- Пишет worker (dex_pitch_loop), читает API (/profile money-weighted ROI, stage 2).
+-- Отдельно от events: in-app PITCH<->country/player свопы НЕ имеют WETH/USDC-ноги.
+-- Без FK на tokens — PITCH/WETH/USDC там не лежат.
+-- =============================================================================
+
+CREATE TABLE dex_pitch_trades (
+    id             BIGSERIAL      PRIMARY KEY,
+    block_number   BIGINT         NOT NULL,
+    tx_hash        CHAR(66)       NOT NULL
+                                  CHECK (tx_hash ~ '^0x[0-9a-f]{64}$'),
+    log_index      INTEGER        NOT NULL,
+    trader_address CHAR(42)       NOT NULL
+                                  CHECK (trader_address ~ '^0x[0-9a-f]{40}$'),
+    direction      event_side     NOT NULL,
+    pitch_amount   NUMERIC(78, 0) NOT NULL CHECK (pitch_amount > 0),
+    quote_token    CHAR(42)       NOT NULL
+                                  CHECK (quote_token ~ '^0x[0-9a-f]{40}$'),
+    quote_amount   NUMERIC(78, 0) NOT NULL CHECK (quote_amount >= 0),
+    ts             TIMESTAMPTZ    NOT NULL,
+    UNIQUE (tx_hash, log_index)
+);
+-- Native ETH quote → quote_token = WETH 0x4200..06, quote_amount = wei.
+-- Мультилег PITCH (один своп = 2+ Transfer) агрегируется в одну строку
+-- на (tx, trader, direction), ключ = MIN(log_index).
+CREATE INDEX dex_pitch_trades_trader_idx ON dex_pitch_trades(trader_address);
+
+-- =============================================================================
 -- market_state — derived/cache: динамика по токену
 -- Пишет worker (UPSERT), читает API.
 -- =============================================================================
