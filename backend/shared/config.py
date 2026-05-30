@@ -34,6 +34,37 @@ USDC_ADDR: Final[str] = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 ERC20_TRANSFER_TOPIC: Final[str] = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 )
+
+# ─── External DEX venues to scan for candidate trade txs ────────────────────
+# Candidate-tx discovery scans Swap events in the EXTERNAL PITCH pools ONLY,
+# NOT all PITCH ERC20 Transfers (PITCH had an 89k-transfer airdrop at deploy —
+# scanning transfers cold-starts into tens of thousands of receipt fetches and
+# starves the worker, incident 2026-05-31). The receipt-based classifier then
+# accurately classifies each discovered tx (handles multi-hop deliveries).
+#
+# 1. Uniswap V3 PITCH/WETH 0.3% pool. getLogs(address=pool, topics=[V3_SWAP])
+#    → every log's tx is an external candidate.
+DEX_V3_POOL: Final[str] = "0xec44849198fbf8b6dc239df418ea7be017240368"
+# 2. Uniswap V4 PoolManager (SHARED between in-app + external swaps). We filter
+#    by the indexed poolId (topic1) so getLogs returns ONLY ETH/PITCH external
+#    swaps — this excludes the in-app country/PITCH pool and airdrop noise.
+DEX_V4_POOL_MANAGER: Final[str] = "0x498581ff718922c3f8e6a244956af099b2652b2b"
+# Uniswap V3 Swap(address,address,int256,int256,uint160,uint128,int24) topic0.
+V3_SWAP_TOPIC: Final[str] = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+# Uniswap V4 PoolManager.Swap(bytes32 id, address sender, ...) topic0.
+V4_SWAP_TOPIC: Final[str] = "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f"
+# The EXTERNAL ETH/PITCH V4 poolId (indexed topic1). Filtering on this returns
+# ONLY ETH/PITCH swaps and EXCLUDES the in-app country/PITCH poolId
+# (0x1660e4dafc17907854cc0f46362b720d3b6090bb60585a5e7a4c040dd4caec1e).
+V4_EXTERNAL_POOL_ID: Final[str] = (
+    "0xacd168b06cfb4ed3a7701d64752e7667f1e6063e05144cec1883b5b5fd91633a"
+)
+# Per-tick wall-clock budget (seconds). A tick processes the range in chunks,
+# checkpointing the cursor AFTER EACH CHUNK, and stops starting new chunks once
+# this budget is exceeded — so a slow cold-start can never starve the worker
+# (keeper / price loops run after this loop). A tick yields within ~budget +
+# one chunk.
+DEX_TICK_BUDGET_SEC: Final[float] = 15.0
 # Default start block for the external-PITCH scanner cursor = the PITCH token's
 # deployment block (verified on-chain via eth_getCode binary search). PITCH and
 # its Uniswap pools PREDATE the in-app hook deploy block, so external DEX trading
@@ -242,12 +273,18 @@ config: Config = _load()
 
 __all__ = [
     "DEX_SCAN_FROM_BLOCK_DEFAULT",
+    "DEX_TICK_BUDGET_SEC",
+    "DEX_V3_POOL",
+    "DEX_V4_POOL_MANAGER",
     "ERC20_TRANSFER_TOPIC",
     "FEE_BPS",
     "HOOK_DEPLOY_BLOCK",
     "MULTICALL3",
     "PITCH_TOKEN_ADDR",
     "USDC_ADDR",
+    "V3_SWAP_TOPIC",
+    "V4_EXTERNAL_POOL_ID",
+    "V4_SWAP_TOPIC",
     "WEI",
     "WETH_ADDR",
     "Config",
