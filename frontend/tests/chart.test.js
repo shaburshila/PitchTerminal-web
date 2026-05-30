@@ -253,12 +253,13 @@ describe('mountChart', () => {
     expect(api.getChart).toHaveBeenCalledWith('0xaaa1', '1h', 'country');
     expect(created.charts.length).toBe(1);
     const series = created.charts[0].seriesList[0];
-    // Default type is `line` (see docs/known-issues.md #1 — candles look empty
-    // with sparse trades). Line data is {time, value} derived from candle.close.
+    // Line data is {time, value} built from real trades (points), NOT candle
+    // closes — so the line reaches actual execution prices and a fill/break-
+    // even sits ON the line at any tf. Only buy/sell points; 'spot' filtered.
     expect(series.kind).toBe('line');
     expect(series.data).toEqual([
-      { time: 1709000000, value: 10.5 },
-      { time: 1709000300, value: 11.8 },
+      { time: 1709000100, value: 10.7 },
+      { time: 1709000200, value: 11.2 },
     ]);
     // Markers: only buy + sell points, "spot" is filtered out.
     expect(series.markers.length).toBe(2);
@@ -323,6 +324,62 @@ describe('mountChart', () => {
     expect(kinds).toContain('candle');
     const candleSeries = chartInst.seriesList.find((s) => s.kind === 'candle');
     expect(candleSeries.data).toEqual(makeChartPayload().candles);
+  });
+
+  it('hides the timeframe selector in line mode, shows it in candle mode', async () => {
+    const { lib } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    const tfGroup = container.querySelector('[data-test-id="chart-tf"]');
+    // Default type is line → tf is meaningless (line plots raw trades) → hidden.
+    expect(tfGroup.hidden).toBe(true);
+
+    chart.setToken(makePlayer());
+    await flush();
+    container.querySelector('[data-test-id="chart-type-candles"]').click();
+    await flush();
+    expect(tfGroup.hidden).toBe(false);
+
+    container.querySelector('[data-test-id="chart-type-line"]').click();
+    await flush();
+    expect(tfGroup.hidden).toBe(true);
+  });
+
+  it('toolbar control order is Unit → Type → Timeframe', () => {
+    const { lib } = makeChartLib();
+    mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    const toolbar = container.querySelector('[data-test-id="chart-toolbar"]');
+    const groups = [...toolbar.children].filter((c) =>
+      ['chart-unit', 'chart-type', 'chart-tf'].includes(c.dataset.testId),
+    );
+    expect(groups.map((g) => g.dataset.testId)).toEqual(['chart-unit', 'chart-type', 'chart-tf']);
+  });
+
+  it('line plots raw trades and clamps time strictly-monotonically', async () => {
+    const { lib, created } = makeChartLib();
+    // Two trades sharing a timestamp (same block) must not collapse/crash the
+    // line — backend disambiguates via a sub-second offset, and we clamp here.
+    const api = makeApi(
+      makeChartPayload({
+        points: [
+          { time: 1709000100, price: 10.7, volume: 5, type: 'buy', trader: '0xabc' },
+          { time: 1709000100, price: 9.2, volume: 2, type: 'sell', trader: '0xdef' },
+          { time: 1709000200, price: 11.0, volume: 1, type: 'buy', trader: '0xabc' },
+        ],
+      }),
+    );
+    const chart = mountChart(container, { apiClient: api, chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+
+    const series = created.charts[0].seriesList[0];
+    expect(series.kind).toBe('line');
+    // Three real trades → three points; the duplicate timestamp is bumped so
+    // the series is strictly increasing (lightweight-charts rejects ties).
+    expect(series.data.length).toBe(3);
+    for (let i = 1; i < series.data.length; i += 1) {
+      expect(series.data[i].time).toBeGreaterThan(series.data[i - 1].time);
+    }
+    expect(series.data.map((d) => d.value)).toEqual([10.7, 9.2, 11.0]);
   });
 
   // B1 — Candle / line / marker colours read from tokens.css (--up / --down /
@@ -702,6 +759,30 @@ describe('mountChart', () => {
     chart.applyTrade({ token: '0xaaa1', type: 'buy', time: 1709000500, price: 12.0 });
     expect(series.markers.length).toBe(3);
     expect(series.markers[2].position).toBe('belowBar');
+  });
+
+  it('applyTrade updates markers only — never the line series itself (invariant)', async () => {
+    // The line is driven exclusively by applyPrice (trailing point) and
+    // rebuildSeries (setData). applyTrade must not call series.update/setData,
+    // or it would desync lineLiveTime / break strict-monotonic time. Guards
+    // against a future change re-introducing the portable-version "line jumps
+    // back" bug.
+    const { lib, created } = makeChartLib();
+    const chart = mountChart(container, { apiClient: makeApi(), chartLibFactory: () => lib });
+    chart.setToken(makePlayer());
+    await flush();
+    const series = created.charts[0].seriesList[0];
+    expect(series.kind).toBe('line');
+    series.update.mockClear();
+    series.setData.mockClear();
+
+    chart.applyTrade({ token: '0xaaa1', type: 'buy', time: 1709000500, price: 12.0 });
+
+    // Confirm applyTrade actually ran to completion (no silent early-return),
+    // so the negative assertions below are meaningful and not vacuously green.
+    expect(series.setMarkers).toHaveBeenCalled();
+    expect(series.update).not.toHaveBeenCalled();
+    expect(series.setData).not.toHaveBeenCalled();
   });
 
   it('applyTrade accepts SSE shape with `timestamp` field (api-spec §8.3)', async () => {

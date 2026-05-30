@@ -1021,6 +1021,14 @@ body.mode-dashboard .pt-profile {
   display: none;
 }
 
+/* Same specificity fix for the timeframe group: it's hidden in line mode
+   (the line plots raw trades, so tf aggregation is meaningless there).
+   `.pt-chart__tf` is `display: inline-flex` above, so the UA `[hidden]` rule
+   needs an explicit override. */
+.pt-chart__tf[hidden] {
+  display: none;
+}
+
 /* Overlay-checkboxes (My / Others / Avg buy / Net pos) — Batch 4, closes
    known-issues #3. Inline in the toolbar row, right-aligned via margin-left
    auto, with a separator on the left edge — mirrors a-main.html .tb-check

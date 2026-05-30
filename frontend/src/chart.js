@@ -423,9 +423,13 @@ export function mountChart(container, options = {}) {
     overlayGroup.appendChild(btn);
   }
 
-  toolbar.appendChild(tfGroup);
-  toolbar.appendChild(typeGroup);
+  // Order: Unit → Type → Timeframe. Unit is the top-level context (what we
+  // price in), Type decides whether tf is even meaningful, and tf is a
+  // sub-option of candles — so it sits last and gets hidden in line mode
+  // (applyTfVisibility) without shifting the controls to its left.
   toolbar.appendChild(unitGroup);
+  toolbar.appendChild(typeGroup);
+  toolbar.appendChild(tfGroup);
   toolbar.appendChild(overlaySep);
   toolbar.appendChild(overlayGroup);
 
@@ -646,6 +650,14 @@ export function mountChart(container, options = {}) {
 
   let avgPriceLine = null;
   let netPosPriceLine = null;
+  // Line-mode live-tick trailing point. The line plots real trades
+  // (state.points); a live spot tick is not a trade, so it rides as a single
+  // trailing point at a fixed time just past the last trade. Fixing the time
+  // lets repeated ticks overwrite it (series.update with same time) instead of
+  // marching the X axis or violating lightweight-charts' strictly-increasing
+  // time rule. Recomputed by setSeriesData on every line (re)build; null until
+  // the first line build / when there is no line data.
+  let lineLiveTime = null;
   let crosshairUnsub = null;
   let visibleRangeUnsub = null;
   // Phase 1.5 follow-up: between ensureChartInstance() awaiting and the
@@ -823,12 +835,46 @@ export function mountChart(container, options = {}) {
     }
   }
 
+  /**
+   * Line-chart data points. Unlike candles (which expose only `close` per
+   * bucket), the line plots every real trade from `state.points`, so it
+   * reaches actual execution prices — intra-bucket wicks/squeezes stay visible
+   * at any timeframe, and a fill/break-even price always sits ON the line
+   * rather than "above the graph" on a coarse tf.
+   *
+   * `points` already carry a sub-second (log_index) offset from the backend to
+   * disambiguate trades sharing a block timestamp, but we still clamp the time
+   * strictly-monotonically here: lightweight-charts rejects equal/decreasing
+   * `time` on setData, and two distinct blocks can (rarely) share a timestamp.
+   * Points are backend-sorted by (block, log_index); we keep that order.
+   */
+  function buildLineData() {
+    const out = [];
+    let prevTime = -Infinity;
+    for (const p of state.points) {
+      // Real trades only — same filter as computeMarkers. Excludes any
+      // synthetic 'spot' point so the line stays a record of executions.
+      if (!p || (p.type !== 'buy' && p.type !== 'sell')) continue;
+      const value = Number(p.price);
+      let time = Number(p.time);
+      if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(time)) continue;
+      if (time <= prevTime) time = prevTime + 1e-3;
+      out.push({ time, value });
+      prevTime = time;
+    }
+    return out;
+  }
+
   function setSeriesData(s) {
     if (!s) return;
     if (state.type === 'candles') {
       if (typeof s.setData === 'function') s.setData(state.candles);
     } else {
-      const lineData = state.candles.map((c) => ({ time: c.time, value: c.close }));
+      const lineData = buildLineData();
+      // Seed the live-tick trailing point just past the last real trade so
+      // applyPrice can ride spot ticks without breaking monotonicity. Null
+      // when there are no trades (applyPrice falls back to the candle time).
+      lineLiveTime = lineData.length ? lineData[lineData.length - 1].time + 1 : null;
       if (typeof s.setData === 'function') s.setData(lineData);
     }
     if (typeof s.setMarkers === 'function') {
@@ -1048,6 +1094,14 @@ export function mountChart(container, options = {}) {
     }
   }
 
+  function applyTfVisibility() {
+    // Timeframe only aggregates candles. In line mode the chart plots raw
+    // trades, so switching tf changes nothing — hide the selector to avoid the
+    // "I click 1h/5m and the line doesn't move" confusion. tf sits last in the
+    // toolbar, so hiding it doesn't shift the other controls.
+    tfGroup.hidden = state.type === 'line';
+  }
+
   function applyUnitVisibility() {
     // Countries are denominated only in PITCH — hide the toggle entirely.
     // Same kind-detection caveat as applyPrice: sidebar selections lack the
@@ -1122,6 +1176,7 @@ export function mountChart(container, options = {}) {
     if (!TYPES.includes(t) || t === state.type) return;
     state.type = t;
     applyToolbarAria();
+    applyTfVisibility();
     rebuildSeries().catch((err) => {
       console.error('mountChart: rebuildSeries failed', err);
     });
@@ -1310,7 +1365,14 @@ export function mountChart(container, options = {}) {
     if (state.type === 'candles') {
       if (typeof series.update === 'function') series.update(updated);
     } else if (typeof series.update === 'function') {
-      series.update({ time: updated.time, value: updated.close });
+      // Line plots real trades, so the live spot tick can't reuse the candle
+      // bucket time (that would be earlier than the last trade point and
+      // lightweight-charts rejects an update in the past). Ride it as one
+      // trailing point at lineLiveTime (fixed just past the last trade);
+      // repeated ticks overwrite the same point. Fall back to the candle time
+      // only when there were no trades to seed from.
+      if (lineLiveTime == null) lineLiveTime = last.time;
+      series.update({ time: lineLiveTime, value: updated.close });
     }
     // Net-pos line tracks current spot — refresh when price ticks.
     if (state.show.netPos) renderNetPosLine();
@@ -1342,6 +1404,13 @@ export function mountChart(container, options = {}) {
       volume: trade.volume ?? 0,
       trader: trade.trader || '',
     });
+    // INVARIANT: we update markers only, never the line series itself. The
+    // line is driven exclusively by applyPrice (trailing live point) and
+    // rebuildSeries (full setData). Pushing the trade here without touching
+    // the series keeps lineLiveTime valid against what the series actually
+    // holds; the new trade joins the line on the next rebuild. Do NOT add a
+    // series.update() here without also re-seeding lineLiveTime — and mind
+    // that trade.price denomination may differ from the active unit.
     if (series && typeof series.setMarkers === 'function') {
       series.setMarkers(computeMarkers());
     }
@@ -1459,6 +1528,7 @@ export function mountChart(container, options = {}) {
   // Initial state.
   applyToolbarAria();
   applyUnitVisibility();
+  applyTfVisibility();
   renderStats();
   renderStatus();
 
