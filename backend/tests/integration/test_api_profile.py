@@ -596,6 +596,50 @@ class TestFeesHistorical:
         assert body["summary"]["feesPaidPitch"] == pytest.approx(0.5, abs=0.01)
 
 
+class TestVolumeHistorical:
+    """volumePitch / avgTradePitch / per-trade valuePitch convert each trade's
+    notional at its HISTORICAL country→PITCH rate (Этап 2 of the migration)."""
+
+    def test_player_value_uses_historical_country_rate(self, app) -> None:
+        # Same country price history as the fee test: block 100 → 2, block 200 → 4.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(200, 0, _COUNTRY, _WALLET, "sell", 20 * 10**18, 5 * 10**18, 0)
+        # Player buy at block 300: notional 4 country tokens. Nearest country
+        # price (ts <= trade) is block 200 = 4 → historical valuePitch = 4 * 4 = 16.
+        # Current market_state country price is 3 (seed) → the old current-rate
+        # bug would give 4 * 3 = 12.
+        _insert_event(300, 0, _PLAYER, _WALLET, "buy", 4 * 10**18, 2 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+
+        # Per-trade valuePitch on the player row uses the historical rate.
+        player_trade = next(t for t in body["trades"]["items"] if t["kind"] == "player")
+        assert player_trade["valuePitch"] == pytest.approx(16.0, abs=0.01)
+
+        # volumePitch = 10 (country buy, rate 1) + 20 (country sell, rate 1) + 16 (player) = 46.
+        assert body["stats"]["volumePitch"] == pytest.approx(46.0, abs=0.01)
+        # avgTradePitch = 46 / 3 trades.
+        assert body["stats"]["avgTradePitch"] == pytest.approx(46.0 / 3, abs=0.01)
+
+    def test_country_value_is_pitch_denominated(self, app) -> None:
+        # Country-token notional is already PITCH (rate is identically 1).
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True):
+            resp = client.get("/api/v1/profile")
+        body = resp.get_json()
+        country_trade = next(t for t in body["trades"]["items"] if t["kind"] == "country")
+        assert country_trade["valuePitch"] == pytest.approx(10.0, abs=0.01)
+        assert body["stats"]["volumePitch"] == pytest.approx(10.0, abs=0.01)
+
+
 class TestZeroBuyClosedPositions:
     """Bug #1: tokens SOLD with zero buy events (airdrops / icon-packs) must
     still surface as closed positions and count toward win-rate."""

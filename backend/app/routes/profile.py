@@ -381,20 +381,20 @@ def _resolve_target_wallet(raw: str | None) -> str:
         raise AssertionError("unreachable") from err
 
 
-def _build_trade_item(ev: Event, meta: dict[str, Any], fee_pitch: float) -> dict[str, Any]:
+def _build_trade_item(
+    ev: Event, meta: dict[str, Any], fee_pitch: float, value_pitch: float
+) -> dict[str, Any]:
     """Serialize a single wallet trade per spec §6.1 ``trades.items[*]``.
 
-    ``fee_pitch`` is the PITCH-denominated commission for this trade, converted
-    at the trade's *historical* country→PITCH rate by the caller (see
-    ``_fee_pitch``). ``valuePitch`` still uses the current rate — that's the
-    volume layer, migrated to historical separately.
+    ``fee_pitch`` and ``value_pitch`` are the PITCH-denominated commission and
+    trade notional (``base_value``) for this trade, both converted at the
+    trade's *historical* country→PITCH rate by the caller (see ``_fee_pitch`` /
+    ``_value_pitch``).
     """
 
     base_val = to_display_units(ev["base_value"])
     token_val = to_display_units(ev["token_value"])
     fee_val = to_display_units(ev["fee"])
-    rate = float(meta.get("country_price_pitch", 0.0))
-    value_pitch = base_val * rate
     price = (base_val / token_val) if token_val > 0 else 0.0
     gross = base_val - fee_val if ev["side"] == "buy" else base_val + fee_val
     market_price = (gross / token_val) if token_val > 0 else 0.0
@@ -433,25 +433,51 @@ def _build_hist(token_meta: dict[str, dict[str, Any]]) -> HistoricalPrices:
     return HistoricalPrices(load_price_timelines(timeline_tokens), fallback_pitch)
 
 
+def _country_rate_at(meta: dict[str, Any], ts: int, hist: HistoricalPrices) -> float:
+    """The country→PITCH conversion rate for one trade, at its *historical* ts.
+
+    Country tokens transact in PITCH directly, so the rate is identically 1.
+    Player tokens transact in their country token, so the rate is the country's
+    PITCH price as of the trade timestamp. Falls back to the current rate
+    (``country_price_pitch``) when the event has no usable timestamp or no
+    resolved country address.
+    """
+
+    if meta.get("kind") == "country":
+        return 1.0
+    country_addr = meta.get("country_address")
+    if not country_addr or ts <= 0:
+        return float(meta.get("country_price_pitch", 0.0))
+    return hist.price_at_pitch(country_addr, "country", None, ts)
+
+
 def _fee_pitch(ev: Event, meta: dict[str, Any], hist: HistoricalPrices) -> float:
     """Commission of one trade in PITCH, at the trade's *historical* rate.
 
-    Country tokens: ``fee`` is already PITCH (rate is identically 1). Player
-    tokens: the fee was paid in country tokens, so convert at the country→PITCH
-    price as of the trade timestamp. Falls back to the current rate only when
-    the event has no usable timestamp.
+    ``fee`` is denominated in the token's base currency (PITCH for country
+    tokens, the country token for players); convert it at the trade's historical
+    country→PITCH rate (see :func:`_country_rate_at`).
     """
 
     fee_d = to_display_units(ev["fee"])
     if fee_d == 0.0:
         return 0.0
-    if meta.get("kind") == "country":
-        return fee_d
-    country_addr = meta.get("country_address")
-    ts = int(ev["timestamp"])
-    if not country_addr or ts <= 0:
-        return fee_d * float(meta.get("country_price_pitch", 0.0))
-    return fee_d * hist.price_at_pitch(country_addr, "country", None, ts)
+    return fee_d * _country_rate_at(meta, int(ev["timestamp"]), hist)
+
+
+def _value_pitch(ev: Event, meta: dict[str, Any], hist: HistoricalPrices) -> float:
+    """Trade notional (``base_value``) in PITCH, at the trade's *historical* rate.
+
+    The volume layer of the profile: ``base_value`` is denominated in the
+    token's base currency (PITCH for country tokens, the country token for
+    players), so it is converted at the same historical country→PITCH rate as
+    the fee. Mirrors :func:`_fee_pitch`.
+    """
+
+    base_d = to_display_units(ev["base_value"])
+    if base_d == 0.0:
+        return 0.0
+    return base_d * _country_rate_at(meta, int(ev["timestamp"]), hist)
 
 
 @bp.get("/api/v1/profile")
@@ -505,6 +531,17 @@ def get_profile() -> Any:
         for ev in events
     }
     fees_pitch = sum(fee_pitch_by_ev.values())
+
+    # Per-trade notional in PITCH at each trade's historical country→PITCH rate
+    # (the volume layer, migrated off the current-rate approximation). Keyed by
+    # (block, log_index) so the trades-page slice and the ``volumePitch`` stat
+    # reuse the single conversion.
+    value_pitch_by_ev: dict[tuple[int, int], float] = {
+        (int(ev["block_number"]), int(ev["log_index"])): _value_pitch(
+            ev, token_meta.get(ev["token_address"], {}), hist
+        )
+        for ev in events
+    }
 
     positions: list[dict[str, Any]] = []
     closed: list[dict[str, Any]] = []
@@ -669,6 +706,7 @@ def get_profile() -> Any:
             ev,
             token_meta.get(ev["token_address"], {}),
             fee_pitch_by_ev[(int(ev["block_number"]), int(ev["log_index"]))],
+            value_pitch_by_ev[(int(ev["block_number"]), int(ev["log_index"]))],
         )
         for ev in page
     ]
@@ -677,11 +715,9 @@ def get_profile() -> Any:
     buys = sum(int(a["buys"]) for a in agg.values())
     sells = sum(int(a["sells"]) for a in agg.values())
     total_trades = len(events)
-    volume_pitch = sum(
-        to_display_units(ev["base_value"])
-        * float(token_meta.get(ev["token_address"], {}).get("country_price_pitch", 0.0))
-        for ev in events
-    )
+    # Volume layer: sum of each trade's notional in PITCH at its historical rate
+    # (same per-event conversion the trade items use).
+    volume_pitch = sum(value_pitch_by_ev.values())
     avg_trade_pitch = (volume_pitch / total_trades) if total_trades else 0.0
     win_rate = (closed_wins / closed_count * 100) if closed_count else 0.0
     best = max(pnl_by_symbol.items(), key=lambda kv: kv[1], default=None)
