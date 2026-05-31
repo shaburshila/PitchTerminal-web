@@ -122,8 +122,12 @@ def _scan_swap_candidate_txs(
     from_block: int,
     to_block: int,
     chunk_size: int,
-) -> set[str]:
-    """Return tx hashes of EXTERNAL PITCH swaps in ``[from_block, to_block]``.
+) -> dict[str, int]:
+    """Return ``{tx_hash -> block_number}`` of EXTERNAL PITCH swaps in the range.
+
+    The block number is kept so the receipt loop can process candidates in BLOCK
+    ORDER and the caller can advance the cursor to the last FULLY-processed block
+    when the per-tick deadline cuts a dense chunk short (forward progress).
 
     Two topic-filtered ``eth_getLogs`` per chunk over the external PITCH pools:
 
@@ -141,12 +145,12 @@ def _scan_swap_candidate_txs(
     """
 
     if from_block > to_block:
-        return set()
+        return {}
 
     v3_pool = Web3.to_checksum_address(DEX_V3_POOL)
     v4_manager = Web3.to_checksum_address(DEX_V4_POOL_MANAGER)
 
-    candidates: set[str] = set()
+    candidates: dict[str, int] = {}
     for start in range(from_block, to_block + 1, chunk_size):
         end = min(start + chunk_size - 1, to_block)
         v3_logs = w3.eth.get_logs(
@@ -167,7 +171,11 @@ def _scan_swap_candidate_txs(
         )
         for raw in (*v3_logs, *v4_logs):
             tx_hash = raw["transactionHash"] if isinstance(raw, dict) else raw.transactionHash
-            candidates.add(_hexstr(tx_hash))
+            block = int(raw["blockNumber"] if isinstance(raw, dict) else raw.blockNumber)
+            # A tx lives in exactly one block; keep the min seen defensively.
+            key = _hexstr(tx_hash)
+            if key not in candidates or block < candidates[key]:
+                candidates[key] = block
     return candidates
 
 
@@ -181,56 +189,78 @@ def _hexstr(value: Any) -> str:
 
 
 def _fetch_tx_legs(
-    w3: Any, tx_hashes: set[str], deadline: float = float("inf")
-) -> tuple[list[TransferLog], dict[str, int], dict[str, str], bool]:
-    """Read the full counter-legs of each candidate swap tx from its receipt.
+    w3: Any, candidates: dict[str, int], deadline: float = float("inf")
+) -> tuple[list[TransferLog], dict[str, int], dict[str, str], int | None, bool]:
+    """Read receipt legs for candidate swap txs in BLOCK ORDER, bounded by deadline.
 
-    Returns ``(legs, values, froms, complete)``:
-    * ``legs`` — all decoded PITCH/WETH/USDC ``Transfer`` legs across the
-      processed candidate txs. Summing these correctly handles multi-leg /
-      multi-hop deliveries (e.g. a WETH->USDC->PITCH route delivering PITCH in
-      2 legs).
-    * ``values`` — ``tx.value`` (native ETH wei), only for native-ETH suspects.
-    * ``froms`` — ``tx.from`` (trader EOA), from the receipt's sender.
-    * ``complete`` — ``False`` if the per-tick wall-clock ``deadline`` cut the
-      receipt loop short (so the caller must NOT advance the cursor and re-scans
-      the chunk next tick). This is the SAFETY bound: each ``getTransactionReceipt``
-      is one RPC call (10s provider timeout), and we check the deadline BEFORE
-      every receipt, so this loop can never block the worker for more than the
-      deadline + one in-flight call — even on a pathological burst of candidates.
+    ``candidates`` is ``{tx_hash -> block_number}``. Txs are processed grouped by
+    block in ascending order; ONLY the legs of FULLY-completed blocks are
+    returned, so the caller can advance the cursor to ``last_done_block`` and
+    re-scan the rest next tick — forward progress even when a dense chunk is cut.
 
-    One ``getTransactionReceipt`` per candidate tx (bounded to ACTUAL external
-    swaps, NOT to PITCH transfer volume) and one ``getTransaction`` only per
-    native-ETH suspect. ``tx.from`` pins both the trader and the buy/sell
-    direction (pool-vs-trader is otherwise symmetric). Failures skip the tx /
-    leave value 0.
+    Returns ``(legs, values, froms, last_done_block, complete)``:
+    * ``legs`` — decoded PITCH/WETH/USDC ``Transfer`` legs of fully-done blocks
+      (summing handles multi-leg / multi-hop deliveries).
+    * ``values`` — ``tx.value`` (native ETH wei) for native-ETH suspects.
+    * ``froms`` — ``tx.from`` (trader EOA) from the receipt's sender.
+    * ``last_done_block`` — highest block whose candidates were ALL fetched, or
+      ``None`` if the deadline cut before completing even the first block.
+    * ``complete`` — ``True`` iff every candidate was processed.
+
+    SAFETY: the deadline is checked before every receipt, and each
+    ``getTransactionReceipt`` carries the 10s provider timeout, so this loop can
+    never block the worker for more than the deadline + one in-flight call,
+    regardless of candidate volume — the 2026-05-31 starvation cannot recur.
     """
 
     legs: list[TransferLog] = []
     values: dict[str, int] = {}
     froms: dict[str, str] = {}
     suspects: list[str] = []
+    last_done_block: int | None = None
     complete = True
 
-    for tx_hash in tx_hashes:
+    by_block: dict[int, list[str]] = {}
+    for tx_hash, block in candidates.items():
+        by_block.setdefault(block, []).append(tx_hash)
+
+    for block in sorted(by_block):
         if time.time() >= deadline:
             complete = False
             break
-        try:
-            rc = w3.eth.get_transaction_receipt(tx_hash)
-        except Exception:
-            log.exception("dex_pitch_loop.receipt_fetch_failed", tx_hash=tx_hash)
-            continue
-        rc_logs = rc["logs"] if isinstance(rc, dict) else rc.logs
-        # AttributeDict (web3) and plain dict both support ``["from"]``;
-        # ``.from`` is a Python keyword so attribute access is impossible.
-        sender = rc["from"]
-        if sender:
-            froms[tx_hash] = lc(sender)
-        tx_legs = [d for raw in rc_logs if (d := decode_transfer_log(raw)) is not None]
-        legs.extend(tx_legs)
-        if not any(t.token in (_WETH, _USDC) for t in tx_legs):
-            suspects.append(tx_hash)
+        block_legs: list[TransferLog] = []
+        block_froms: dict[str, str] = {}
+        block_suspects: list[str] = []
+        cut = False
+        for tx_hash in by_block[block]:
+            if time.time() >= deadline:
+                complete = False
+                cut = True
+                break
+            try:
+                rc = w3.eth.get_transaction_receipt(tx_hash)
+            except Exception:
+                log.exception("dex_pitch_loop.receipt_fetch_failed", tx_hash=tx_hash)
+                continue
+            rc_logs = rc["logs"] if isinstance(rc, dict) else rc.logs
+            # AttributeDict (web3) and plain dict both support ``["from"]``;
+            # ``.from`` is a Python keyword so attribute access is impossible.
+            sender = rc["from"]
+            if sender:
+                block_froms[tx_hash] = lc(sender)
+            tx_legs = [d for raw in rc_logs if (d := decode_transfer_log(raw)) is not None]
+            block_legs.extend(tx_legs)
+            if not any(t.token in (_WETH, _USDC) for t in tx_legs):
+                block_suspects.append(tx_hash)
+        if cut:
+            # Deadline cut mid-block: drop this block's partial legs (re-fetched
+            # next tick) and stop — the block is NOT marked done.
+            break
+        # Block fully processed: commit its legs and mark it done.
+        legs.extend(block_legs)
+        froms.update(block_froms)
+        suspects.extend(block_suspects)
+        last_done_block = block
 
     for tx_hash in suspects:
         try:
@@ -240,7 +270,7 @@ def _fetch_tx_legs(
             log.exception("dex_pitch_loop.tx_value_fetch_failed", tx_hash=tx_hash)
             values.setdefault(tx_hash, 0)
 
-    return legs, values, froms, complete
+    return legs, values, froms, last_done_block, complete
 
 
 def _upsert_trades(trades: list[DexTrade], timestamps: dict[int, int]) -> int:
@@ -298,7 +328,7 @@ def scan_range(w3: Any, from_block: int, to_block: int, chunk_size: int) -> list
 
     # No deadline here — this is the full-scan validation/convenience API. The
     # worker tick path uses _process_chunk, which passes a real deadline.
-    legs, tx_value, tx_from, _complete = _fetch_tx_legs(w3, candidate_txs)
+    legs, tx_value, tx_from, _last_done, _complete = _fetch_tx_legs(w3, candidate_txs)
     if not legs:
         return []
 
@@ -310,20 +340,25 @@ def _process_chunk(
 ) -> str:
     """Scan + classify + upsert one chunk. Returns one of:
 
-    * ``"ok"``      — chunk fully processed, cursor advanced to ``to_block``.
+    * ``"ok"``      — chunk fully processed; cursor advanced to ``to_block``.
+    * ``"partial"`` — the deadline cut a dense chunk, but ≥1 block completed;
+      cursor advanced to the last FULLY-processed block (forward progress), the
+      rest re-scanned next tick.
+    * ``"cut"``     — the deadline cut before even the first block completed (a
+      single block denser than the budget — pathological); cursor NOT advanced.
     * ``"ts_fail"`` — a block timestamp failed to resolve; cursor NOT advanced
-      (re-scanned next tick — never persist a wall-clock-guess ``ts``).
-    * ``"cut"``     — the per-tick ``deadline`` cut the receipt loop short before
-      all candidates were processed; cursor NOT advanced (the chunk is re-scanned
-      next tick; writes are idempotent so partial progress is never lost). This is
-      what keeps a candidate burst from ever blocking the worker.
+      (never persist a wall-clock-guess ``ts``).
+
+    ``"partial"``/``"cut"`` never lose data: writes are idempotent and the
+    re-scan re-discovers the unprocessed blocks.
     """
 
     candidate_txs = _scan_swap_candidate_txs(w3, from_block, to_block, chunk_size)
     complete = True
+    last_done: int | None = None
     trades: list[DexTrade] = []
     if candidate_txs:
-        legs, tx_value, tx_from, complete = _fetch_tx_legs(w3, candidate_txs, deadline)
+        legs, tx_value, tx_from, last_done, complete = _fetch_tx_legs(w3, candidate_txs, deadline)
         if legs:
             trades = classify_external_pitch_trades(legs, tx_value=tx_value, tx_from=tx_from)
 
@@ -341,12 +376,23 @@ def _process_chunk(
             "dex_pitch_loop.chunk", from_block=from_block, to_block=to_block, trades=len(trades)
         )
 
-    if not complete:
-        log.info("dex_pitch_loop.receipt_budget_cut", from_block=from_block, to_block=to_block)
-        return "cut"
-
-    state.set_int_key(CURSOR_KEY, to_block)
-    return "ok"
+    if complete:
+        state.set_int_key(CURSOR_KEY, to_block)
+        return "ok"
+    if last_done is not None:
+        # Forward progress: advance to the last fully-processed block; re-scan
+        # (last_done, to_block] next tick.
+        state.set_int_key(CURSOR_KEY, last_done)
+        log.info(
+            "dex_pitch_loop.partial_chunk",
+            from_block=from_block,
+            advanced_to=last_done,
+            chunk_end=to_block,
+        )
+        return "partial"
+    # Cut before completing even the first block — hold and re-scan.
+    log.warning("dex_pitch_loop.receipt_budget_cut", from_block=from_block, to_block=to_block)
+    return "cut"
 
 
 def tick() -> None:
@@ -385,9 +431,10 @@ def tick() -> None:
                 # healthy, so surface it as a tick failure (transient blips recover).
                 operator_alerts.record_tick_failure("dex_pitch_loop")
                 return
-            if result == "cut":
-                # The deadline cut the receipt loop mid-chunk: cursor held, chunk
-                # re-scanned next tick. A normal yield under load, not a failure.
+            if result in ("partial", "cut"):
+                # Deadline cut this chunk: "partial" already advanced the cursor to
+                # the last fully-processed block (forward progress); "cut" held it.
+                # Either way the budget is spent — yield (normal under load).
                 operator_alerts.record_tick_success("dex_pitch_loop")
                 return
             # result == "ok": chunk fully processed, cursor advanced to chunk_end.

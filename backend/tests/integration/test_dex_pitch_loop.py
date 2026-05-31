@@ -227,6 +227,20 @@ def _count_rows() -> int:
         return int(row["c"] if isinstance(row, dict) else row[0])
 
 
+class _Clock:
+    """Deterministic ``time.time`` stub: returns scripted values, then sticks on
+    the last one (so over-counting calls never IndexErrors)."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+        self._i = 0
+
+    def __call__(self) -> float:
+        v = self._values[min(self._i, len(self._values) - 1)]
+        self._i += 1
+        return v
+
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 
@@ -589,6 +603,47 @@ def test_tick_receipt_budget_cut_holds_cursor(monkeypatch: pytest.MonkeyPatch) -
     assert fake.eth.get_receipt_calls == [], "deadline must cut the receipt loop before any receipt"
     assert _count_rows() == 0
     assert state.get_int_key(dex_pitch_loop.CURSOR_KEY, -1) == -1, "cursor held for re-scan"
+
+
+def test_tick_partial_chunk_advances_to_last_done_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Forward-progress safety: when the deadline cuts a dense chunk BETWEEN blocks,
+    # the cursor must advance to the last FULLY-processed block (not be held), and
+    # the unprocessed block's receipt must NOT be fetched. Otherwise the indexer
+    # would re-scan the same chunk forever (the prod backfill stall observed after
+    # the swap-event rewrite).
+    _patch_cfg(
+        monkeypatch, dex_scan_from_block=_FROM, reorg_lag_blocks=0, chunk_blocks_default=5000
+    )
+    monkeypatch.setattr(dex_pitch_loop, "DEX_TICK_BUDGET_SEC", 100.0)
+    # Scripted clock: deadline = 0 + 100 = 100. Block b1 (+ its tx) sees t=0 (under
+    # budget); block b2's pre-check sees t=200 (over budget) → cut after b1.
+    clock = _Clock([0.0, 0.0, 0.0, 200.0])
+    monkeypatch.setattr(dex_pitch_loop.time, "time", clock)
+
+    b1, b2 = _FROM + 100, _FROM + 200
+    tx1, tx2 = "0x" + "b1" * 32, "0x" + "b2" * 32
+    swap_logs = [_v3_swap_log(block=b1, tx=tx1), _v3_swap_log(block=b2, tx=tx2)]
+    receipt_logs = {
+        tx: [
+            _transfer_log(
+                token=WETH, frm=TRADER, to=V3_POOL, value=10**17, block=blk, log_index=0, tx=tx
+            ),
+            _transfer_log(
+                token=PITCH, frm=V3_POOL, to=TRADER, value=9 * 10**18, block=blk, log_index=1, tx=tx
+            ),
+        ]
+        for tx, blk in ((tx1, b1), (tx2, b2))
+    }
+    head = b2 + 3
+    fake = _install(monkeypatch, head, swap_logs, receipt_logs)
+
+    dex_pitch_loop.tick()
+
+    # b1 fully processed → 1 row; b2 cut before its receipt was fetched.
+    assert _count_rows() == 1
+    assert fake.eth.get_receipt_calls == [tx1], "b2's receipt must NOT be fetched (cut before it)"
+    # Cursor advanced to b1 (forward progress), NOT held and NOT the full chunk end.
+    assert state.get_int_key(dex_pitch_loop.CURSOR_KEY, -1) == b1
 
 
 def test_tick_noop_when_from_block_above_head(monkeypatch: pytest.MonkeyPatch) -> None:
