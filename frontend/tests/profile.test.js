@@ -38,6 +38,9 @@ function makeProfilePayload(overrides = {}) {
       roiPct: 5.0,
       openPositions: 4,
       feesPaidPitch: 12.34,
+      externalInPitch: 100.0,
+      externalOutPitch: 30.0,
+      moneyWeightedRoiPct: -45.5,
     },
     positions: [
       {
@@ -162,6 +165,34 @@ describe('mountProfile', () => {
 
     const roi = container.querySelector('[data-test-id="profile-summary-roiPct"]');
     expect(roi.textContent).toContain('5.00%');
+
+    const extIn = container.querySelector('[data-test-id="profile-summary-externalInPitch"]');
+    expect(extIn.textContent).toContain('100.00');
+    const extOut = container.querySelector('[data-test-id="profile-summary-externalOutPitch"]');
+    expect(extOut.textContent).toContain('30.00');
+
+    const mwRoi = container.querySelector('[data-test-id="profile-summary-moneyWeightedRoiPct"]');
+    expect(mwRoi.textContent).toContain('-45.50%');
+    expect(mwRoi.classList.contains('negative')).toBe(true);
+  });
+
+  it('renders money-weighted ROI as — when null (no external buys)', async () => {
+    const { lib } = makeChartLib();
+    const api = makeApi(makeProfilePayload({
+      summary: {
+        ...makeProfilePayload().summary,
+        externalInPitch: 0.0,
+        externalOutPitch: 0.0,
+        moneyWeightedRoiPct: null,
+      },
+    }));
+    mountProfile(container, { apiClient: api, chartLibFactory: () => lib });
+    await flush();
+
+    const mwRoi = container.querySelector('[data-test-id="profile-summary-moneyWeightedRoiPct"]');
+    expect(mwRoi.textContent).toBe('—');
+    expect(mwRoi.classList.contains('negative')).toBe(false);
+    expect(mwRoi.classList.contains('positive')).toBe(false);
   });
 
   it('renders balances formatted from wei strings', async () => {

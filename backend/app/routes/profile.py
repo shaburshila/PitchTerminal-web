@@ -96,6 +96,35 @@ def _load_wallet_events(wallet: str) -> list[Event]:
     return out
 
 
+def _load_external_pitch_flows(wallet: str) -> tuple[float, float]:
+    """External-DEX PITCH flows for ``wallet`` (money-weighted ROI inputs).
+
+    Reads aggregated PITCH bought / sold for ETH/WETH/USDC from
+    ``dex_pitch_trades`` (the external-trade indexer; see
+    ``worker/dex_pitch_loop.py``). ``direction='buy'`` = PITCH acquired by
+    *spending* a quote asset → ``external_in``; ``direction='sell'`` = PITCH
+    *disposed* for a quote asset → ``external_out``. These never overlap with
+    the in-app bonding-curve trades in ``events`` (those carry no quote leg).
+
+    Returns ``(external_in_pitch, external_out_pitch)`` in display units.
+    """
+
+    rows = fetch_all(
+        "SELECT direction, COALESCE(SUM(pitch_amount), 0) AS amt "
+        "FROM dex_pitch_trades WHERE trader_address = %s "
+        "GROUP BY direction",
+        (wallet,),
+    )
+    ext_in = ext_out = 0.0
+    for r in rows:
+        amt = to_display_units(int(r["amt"]))
+        if r["direction"] == "buy":
+            ext_in = amt
+        elif r["direction"] == "sell":
+            ext_out = amt
+    return ext_in, ext_out
+
+
 def _load_all_country_addresses() -> list[str]:
     """All ``kind='country'`` token addresses, ascending — used as the
     Multicall target list for the ``balances.countries`` block."""
@@ -660,6 +689,21 @@ def get_profile() -> Any:
     total_pnl = realized_pitch + unrealized_pitch
     roi_pct = (total_pnl / spent_pitch * 100) if spent_pitch > 0 else 0.0
 
+    # ─── Money-weighted ROI (external-DEX cash basis) ──────────────────────
+    # Accounts for the real PITCH the wallet put in / took out via external
+    # DEX swaps (PITCH<->ETH/WETH/USDC), denominated in PITCH:
+    #   ROI = (current_value + external_out - external_in) / external_in
+    # ``value_pitch`` is a true current mark-to-market (positions come from
+    # on-chain balanceOf, bug #11 fix). When the wallet never bought PITCH
+    # externally (denom == 0) we return None so the frontend renders "—"
+    # rather than dividing by zero or silently falling back to gross ROI.
+    external_in_pitch, external_out_pitch = _load_external_pitch_flows(wallet)
+    money_weighted_roi = (
+        (value_pitch + external_out_pitch - external_in_pitch) / external_in_pitch * 100
+        if external_in_pitch > 0
+        else None
+    )
+
     # ─── valueSeries ───────────────────────────────────────────────────────
     # Per-trade portfolio-value series: at each wallet trade, sum
     # ``position * price_at_pitch(token, ts)`` across all tokens held at that
@@ -699,6 +743,11 @@ def get_profile() -> Any:
             "roiPct": round(roi_pct, 1),
             "openPositions": len(positions),
             "feesPaidPitch": round(fees_pitch, 2),
+            "externalInPitch": round(external_in_pitch, 2),
+            "externalOutPitch": round(external_out_pitch, 2),
+            "moneyWeightedRoiPct": (
+                round(money_weighted_roi, 1) if money_weighted_roi is not None else None
+            ),
         },
         "positions": positions,
         "closed": closed,

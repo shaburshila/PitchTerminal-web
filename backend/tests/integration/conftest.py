@@ -50,6 +50,10 @@ def _clean_tokens_table() -> Iterator[None]:
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE tokens CASCADE")
+            # dex_pitch_trades has no FK to tokens (PITCH/WETH/USDC are not
+            # token rows), so CASCADE does not reach it — truncate explicitly
+            # or external-flow rows would leak across tests.
+            cur.execute("TRUNCATE TABLE dex_pitch_trades")
         conn.commit()
     # The chart endpoint keeps a short-lived in-process event cache keyed by
     # token address (see app.routes.tokens._chart_events_cache). It survives the

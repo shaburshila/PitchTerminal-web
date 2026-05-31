@@ -134,6 +134,40 @@ def _insert_event(
         conn.commit()
 
 
+def _insert_dex_trade(
+    block: int,
+    log_index: int,
+    trader: str,
+    direction: str,
+    pitch_amount: int,
+    quote_amount: int = 10**16,
+) -> None:
+    """Insert one external-DEX PITCH swap row (money-weighted ROI source)."""
+
+    tx_hash = "0x" + f"{block * 1000 + log_index:064x}"
+    quote_token = "0x" + "42" * 20  # any non-PITCH quote (WETH-like)
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO dex_pitch_trades "
+                "(block_number, tx_hash, log_index, trader_address, direction, "
+                " pitch_amount, quote_token, quote_amount, ts) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))",
+                (
+                    block,
+                    tx_hash,
+                    log_index,
+                    trader,
+                    direction,
+                    pitch_amount,
+                    quote_token,
+                    quote_amount,
+                    1_700_000_000 + block,
+                ),
+            )
+        conn.commit()
+
+
 class TestAccessControl:
     def test_no_cookie_returns_401(self, app) -> None:
         resp = app.test_client().get("/api/v1/profile")
@@ -719,3 +753,56 @@ class TestAddressParam:
             resp = client.get(f"/api/v1/profile?address={self._OTHER}")
         assert resp.status_code == 402
         assert resp.get_json()["code"] == "access.payment_required"
+
+
+class TestMoneyWeightedRoi:
+    """Money-weighted ROI from external-DEX PITCH flows (#8 stage 2)."""
+
+    def test_no_external_trades_yields_null_roi(self, app) -> None:
+        # Wallet with no rows in dex_pitch_trades: external flows are 0 and the
+        # money-weighted ROI is None (frontend renders "—"), never a div-by-0.
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        summary = resp.get_json()["summary"]
+        assert summary["externalInPitch"] == 0.0
+        assert summary["externalOutPitch"] == 0.0
+        assert summary["moneyWeightedRoiPct"] is None
+
+    def test_aggregates_buys_and_sells_by_direction(self, app) -> None:
+        # 100 PITCH bought + 30 PITCH sold externally; no current holdings.
+        # ROI = (value + out - in) / in = (0 + 30 - 100) / 100 * 100 = -70%.
+        _insert_dex_trade(100, 0, _WALLET, "buy", 60 * 10**18)
+        _insert_dex_trade(101, 0, _WALLET, "buy", 40 * 10**18)
+        _insert_dex_trade(102, 0, _WALLET, "sell", 30 * 10**18)
+        # Another wallet's row must not bleed into this wallet's aggregate.
+        _insert_dex_trade(103, 0, _COUNTRY, "buy", 999 * 10**18)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        summary = resp.get_json()["summary"]
+        assert summary["externalInPitch"] == pytest.approx(100.0, abs=0.01)
+        assert summary["externalOutPitch"] == pytest.approx(30.0, abs=0.01)
+        assert summary["moneyWeightedRoiPct"] == pytest.approx(-70.0, abs=0.1)
+
+    def test_roi_includes_current_holdings_value(self, app) -> None:
+        # Bought 5 PITCH externally; still holds a country position worth PITCH.
+        # _COUNTRY price_pitch is seeded to 3.0 (see _seed_tokens), 5 units held
+        # => value_pitch = 15. ROI = (15 + 0 - 5) / 5 * 100 = +200%.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_dex_trade(100, 0, _WALLET, "buy", 5 * 10**18)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        summary = resp.get_json()["summary"]
+        assert summary["totalValuePitch"] == pytest.approx(15.0, abs=0.01)
+        assert summary["externalInPitch"] == pytest.approx(5.0, abs=0.01)
+        assert summary["moneyWeightedRoiPct"] == pytest.approx(200.0, abs=0.1)

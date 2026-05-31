@@ -235,7 +235,23 @@ export function mountProfile(container, opts = {}) {
         key: 'totalPnlPitch',
         sign: s.totalPnlPitch,
       },
-      { label: 'ROI', value: formatPct(s.roiPct), key: 'roiPct', sign: s.roiPct },
+      { label: 'ROI (gross)', value: formatPct(s.roiPct), key: 'roiPct', sign: s.roiPct },
+      {
+        label: 'ROI (money-weighted)',
+        value: formatPct(s.moneyWeightedRoiPct),
+        key: 'moneyWeightedRoiPct',
+        sign: typeof s.moneyWeightedRoiPct === 'number' ? s.moneyWeightedRoiPct : undefined,
+      },
+      {
+        label: 'PITCH bought (ext)',
+        value: formatNumber(s.externalInPitch, 2),
+        key: 'externalInPitch',
+      },
+      {
+        label: 'PITCH sold (ext)',
+        value: formatNumber(s.externalOutPitch, 2),
+        key: 'externalOutPitch',
+      },
       {
         label: 'Open positions',
         value: typeof s.openPositions === 'number' ? String(s.openPositions) : '—',
