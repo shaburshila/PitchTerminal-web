@@ -8,10 +8,13 @@ portable repo, with the structural changes required by the web version:
   fresh) — no RPC call in the hot path *except* for the wallet's balances
   block, which still requires a live ``eth_getBalance`` + Multicall3 batch
   (see :func:`shared.eth.wallet_balances`).
-* PITCH-denominated PnL conversion uses ``market_state.price_pitch`` of each
-  country token as the country→PITCH rate (the portable code carried a
-  ``countryPricePitch`` field on the player dict — same data, different
-  location).
+* PITCH-denominated value/fee/PnL conversion uses each trade's *historical*
+  country→PITCH rate (the country token's ``price_pitch`` as of the trade
+  timestamp, resolved via :class:`shared.price.HistoricalPrices`), not today's
+  ``market_state`` rate. Unrealized PnL is the one mixed-basis figure: the held
+  quantity's CURRENT mark-to-market value minus its historical PITCH cost basis.
+  ``market_state.price_pitch`` is still used for the *current* mark-to-market of
+  open positions ("now").
 * ``valueSeries`` samples each held token's PITCH price *at the timestamp of
   every wallet trade* (so the curve reflects historical valuation, not current
   prices applied to old holdings). The sampling is done with
@@ -543,6 +546,21 @@ def get_profile() -> Any:
         for ev in events
     }
 
+    # Per-token historical PITCH spent on buys / received from sells. These are
+    # the PnL layer's cost-basis + proceeds in PITCH at each trade's own rate
+    # (Этап 3): realized = sell_pitch - historical_avg_cost * sold; the
+    # unrealized cost basis and gross-ROI denominator (``spent_pitch``) reuse the
+    # same per-event conversion rather than today's rate.
+    buy_pitch_by_token: dict[str, float] = {}
+    sell_pitch_by_token: dict[str, float] = {}
+    for ev in events:
+        vp = value_pitch_by_ev[(int(ev["block_number"]), int(ev["log_index"]))]
+        tok = ev["token_address"]
+        if ev["side"] == "buy":
+            buy_pitch_by_token[tok] = buy_pitch_by_token.get(tok, 0.0) + vp
+        else:
+            sell_pitch_by_token[tok] = sell_pitch_by_token.get(tok, 0.0) + vp
+
     positions: list[dict[str, Any]] = []
     closed: list[dict[str, Any]] = []
     realized_pitch = 0.0
@@ -567,8 +585,11 @@ def get_profile() -> Any:
         bought = float(a["bought"])
         spent = float(a["spent"])
         received = float(a["received"])
-        # Event-derived net position: still drives realized/sold (cost-basis
-        # layer, correct as-is).
+        # Historical PITCH spent on buys / received from sells for this token
+        # (the volume layer summed per token). Drive the historical PnL below.
+        buy_pitch = buy_pitch_by_token.get(token, 0.0)
+        sell_pitch = sell_pitch_by_token.get(token, 0.0)
+        # Event-derived net position: drives sold/cost-basis quantities.
         event_position = max(float(a["position"]), 0.0)
         # Tokens actually sold (bug #6). Derive from the UNCLAMPED net
         # (``a["position"]`` before the ``max(...,0)`` floor) so that
@@ -580,9 +601,17 @@ def get_profile() -> Any:
         sold = max(bought - float(a["position"]), 0.0)
         if bought > 0:
             sold = min(sold, bought)
+        # ``avg_buy`` (country base) drives the display-only avgBuy / currentPrice
+        # fields. ``avg_buy_pitch`` is the historical PITCH cost per token bought
+        # and drives the PnL layer.
         avg_buy = (spent / bought) if bought > 0 else 0.0
+        avg_buy_pitch = (buy_pitch / bought) if bought > 0 else 0.0
 
-        realized = received - avg_buy * sold
+        # Realized PnL in PITCH at historical rates: proceeds valued at each
+        # sell's own rate (``sell_pitch``) minus the historical PITCH cost basis
+        # of the sold quantity. Zero-cost (airdrop) sells have ``avg_buy_pitch``
+        # == 0 → realized == proceeds (pure gain).
+        realized_pitch_token = sell_pitch - avg_buy_pitch * sold
 
         # CURRENT quantity = on-chain balanceOf (bug #11). When the RPC read
         # failed (``onchain_qty is None``) fall back to the event net position so
@@ -600,23 +629,27 @@ def get_profile() -> Any:
         # has zero cost basis (we never paid for it via a tracked Buy).
         cost_qty = min(position, event_position)
 
-        # Unrealized is denominated in the token's *base* (country for players,
-        # PITCH for countries). Multiply by ``rate`` to convert to PITCH.
-        unreal_base = (
-            position * meta["price_pitch"] / rate - avg_buy * cost_qty if rate > 0 else 0.0
+        # Unrealized PnL in PITCH (mixed basis, by product decision): the held
+        # quantity's CURRENT mark-to-market value (``position * price_pitch``,
+        # i.e. "now") minus its HISTORICAL PITCH cost basis. ``rate == 0`` ⇒ no
+        # current country price ⇒ contribute 0 (priceUnavailable).
+        unreal_pitch_token = (
+            position * meta["price_pitch"] - avg_buy_pitch * cost_qty if rate > 0 else 0.0
         )
-        realized_pitch += realized * rate
-        spent_pitch += spent * rate
+        realized_pitch += realized_pitch_token
+        spent_pitch += buy_pitch
         pnl_by_symbol[meta["symbol"]] = pnl_by_symbol.get(meta["symbol"], 0.0) + (
-            (realized + unreal_base) * rate
+            realized_pitch_token + unreal_pitch_token
         )
 
         is_open = position > 1e-9
         if is_open:
             pv = position * meta["price_pitch"]
             value_pitch += pv
-            unrealized_pitch += unreal_base * rate
-            cost = avg_buy * cost_qty
+            unrealized_pitch += unreal_pitch_token
+            # Historical PITCH cost basis of the still-held quantity (the
+            # unrealizedPct denominator).
+            cost = avg_buy_pitch * cost_qty
             positions.append(
                 {
                     "token": token,
@@ -630,8 +663,10 @@ def get_profile() -> Any:
                     # token's *base* (country for players); we keep that.
                     "currentPrice": round((meta["price_pitch"] / rate) if rate > 0 else 0.0, 6),
                     "valuePitch": round(pv, 2),
-                    "unrealizedPnlPitch": round(unreal_base * rate, 2),
-                    "unrealizedPct": round((unreal_base / cost * 100) if cost > 0 else 0.0, 1),
+                    "unrealizedPnlPitch": round(unreal_pitch_token, 2),
+                    "unrealizedPct": round(
+                        (unreal_pitch_token / cost * 100) if cost > 0 else 0.0, 1
+                    ),
                     # Bug #4: signal "no price data" instead of a misleading
                     # 0.000000 when the (country) PITCH rate is missing. A
                     # player whose country has no recorded price (rate == 0) or
@@ -649,16 +684,16 @@ def get_profile() -> Any:
         elif bought > 0 or received > 0:
             # Closed position. ``received > 0`` (with ``bought == 0``) catches
             # airdrop/icon-pack distributions the wallet sold but never bought
-            # (e.g. USA, HAKIMI) — bug #1. Those have ``avg_buy == 0`` so
-            # ``realized == received`` (pure proceeds, no cost basis). Product
-            # decision: a profitable zero-cost sell IS a win.
+            # (e.g. USA, HAKIMI) — bug #1. Those have ``avg_buy_pitch == 0`` so
+            # ``realized_pitch_token == sell_pitch`` (pure proceeds, no cost
+            # basis). Product decision: a profitable zero-cost sell IS a win.
             # Invariant: a token only enters ``agg`` via a buy (→ bought > 0) or
             # a sell (→ received > 0) event, so ``bought == 0 and received == 0``
             # is unreachable from current event data — this branch never silently
             # drops a token. (Would need a new non-buy/sell event side to break.)
             zero_cost = bought <= 0
             closed_count += 1
-            if realized > 0:
+            if realized_pitch_token > 0:
                 closed_wins += 1
             closed.append(
                 {
@@ -666,7 +701,7 @@ def get_profile() -> Any:
                     "symbol": meta["symbol"],
                     "kind": meta["kind"],
                     "country": meta["country"],
-                    "realizedPnlPitch": round(realized * rate, 2),
+                    "realizedPnlPitch": round(realized_pitch_token, 2),
                     "zeroCost": zero_cost,
                     "buys": int(a["buys"]),
                     "sells": int(a["sells"]),

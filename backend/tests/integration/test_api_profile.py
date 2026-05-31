@@ -640,6 +640,74 @@ class TestVolumeHistorical:
         assert body["stats"]["volumePitch"] == pytest.approx(10.0, abs=0.01)
 
 
+# Separate trader whose country trades set the historical country→PITCH timeline
+# without entering the viewed wallet's own aggregates.
+_OTHER = "0x" + "cd" * 20
+
+
+class TestPnlHistorical:
+    """realized / unrealized PnL convert at HISTORICAL rates (Этап 3).
+
+    realized = proceeds at each sell's rate - historical PITCH cost basis;
+    unrealized = current mark-to-market value - historical PITCH cost basis.
+    """
+
+    def test_realized_uses_historical_rates(self, app) -> None:
+        # Country timeline (by _OTHER, so it stays out of the wallet's agg):
+        # block 100 → 2 PITCH, block 200 → 4 PITCH.
+        _insert_event(100, 0, _COUNTRY, _OTHER, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(200, 0, _COUNTRY, _OTHER, "sell", 20 * 10**18, 5 * 10**18, 0)
+        # Wallet player buy at block 150: 4 tokens for 8 country. Country rate at
+        # ts150 = block 100 = 2 → buy_pitch = 8 * 2 = 16 (avg 4 PITCH/token).
+        _insert_event(150, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+        # Wallet player sell at block 250: 4 tokens for 12 country. Country rate
+        # at ts250 = block 200 = 4 → sell_pitch = 12 * 4 = 48.
+        _insert_event(250, 0, _PLAYER, _WALLET, "sell", 12 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # Fully exited on-chain → closed position.
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+
+        # realized = sell_pitch(48) - avg_buy_pitch(4) * sold(4) = 32.
+        # Old current-rate bug: (received 12 - avg_buy 2 * sold 4) * rate 3 = 12.
+        assert body["summary"]["realizedPnlPitch"] == pytest.approx(32.0, abs=0.01)
+        pel = next(c for c in body["closed"] if c["symbol"] == "PEL")
+        assert pel["realizedPnlPitch"] == pytest.approx(32.0, abs=0.01)
+        assert body["stats"]["winRatePct"] == pytest.approx(100.0, abs=0.1)
+        # gross-ROI denominator (spent) is the historical PITCH buy cost = 16,
+        # not spent(8) * current_rate(3) = 24 → roi = 32 / 16 = 200%.
+        assert body["summary"]["roiPct"] == pytest.approx(200.0, abs=0.1)
+
+    def test_unrealized_uses_current_value_minus_historical_cost(self, app) -> None:
+        # Country timeline: block 100 → 2 PITCH (by _OTHER).
+        _insert_event(100, 0, _COUNTRY, _OTHER, "buy", 10 * 10**18, 5 * 10**18, 0)
+        # Wallet player buy at block 150: 4 tokens for 8 country. Country rate at
+        # ts150 = 2 → buy_pitch = 16 (avg 4 PITCH/token).
+        _insert_event(150, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # Still holding all 4 on-chain (current player price_pitch = 6 from seed).
+        with _premium(has_access=True), _onchain_qty({_PLAYER: 4.0}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        pel = next(p for p in body["positions"] if p["symbol"] == "PEL")
+
+        # value = 4 * 6 = 24. cost basis (historical) = 4 * 4 = 16.
+        # unrealized = 24 - 16 = 8. Old current-rate bug: (4*6/3 - 2*4)*3 = 0.
+        assert pel["valuePitch"] == pytest.approx(24.0, abs=0.01)
+        assert pel["unrealizedPnlPitch"] == pytest.approx(8.0, abs=0.01)
+        # pct = unrealized(8) / historical cost(16) = 50%.
+        assert pel["unrealizedPct"] == pytest.approx(50.0, abs=0.1)
+        assert body["summary"]["unrealizedPnlPitch"] == pytest.approx(8.0, abs=0.01)
+        assert body["summary"]["totalPnlPitch"] == pytest.approx(8.0, abs=0.01)
+
+
 class TestZeroBuyClosedPositions:
     """Bug #1: tokens SOLD with zero buy events (airdrops / icon-packs) must
     still surface as closed positions and count toward win-rate."""
