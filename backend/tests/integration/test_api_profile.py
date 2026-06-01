@@ -224,10 +224,13 @@ class TestOnchainQtyOverridesPhantom:
     balance must be reported closed, not as an open position.
     """
 
-    def test_country_with_buys_but_zero_onchain_is_closed(self, app) -> None:
+    def test_country_with_buys_but_zero_onchain_is_neither_open_nor_closed(self, app) -> None:
         # Wallet bought 5 BRA (15 PITCH) per events, but on-chain holds 0 — the
-        # tokens were consumed buying a player (no country Sell event). Without
-        # the fix this shows a phantom 5-BRA / 15-PITCH open position.
+        # tokens were consumed buying a player (no country Sell event). It is a
+        # phantom OPEN position (covered by #11) AND must NOT be reported as a
+        # CLOSED position: it was never sold on its own hook (sells == 0), it
+        # left the wallet as input to a player buy. Counting it as a realized-0
+        # closed row polluted closedPositions / winRate.
         _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 15 * 10**18, 5 * 10**18, 0)
 
         client = app.test_client()
@@ -242,8 +245,9 @@ class TestOnchainQtyOverridesPhantom:
         assert body["positions"] == []
         assert body["summary"]["totalValuePitch"] == pytest.approx(0.0, abs=0.01)
         assert body["summary"]["unrealizedPnlPitch"] == pytest.approx(0.0, abs=0.01)
-        # The token still appears as closed (it had buy activity).
-        assert {c["symbol"] for c in body["closed"]} == {"BRA"}
+        # Neither open nor closed — consumed as input to another position.
+        assert body["closed"] == []
+        assert body["stats"]["closedPositions"] == 0
 
     def test_partial_onchain_qty_caps_value_and_cost(self, app) -> None:
         # Events say 10 BRA held; on-chain truth is only 3 (rest consumed
@@ -259,6 +263,36 @@ class TestOnchainQtyOverridesPhantom:
         assert pos["qty"] == pytest.approx(3.0, abs=1e-4)
         # value = 3 * 3 PITCH (fixture price) = 9.
         assert pos["valuePitch"] == pytest.approx(9.0, abs=0.01)
+
+    def test_phantom_country_does_not_pollute_winrate(self, app) -> None:
+        # A real closed WIN (player bought then sold for profit) co-exists with a
+        # phantom country (bought, fully consumed buying the player, 0 on-chain,
+        # never sold on its own hook). Only the player is a closed position; the
+        # phantom country must not appear in closed nor drag winRate down.
+        # Country timeline: block 100 → 2 PITCH/CTY.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        # Player buy: 4 PLR for 8 country. country rate@150 = 2 → buy_pitch = 16.
+        _insert_event(150, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
+        # Player sell: 4 PLR for 12 country. country rate@250 = 2 → sell_pitch = 24.
+        # realized = 24 - (16/4)*4 = 8 > 0 → a win.
+        _insert_event(250, 0, _PLAYER, _WALLET, "sell", 12 * 10**18, 4 * 10**18, 0)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # Both fully exited on-chain (player sold, country consumed).
+        with _premium(has_access=True), _onchain_qty({}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Only the player is a closed position — country (sells == 0) is skipped.
+        assert {c["symbol"] for c in body["closed"]} == {"PEL"}
+        assert body["stats"]["closedPositions"] == 1
+        # 1 win / 1 closed = 100%. The bug counted the realized-0 country as a
+        # second closed (loss) row → 13/8-style 50% pollution.
+        assert body["stats"]["winRatePct"] == pytest.approx(100.0, abs=0.1)
+        # The player's realized win is unchanged (the fix touches only the
+        # closed/winRate classification, not the PnL math).
+        assert body["summary"]["realizedPnlPitch"] == pytest.approx(8.0, abs=0.01)
 
 
 class TestProfileAggregates:
@@ -480,36 +514,43 @@ class TestValueSeriesHistorical:
         (via a non-wallet trader), plus a player position whose two-leg chain
         is sampled at the later timestamp.
 
+        The player buy also exercises the #11 country-subtraction in the series:
+        buying the player burns the country tokens it costs (``base_value``)
+        without a country Sell event, so the curve body must drop the spent
+        country — otherwise it carries a phantom balance and the historical
+        points over-value the portfolio (the end-of-curve cliff bug).
+
         Timeline (ts = 1_700_000_000 + block):
-          block 100  CTY  wallet  buy 5 for 10 PITCH  -> country curve = 2 PITCH
-          block 200  CTY  other   buy 5 for 30 PITCH  -> country moves to 6 PITCH
-          block 250  PLR  other   buy 3 for 6 BRA     -> player_in_country = 2
-          block 300  PLR  wallet  buy 4 for 8 BRA      (player_in_country = 2)
+          block 100  CTY  wallet  buy 10 for 20 PITCH -> country curve = 2 PITCH
+          block 200  CTY  other   buy 5  for 30 PITCH -> country moves to 6 PITCH
+          block 250  PLR  other   buy 3  for 6 BRA    -> player_in_country = 2
+          block 300  PLR  wallet  buy 4  for 8 BRA     (player_in_country = 2);
+                                  wallet spends 8 of its 10 CTY -> 2 CTY left
 
         Expected valueSeries (the two wallet-trade points):
-          @ block-100 ts: holdings {CTY:5}; country@2  -> 5 * 2          = 10
-          @ block-300 ts: holdings {CTY:5, PLR:4};
-              country@6 (nearest <= ts is block 200)    -> 5 * 6          = 30
+          @ block-100 ts: holdings {CTY:10}; country@2 -> 10 * 2          = 20
+          @ block-300 ts: holdings {CTY:10-8=2, PLR:4};
+              country@6 (nearest <= ts is block 200)    -> 2 * 6          = 12
               player@(2 country/PEL * 6 PITCH/country=12)-> 4 * 12         = 48
                                                           -----------------------
-                                                          total            = 78
+                                                          total            = 60
 
         The tail "now" point uses current market_state (fixture: CTY=3, PLR=6
-        PITCH) -> 5*3 + 4*6 = 39, which deliberately differs from 78 so a
+        PITCH) -> 2*3 + 4*6 = 30, which deliberately differs from 60 so a
         regression that reused the current price for the historical points
-        would surface as the block-300 point reading 39 instead of 78.
+        would surface as the block-300 point reading 30 instead of 60.
         """
 
         _other = "0x" + "cc" * 20
-        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 20 * 10**18, 10 * 10**18, 0)
         _insert_event(200, 0, _COUNTRY, _other, "buy", 30 * 10**18, 5 * 10**18, 0)
         _insert_event(250, 0, _PLAYER, _other, "buy", 6 * 10**18, 3 * 10**18, 0)
         _insert_event(300, 0, _PLAYER, _WALLET, "buy", 8 * 10**18, 4 * 10**18, 0)
 
         client = app.test_client()
         _set_session(client, _WALLET)
-        # Wallet currently holds 5 CTY + 4 PLR (matches event net here).
-        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0, _PLAYER: 4.0}):
+        # Wallet currently holds 2 CTY (10 bought - 8 spent on the player) + 4 PLR.
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 2.0, _PLAYER: 4.0}):
             resp = client.get("/api/v1/profile")
         body = resp.get_json()
         series = body["valueSeries"]
@@ -519,14 +560,14 @@ class TestValueSeriesHistorical:
         by_time = {pt["time"]: pt["value"] for pt in series}
         ts1 = 1_700_000_000 + 100
         ts2 = 1_700_000_000 + 300
-        assert by_time[ts1] == pytest.approx(10.0, abs=0.01)
-        assert by_time[ts2] == pytest.approx(78.0, abs=0.01)
-        # The tail point ("now") is the current-price valuation = 39, distinct
-        # from the historical block-300 point (78). Confirms the loop never
+        assert by_time[ts1] == pytest.approx(20.0, abs=0.01)
+        assert by_time[ts2] == pytest.approx(60.0, abs=0.01)
+        # The tail point ("now") is the current-price valuation = 30, distinct
+        # from the historical block-300 point (60). Confirms the loop never
         # leaked the current price into the historical points.
         tail = series[-1]
         assert tail["time"] not in (ts1, ts2)
-        assert tail["value"] == pytest.approx(39.0, abs=0.01)
+        assert tail["value"] == pytest.approx(30.0, abs=0.01)
 
     def test_sold_position_drops_out_of_later_points(self, app) -> None:
         """A token fully sold before a later trade contributes 0 to subsequent
@@ -918,3 +959,46 @@ class TestMoneyWeightedRoi:
         assert summary["totalValuePitch"] == pytest.approx(15.0, abs=0.01)
         assert summary["externalInPitch"] == pytest.approx(5.0, abs=0.01)
         assert summary["moneyWeightedRoiPct"] == pytest.approx(200.0, abs=0.1)
+
+
+class TestPositionsBasis:
+    """summary.positionsBasis flags whether CURRENT positions / value came from
+    on-chain balanceOf or fell back to the (over-counting) event basis, and the
+    money-weighted ROI is suppressed on fallback to avoid a ~5x-inflated number.
+    """
+
+    def test_basis_is_onchain_when_balanceof_succeeds(self, app) -> None:
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        # A successful (even empty) balanceOf read → on-chain basis.
+        with _premium(has_access=True), _onchain_qty({_COUNTRY: 5.0}):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        assert resp.get_json()["summary"]["positionsBasis"] == "onchain"
+
+    def test_rpc_failure_flags_events_basis_and_suppresses_money_weighted_roi(self, app) -> None:
+        # balanceOf read failed (``_fetch_onchain_qty`` → None): positions fall
+        # back to the event net (which over-counts country holdings), so value is
+        # inflated. Flag the degraded basis and suppress money-weighted ROI
+        # rather than report a wildly inflated figure with no caveat.
+        _insert_event(100, 0, _COUNTRY, _WALLET, "buy", 10 * 10**18, 5 * 10**18, 0)
+        _insert_dex_trade(100, 0, _WALLET, "buy", 5 * 10**18)
+
+        client = app.test_client()
+        _set_session(client, _WALLET)
+        with (
+            _premium(has_access=True),
+            patch.object(profile_route, "_fetch_onchain_qty", return_value=None),
+        ):
+            resp = client.get("/api/v1/profile")
+        assert resp.status_code == 200
+        summary = resp.get_json()["summary"]
+        assert summary["positionsBasis"] == "events"
+        # Suppressed despite a non-zero external_in (5 PITCH) that would normally
+        # yield a finite ROI.
+        assert summary["moneyWeightedRoiPct"] is None
+        # External flows themselves don't depend on the RPC — still reported.
+        assert summary["externalInPitch"] == pytest.approx(5.0, abs=0.01)
+        # Value falls back to the event-derived position (5 CTY * 3 = 15).
+        assert summary["totalValuePitch"] == pytest.approx(15.0, abs=0.01)

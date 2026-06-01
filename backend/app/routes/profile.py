@@ -501,6 +501,10 @@ def get_profile() -> Any:
     # On-chain quantity is the source of truth for CURRENT positions (bug #11).
     # ``None`` ⇒ RPC unavailable; fall back to event-derived position per token.
     onchain_qty = _fetch_onchain_qty(wallet, sorted(agg.keys()))
+    # Basis flag surfaced in the summary so the client knows when value /
+    # money-weighted ROI are running on the degraded event-derived fallback
+    # (which over-counts country holdings, #11) rather than on-chain truth.
+    positions_basis = "events" if onchain_qty is None else "onchain"
 
     # Historical PITCH price lookup, shared by the fee layer + valueSeries.
     hist = _build_hist(token_meta)
@@ -584,7 +588,6 @@ def get_profile() -> Any:
         rate = float(meta["country_price_pitch"])
         bought = float(a["bought"])
         spent = float(a["spent"])
-        received = float(a["received"])
         # Historical PITCH spent on buys / received from sells for this token
         # (the volume layer summed per token). Drive the historical PnL below.
         buy_pitch = buy_pitch_by_token.get(token, 0.0)
@@ -681,16 +684,23 @@ def get_profile() -> Any:
                 alloc_players += pv
             else:
                 alloc_countries += pv
-        elif bought > 0 or received > 0:
-            # Closed position. ``received > 0`` (with ``bought == 0``) catches
-            # airdrop/icon-pack distributions the wallet sold but never bought
-            # (e.g. USA, HAKIMI) — bug #1. Those have ``avg_buy_pitch == 0`` so
-            # ``realized_pitch_token == sell_pitch`` (pure proceeds, no cost
-            # basis). Product decision: a profitable zero-cost sell IS a win.
-            # Invariant: a token only enters ``agg`` via a buy (→ bought > 0) or
-            # a sell (→ received > 0) event, so ``bought == 0 and received == 0``
-            # is unreachable from current event data — this branch never silently
-            # drops a token. (Would need a new non-buy/sell event side to break.)
+        elif int(a["sells"]) > 0:
+            # Closed position — the wallet actually SOLD this token on its own
+            # hook (``sells > 0`` ⇒ ``received > 0``). Covers bought-then-sold
+            # tokens and airdrop/icon-pack distributions sold but never bought
+            # (e.g. USA, HAKIMI; ``bought == 0`` → ``avg_buy_pitch == 0`` →
+            # ``realized_pitch_token == sell_pitch``, pure proceeds). Product
+            # decision: a profitable zero-cost sell IS a win (#7).
+            #
+            # Tokens that reach position 0 with NO own-hook sell (``sells == 0``)
+            # are NOT closed trades and are skipped: a country token spent buying
+            # player tokens burns its balance without emitting a Sell on the
+            # country hook (#11), and tokens transferred out emit nothing either.
+            # Both left the wallet as INPUT to another position, not as a realized
+            # disposal — counting them as realized-0 "closed positions" inflated
+            # closedPositions / winRate (8→13 rows, winRate 87.5%→53.8% on a real
+            # wallet). Their realized/unrealized contribution is already 0
+            # (sold == 0, position == 0), so dropping them here is the only effect.
             zero_cost = bought <= 0
             closed_count += 1
             if realized_pitch_token > 0:
@@ -764,14 +774,17 @@ def get_profile() -> Any:
     # Accounts for the real PITCH the wallet put in / took out via external
     # DEX swaps (PITCH<->ETH/WETH/USDC), denominated in PITCH:
     #   ROI = (current_value + external_out - external_in) / external_in
-    # ``value_pitch`` is a true current mark-to-market (positions come from
-    # on-chain balanceOf, bug #11 fix). When the wallet never bought PITCH
-    # externally (denom == 0) we return None so the frontend renders "—"
-    # rather than dividing by zero or silently falling back to gross ROI.
+    # ``value_pitch`` is a true current mark-to-market only when positions come
+    # from on-chain balanceOf (bug #11 fix). We return None (frontend renders
+    # "—") when either the wallet never bought PITCH externally (denom == 0, no
+    # div-by-zero / no silent fallback to gross ROI) OR positions fell back to
+    # the event-derived basis (``onchain_qty is None``): there ``value_pitch``
+    # over-counts country holdings, which would quintuple the reported ROI — a
+    # suppressed "—" is safer than a 5x-inflated number with no caveat.
     external_in_pitch, external_out_pitch = _load_external_pitch_flows(wallet)
     money_weighted_roi = (
         (value_pitch + external_out_pitch - external_in_pitch) / external_in_pitch * 100
-        if external_in_pitch > 0
+        if external_in_pitch > 0 and onchain_qty is not None
         else None
     )
 
@@ -787,17 +800,34 @@ def get_profile() -> Any:
     series_map: dict[int, float] = {}
 
     for ev in events:  # block-sorted ASC
+        tok = ev["token_address"]
+        meta_ev = token_meta.get(tok, {})
         tv = to_display_units(ev["token_value"])
-        delta = tv if ev["side"] == "buy" else -tv
-        holdings[ev["token_address"]] = holdings.get(ev["token_address"], 0.0) + delta
+        is_buy = ev["side"] == "buy"
+        # Traded token: a buy adds it to holdings, a sell removes it.
+        holdings[tok] = holdings.get(tok, 0.0) + (tv if is_buy else -tv)
+        # For PLAYER trades the base leg is the parent COUNTRY token, which the
+        # wallet spends (buy) or receives (sell) WITHOUT a Sell/Buy event on the
+        # country hook (#11). ``base_value`` is exactly the wallet's country
+        # delta (buy = paid incl. fee; sell = net received). Mirror it on country
+        # holdings so the curve body doesn't carry phantom country balances —
+        # otherwise it over-values the portfolio (event-derived) while the tail
+        # uses on-chain value, producing a spurious end-of-curve cliff (~237
+        # PITCH on a real wallet). Country tokens themselves settle in PITCH (not
+        # a tracked token) so only the player side needs this correction.
+        if meta_ev.get("kind") == "player":
+            country_addr = meta_ev.get("country_address")
+            if country_addr:
+                bv = to_display_units(ev["base_value"])
+                holdings[country_addr] = holdings.get(country_addr, 0.0) + (-bv if is_buy else bv)
         ts = ev["timestamp"]
         if ts <= 0:
             continue
         val = 0.0
-        for tok, qty in holdings.items():
+        for held_tok, qty in holdings.items():
             if qty <= 1e-9:
                 continue
-            val += qty * _memo_price(tok, ts)
+            val += qty * _memo_price(held_tok, ts)
         series_map[ts] = round(val, 2)
     # The tail point uses current ``value_pitch`` (already computed from
     # market_state above) — this anchors the series to "now".
@@ -819,6 +849,7 @@ def get_profile() -> Any:
             "moneyWeightedRoiPct": (
                 round(money_weighted_roi, 1) if money_weighted_roi is not None else None
             ),
+            "positionsBasis": positions_basis,
         },
         "positions": positions,
         "closed": closed,
