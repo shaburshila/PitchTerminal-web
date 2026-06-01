@@ -31,6 +31,7 @@ import {
   isOnBase,
   tryAutoReconnect,
 } from '../wallet.js';
+import { logout } from '../api.js';
 import { showToast } from './toast.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
@@ -211,6 +212,18 @@ export function mountWalletChip(container, opts = {}) {
     chip.setAttribute('aria-expanded', 'false');
     try {
       await disconnectWallet();
+    } catch {
+      // best-effort
+    }
+    // Clear the backend session on a DELIBERATE disconnect. AppKit's
+    // `signOutOnDisconnect` was turned OFF (it falsely fired on page-reload's
+    // transient disconnect and wiped the still-valid session), so the explicit
+    // Disconnect button now owns the server-side logout. This path is only
+    // reached by a real user click — never on reload — so it can't recreate the
+    // reload-logout bug. Best-effort: a failed POST just leaves an orphan cookie
+    // that createStaleSessionCleanup sweeps on the next load.
+    try {
+      await logout();
     } catch {
       // best-effort
     }

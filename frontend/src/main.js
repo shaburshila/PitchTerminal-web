@@ -283,13 +283,15 @@ export function createAccountChangeHandler({ accessBanner, deps = {} } = {}) {
     });
   }
   const handler = (acc) => {
-    // Disconnect → lock UI. We do NOT POST /auth/logout from here anymore:
-    // AppKit's `signOutOnDisconnect: true` plus its `signOut` callback in
-    // siwe-config.js owns that round-trip, and its `onSignOut` hook flips
-    // the access-store to 'anon' synchronously. Calling _logout() here
-    // produced a double POST and a `'unknown' → 'anon'` flicker (AppKit's
-    // onSignOut fires `setAccessState('anon')` either before or after the
-    // 'unknown' set below, depending on microtask ordering — race).
+    // Disconnect → lock UI only. We MUST NOT POST /auth/logout from here: this
+    // passive account-change branch ALSO fires on every page RELOAD (the wallet
+    // starts disconnected before re-hydration, and WalletConnect never auto-
+    // rehydrates), so a logout here would wipe the still-valid 72h session on
+    // each reload — the exact bug that turning OFF AppKit's signOutOnDisconnect
+    // fixed. The DELIBERATE Disconnect button owns the server-side logout
+    // (wallet-chip.js onDisconnectClick); here we just lock the UI to 'anon',
+    // and accessBanner.refresh() below re-promotes to premium from the cookie
+    // when it's still valid (the reload case).
     if (!acc.isConnected || !acc.address) {
       lastSignedInAddress = null;
       // Set 'anon' directly (symmetric with onSignOut) so subscribers see a
@@ -522,10 +524,10 @@ async function bootstrapMobile(root) {
       accountUnsubs.push(onAccountChange(mobileAccountHandler));
       // Wire AppKit-managed SIWE callbacks. AppKit fires `onSignIn` after the
       // user completes the signing prompt inside its modal — we use that to
-      // promote 'connecting' → 'premium'/'free' via banner.refresh(). On
-      // `onSignOut` we let createAccountChangeHandler's disconnect branch do
-      // the cleanup (signOutOnDisconnect in siwe-config tears the wallet
-      // down too).
+      // promote 'connecting' → 'premium'/'free' via banner.refresh(). `onSignOut`
+      // fires only on an explicit AppKit sign-out (signOutOnDisconnect is OFF, so
+      // it no longer fires on the reload transient-disconnect) → just refresh the
+      // banner to reflect the now-anon state.
       setSiweHooks({
         onSignIn: (info) => mobileAccountHandler.markSignedIn(info?.address ?? null),
         onSignOut: () => accessBanner.refresh().catch(() => {}),

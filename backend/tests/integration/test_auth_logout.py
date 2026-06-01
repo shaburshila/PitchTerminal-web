@@ -26,3 +26,19 @@ def test_logout_clears_cookie(app) -> None:
     assert "HttpOnly" in cookie_header
     assert "SameSite=Lax" in cookie_header
     assert "Path=/" in cookie_header
+
+
+def test_cookie_not_secure_when_disabled() -> None:
+    # SESSION_COOKIE_SECURE off (local HTTP dev default) → no Secure attribute,
+    # else the cookie wouldn't be sent over plain HTTP.
+    app = create_app(test_overrides={"RATELIMIT_ENABLED": False, "SESSION_COOKIE_SECURE": False})
+    resp = app.test_client().post("/api/v1/auth/logout")
+    assert "Secure" not in resp.headers.get("Set-Cookie", "")
+
+
+def test_cookie_secure_when_enabled() -> None:
+    # Production (HTTPS) sets SESSION_COOKIE_SECURE=1 (docker-compose.prod.yml)
+    # → the pt_session cookie carries the Secure attribute.
+    app = create_app(test_overrides={"RATELIMIT_ENABLED": False, "SESSION_COOKIE_SECURE": True})
+    resp = app.test_client().post("/api/v1/auth/logout")
+    assert "Secure" in resp.headers.get("Set-Cookie", "")

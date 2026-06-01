@@ -32,3 +32,10 @@ services:
       DOMAIN: ${DOMAIN:?DOMAIN is required (e.g. pitchterminal.app)}
       # ACME email для Let's Encrypt — обязателен для production-cert'ов.
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required (e.g. ops@pitchterminal.app)}
+
+  api:
+    environment:
+      # Прод обслуживается по HTTPS → ставим `Secure` на pt_session cookie
+      # (auth.py читает app.config["SESSION_COOKIE_SECURE"]). В base/override
+      # (локальный HTTP) флаг не задаётся → дефолт 0, иначе cookie не уйдёт.
+      SESSION_COOKIE_SECURE: "1"

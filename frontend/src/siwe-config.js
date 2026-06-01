@@ -226,11 +226,18 @@ export function buildSiweConfig() {
         console.error('SIWE onSignOut hook threw', err);
       }
     },
-    // When the wallet disconnects, drop the backend session too. Without
-    // this an explicit wallet disconnect would leave the orphan cookie in
-    // place until the user reconnected the same wallet (covered already by
-    // createStaleSessionCleanup, but pruning here is cheaper).
-    signOutOnDisconnect: true,
+    // MUST stay false. On a page RELOAD, AppKit re-initializes before the
+    // wallet connection re-hydrates (and WalletConnect sessions never auto-
+    // rehydrate — they need a fresh deep-link handshake), so `activeCaipAddress`
+    // is transiently empty. With `signOutOnDisconnect: true` AppKit reads that
+    // empty address as an intentional disconnect, sees our still-valid server
+    // session via getSession(), and "cleans it up" by calling signOut() →
+    // POST /auth/logout — destroying the 72h cookie that was supposed to
+    // survive the reload. The user is then silently logged out and re-prompted
+    // to sign on the next action. A genuine disconnect still clears the backend
+    // session via createAccountChangeHandler's disconnect branch + the
+    // createStaleSessionCleanup orphan sweep, so nothing leaks.
+    signOutOnDisconnect: false,
   });
 }
 

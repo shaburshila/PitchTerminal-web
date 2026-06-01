@@ -69,6 +69,10 @@ def create_app(*, test_overrides: dict[str, Any] | None = None) -> Flask:
 
     app.config["VERSION"] = os.environ.get("APP_VERSION", "dev")
     app.config["RATELIMIT_ENABLED"] = True
+    # The `pt_session` cookie (auth.py) is set with this `secure` flag. Wire it
+    # from env so production (HTTPS) gets the `Secure` attribute; defaults off
+    # for local HTTP dev. Set `SESSION_COOKIE_SECURE=1` in the prod api env.
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "0") == "1"
     if test_overrides:
         app.config.update(test_overrides)
 
