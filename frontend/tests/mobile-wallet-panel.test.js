@@ -310,6 +310,68 @@ describe('mountMobileWalletPanel — active-token sync', () => {
   });
 });
 
+describe('mountMobileWalletPanel — portfolio deep-link target', () => {
+  const ADDR = '0x71ecd1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    routerSubs.clear();
+    routerState = { tab: 'wallet', subroute: null };
+    navigateToMock.mockClear();
+    mountProfile.mockClear();
+    mountOrdersTab.mockClear();
+    mountProfileReferral.mockClear();
+    mountMyWalletTab.mockClear();
+  });
+
+  it('seeds the Profile sub-page with the deep-link address + isOwn from profileOpts', () => {
+    const container = setup();
+    mountMobileWalletPanel(container, defaultOpts({ profileOpts: { address: ADDR, isOwn: false } }));
+    expect(mountProfile).toHaveBeenCalledTimes(1);
+    const passed = mountProfile.mock.calls[0][1];
+    expect(passed.address).toBe(ADDR);
+    expect(passed.isOwn).toBe(false);
+  });
+
+  it('setTargetAddress reloads the live Profile handle when Profile is active', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    const profileHandle = mountProfile.mock.results[0].value;
+    handle.setTargetAddress(ADDR, false);
+    expect(profileHandle.reload).toHaveBeenCalledWith({ address: ADDR, isOwn: false });
+  });
+
+  it('setTargetAddress(null) reloads back to own portfolio (isOwn defaults true)', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    const profileHandle = mountProfile.mock.results[0].value;
+    handle.setTargetAddress(null);
+    expect(profileHandle.reload).toHaveBeenCalledWith({ address: null, isOwn: true });
+  });
+
+  it('setTargetAddress stored while off-Profile is applied on the next Profile mount', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    // Switch away from Profile so it is torn down.
+    container.querySelector('[data-test-id="mobile-wallet-chip-orders"]').click();
+    handle.setTargetAddress(ADDR, false);
+    mountProfile.mockClear();
+    // Switch back to Profile — the fresh mount must carry the stored target.
+    container.querySelector('[data-test-id="mobile-wallet-chip-profile"]').click();
+    expect(mountProfile).toHaveBeenCalledTimes(1);
+    const passed = mountProfile.mock.calls[0][1];
+    expect(passed.address).toBe(ADDR);
+    expect(passed.isOwn).toBe(false);
+  });
+
+  it('setTargetAddress is a no-op (no throw) when Profile is not the active sub-page', () => {
+    const container = setup();
+    const handle = mountMobileWalletPanel(container, defaultOpts());
+    container.querySelector('[data-test-id="mobile-wallet-chip-orders"]').click();
+    expect(() => handle.setTargetAddress(ADDR, false)).not.toThrow();
+  });
+});
+
 describe('mountMobileWalletPanel — mount failure retry recovery', () => {
   beforeEach(() => {
     document.body.replaceChildren();

@@ -450,8 +450,20 @@ async function bootstrapMobile(root) {
   const { mountMobileLayout } = await import('./mobile-layout.js');
   // Router bindings are used below to drive sub-page navigation from various
   // UI hooks (chart-from-markets, trade-from-chart, sidebar back-to-markets).
-  const { navigateTo, TABS } = await import('./mobile-router.js');
+  const { navigateTo, TABS, parsePortfolioPath, portfolioPath } =
+    await import('./mobile-router.js');
   const handle = mountMobileLayout(root);
+
+  // ── Portfolio deep-link (path layer over the hash tab-router) ─────────────
+  // Shareable `/portfolio/0x…` URLs mirror the desktop path shape so the same
+  // link works on both layouts. The hash router still owns the 4 bottom-nav
+  // tabs; this path layer only decides whether the initial/back-forward URL
+  // points at the Portfolio (Wallet → Portfolio chip) view of a specific
+  // wallet. `/portfolio` (no addr) = own portfolio; `/portfolio/<garbage>` =
+  // fall through to the default Markets tab.
+  const initialPortfolio = parsePortfolioPath(
+    typeof location !== 'undefined' ? location.pathname : '/',
+  );
 
   // Rotate-past-breakpoint reload (B4 decision): if the user rotates a
   // tablet into desktop width we reload so the full desktop bootstrap takes
@@ -827,8 +839,16 @@ async function bootstrapMobile(root) {
   }
 
   try {
+    // Seed the Portfolio sub-page with the deep-link target (if any). isOwn is
+    // resolved against the connected wallet — if the deep-linked address equals
+    // the session wallet we treat it as the own view (Limit-orders card shown).
+    const seedConnected = getAccount()?.address?.toLowerCase?.() ?? null;
+    const seedAddress = initialPortfolio.address;
+    const seedIsOwn = !seedAddress || (seedConnected !== null && seedAddress === seedConnected);
     walletPanelHandle = mountMobileWalletPanel(handle.panels.wallet, {
       profileOpts: {
+        address: seedAddress,
+        isOwn: seedIsOwn,
         onTokenSelect: (token) => {
           // Profile row-click → switch to Chart with that token.
           if (!token?.address) return;
@@ -863,6 +883,113 @@ async function bootstrapMobile(root) {
     });
   } catch (err) {
     console.error('bootstrapMobile: wallet panel mount failed', err);
+  }
+
+  // ── Portfolio path routing (deep-link + back/forward) ─────────────────────
+  // Drive the Wallet → Portfolio chip from `location.pathname`. Distinct from
+  // the hash tab-router: `popstate` fires on history.pushState back/forward
+  // (and NOT on hash-only changes, which fire `hashchange` instead — so the
+  // two routers don't double-handle a single navigation).
+  //
+  // `routePortfolioFromPath()` is the single source of truth: it reads the
+  // current path, re-points the profile sub-page, and switches to the Wallet
+  // tab + Portfolio chip when the path is a portfolio link. A non-portfolio
+  // path (incl. `/portfolio/<garbage>`) is left to the hash router's default
+  // (Markets) — we don't force a tab switch there.
+  // Last pathname this router acted on. Lets the popstate handler ignore
+  // history pops caused by pure HASH changes (tab switches via the mobile hash
+  // router push history entries too, but leave `location.pathname` untouched —
+  // re-routing on those would fight the hash router). Seeded to the boot path.
+  let lastRoutedPath = typeof location !== 'undefined' ? location.pathname : '/';
+  function routePortfolioFromPath({ fromPopState = false } = {}) {
+    const parsed = parsePortfolioPath(typeof location !== 'undefined' ? location.pathname : '/');
+    lastRoutedPath = typeof location !== 'undefined' ? location.pathname : '/';
+    if (!parsed.isPortfolio || !parsed.valid) {
+      // Leaving the portfolio path (e.g. back button to `/`). On mobile there's
+      // no separate dashboard — the Markets tab is the home surface — so a
+      // back-navigation out of /portfolio returns there. On initial load we do
+      // NOT force a tab (the hash router owns the default) so a deep-link like
+      // `/#/chart` on a non-portfolio path is honored.
+      if (fromPopState) navigateTo(TABS.MARKETS);
+      return;
+    }
+    const connected = getAccount()?.address?.toLowerCase?.() ?? null;
+    const isOwn = !parsed.address || (connected !== null && parsed.address === connected);
+    if (walletPanelHandle && typeof walletPanelHandle.setTargetAddress === 'function') {
+      walletPanelHandle.setTargetAddress(parsed.address, isOwn);
+    }
+    // Switch to the Wallet tab + Portfolio chip. navigateTo() updates the hash
+    // to `#/wallet/profile` and fires the wallet panel's onTabChange subscriber,
+    // which mounts the Profile sub-page (pushState already set the pathname; the
+    // hash is independent). The setActiveSub() call below is a belt-and-
+    // suspenders guard for boot orderings where that subscriber isn't attached
+    // yet — it's a no-op once Profile is already the active sub.
+    navigateTo(TABS.WALLET, 'profile');
+    if (walletPanelHandle && typeof walletPanelHandle.setActiveSub === 'function') {
+      walletPanelHandle.setActiveSub('profile');
+    }
+  }
+
+  // navigateToPortfolioMobile(address): push `/portfolio[/0x…]` and route.
+  // Exposed for any address-click surface (e.g. a future holders/trades list
+  // on mobile) so it behaves like the desktop `navigateToPortfolio`.
+  function navigateToPortfolioMobile(address = null) {
+    const path = portfolioPath(address);
+    if (typeof history !== 'undefined' && history.pushState && location.pathname !== path) {
+      history.pushState({}, '', path);
+    }
+    routePortfolioFromPath();
+  }
+  if (typeof window !== 'undefined') {
+    window.__pt_navigateToPortfolioMobile = navigateToPortfolioMobile;
+    const onPopState = () => {
+      // Ignore pops caused by pure hash changes (tab switches) — the pathname
+      // is unchanged in that case and the mobile hash router already handled
+      // them. Only re-route when the pathname actually moved.
+      const currentPath = typeof location !== 'undefined' ? location.pathname : '/';
+      if (currentPath === lastRoutedPath) return;
+      try {
+        routePortfolioFromPath({ fromPopState: true });
+      } catch (err) {
+        console.error('bootstrapMobile: popstate portfolio routing failed', err);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    const prevMqCleanup = mqCleanup;
+    mqCleanup = () => {
+      prevMqCleanup();
+      window.removeEventListener('popstate', onPopState);
+      delete window.__pt_navigateToPortfolioMobile;
+    };
+  }
+  // Re-evaluate own-vs-other when the wallet connects AFTER a portfolio
+  // deep-link. Opening `/portfolio/0x<self>` before connecting resolves
+  // `isOwn=false` (no connected address yet), which would hide the owner's
+  // Limit-orders card for the whole session. On any account change, if we're on
+  // a portfolio path, recompute `isOwn` and refresh the target. We use
+  // setTargetAddress (not the full routePortfolioFromPath) so a connect does
+  // NOT yank the user back to the Portfolio chip if they've since switched tabs
+  // — it reloads the profile only when Portfolio is the active sub, else stores
+  // the corrected isOwn for the next mount.
+  accountUnsubs.push(
+    onAccountChange(() => {
+      const parsed = parsePortfolioPath(typeof location !== 'undefined' ? location.pathname : '/');
+      if (!parsed.isPortfolio || !parsed.valid) return;
+      if (!walletPanelHandle || typeof walletPanelHandle.setTargetAddress !== 'function') return;
+      const connected = getAccount()?.address?.toLowerCase?.() ?? null;
+      const isOwn = !parsed.address || (connected !== null && parsed.address === connected);
+      walletPanelHandle.setTargetAddress(parsed.address, isOwn);
+    }),
+  );
+  // Initial deep-link: if we booted on `/portfolio[/0x…]`, land on the
+  // Portfolio view. (`/portfolio/<garbage>` is treated as not-a-deep-link by
+  // routePortfolioFromPath → stays on the default Markets tab.)
+  if (initialPortfolio.isPortfolio && initialPortfolio.valid) {
+    try {
+      routePortfolioFromPath();
+    } catch (err) {
+      console.error('bootstrapMobile: initial portfolio routing failed', err);
+    }
   }
 
   // SSE stream — same handler set as desktop, minus the bottom-tabs / orders

@@ -102,6 +102,12 @@ export function mountMobileWalletPanel(container, opts = {}) {
   }
 
   const profileOpts = opts.profileOpts ?? {};
+  // Deep-link target for the Portfolio sub-page (`/portfolio/0x…`). When set,
+  // the Portfolio chip shows ANOTHER wallet's portfolio (isOwn=false) instead
+  // of the session wallet. Seeded from profileOpts so an initial deep-link
+  // lands correctly; mutated at runtime by setTargetAddress(). Null = own.
+  let targetAddress = typeof profileOpts.address === 'string' ? profileOpts.address : null;
+  let targetIsOwn = profileOpts.isOwn !== false;
   const ordersTabOpts = opts.ordersTabOpts ?? {};
   const referralOpts = opts.referralOpts ?? {};
   const myWalletOpts = opts.myWalletOpts ?? {};
@@ -194,7 +200,14 @@ export function mountMobileWalletPanel(container, opts = {}) {
     content.replaceChildren();
     switch (sub) {
       case 'profile':
-        return mountProfile(content, profileOpts);
+        // Merge the live deep-link target over the static profileOpts so a
+        // `/portfolio/0x…` link (or a later setTargetAddress call) re-points the
+        // view at another wallet. address=null + isOwn=true → own portfolio.
+        return mountProfile(content, {
+          ...profileOpts,
+          address: targetAddress,
+          isOwn: targetIsOwn,
+        });
       case 'orders':
         return mountOrdersTab(content, ordersTabOpts);
       case 'referral':
@@ -385,6 +398,28 @@ export function mountMobileWalletPanel(container, opts = {}) {
     }
   }
 
+  /**
+   * Re-point the Portfolio sub-page at another wallet (deep-link
+   * `/portfolio/0x…`). Stores the target so a future Portfolio-chip mount picks
+   * it up, and — when Portfolio is already the active sub-page — reloads the
+   * live profile handle in place. address=null → own portfolio (isOwn=true).
+   *
+   * @param {string|null} address  Lowercase-able wallet address, or null for own.
+   * @param {boolean} [isOwn]      Defaults to (address == null).
+   */
+  function setTargetAddress(address, isOwn) {
+    targetAddress = typeof address === 'string' && address ? address : null;
+    targetIsOwn = typeof isOwn === 'boolean' ? isOwn : targetAddress === null;
+    if (activeSub !== 'profile' || !activeHandle) return;
+    if (typeof activeHandle.reload !== 'function') return;
+    try {
+      const r = activeHandle.reload({ address: targetAddress, isOwn: targetIsOwn });
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch (err) {
+      console.error('mountMobileWalletPanel: setTargetAddress reload threw', err);
+    }
+  }
+
   function destroy() {
     try {
       unsubRouter();
@@ -407,5 +442,6 @@ export function mountMobileWalletPanel(container, opts = {}) {
     getActiveSub,
     setToken,
     refreshMyWallet,
+    setTargetAddress,
   };
 }

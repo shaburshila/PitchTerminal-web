@@ -58,6 +58,71 @@ export function parseHash(hashStr) {
   return { tab, subroute };
 }
 
+/** Matches a checksum-agnostic 0x-prefixed 20-byte address. */
+const PORTFOLIO_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Pure parser for the `/portfolio[/0x…]` deep-link path (shareable URL —
+ * mirrors the desktop path shape so the same link works on both layouts).
+ * Lives here (the routing module) so both the mobile bootstrap and tests
+ * share one source of truth. Does NOT touch `window.location`.
+ *
+ * Returns:
+ *   isPortfolio  — true when the path is `/portfolio` or `/portfolio/<addr>`,
+ *                  including the garbage-address case (so the caller can route
+ *                  it away from dashboard intentionally rather than treating an
+ *                  unparseable address as "not a portfolio path").
+ *   address      — lowercased target wallet, or null for the own-portfolio
+ *                  (`/portfolio`) and garbage-address cases.
+ *   valid        — false when the path is `/portfolio/<garbage>` (a portfolio
+ *                  path with an address segment that isn't a 20-byte hex addr).
+ *
+ * Examples:
+ *   '/'                  → { isPortfolio: false, address: null, valid: true }
+ *   '/portfolio'         → { isPortfolio: true,  address: null, valid: true }
+ *   '/portfolio/0xAbC…'  → { isPortfolio: true,  address: '0xabc…', valid: true }
+ *   '/portfolio/nope'    → { isPortfolio: true,  address: null, valid: false }
+ *
+ * @param {string} pathname
+ * @returns {{ isPortfolio: boolean, address: string|null, valid: boolean }}
+ */
+export function parsePortfolioPath(pathname) {
+  if (typeof pathname !== 'string' || pathname.length === 0) {
+    return { isPortfolio: false, address: null, valid: true };
+  }
+  const m = pathname.match(/^\/portfolio(?:\/(.+?))?\/?$/);
+  if (!m) return { isPortfolio: false, address: null, valid: true };
+  const rawSeg = m[1];
+  if (rawSeg == null || rawSeg === '') {
+    return { isPortfolio: true, address: null, valid: true };
+  }
+  let raw;
+  try {
+    raw = decodeURIComponent(rawSeg);
+  } catch {
+    raw = rawSeg;
+  }
+  if (PORTFOLIO_ADDR_RE.test(raw)) {
+    return { isPortfolio: true, address: raw.toLowerCase(), valid: true };
+  }
+  // `/portfolio/<garbage>` — a portfolio path with an unparseable address.
+  return { isPortfolio: true, address: null, valid: false };
+}
+
+/**
+ * Build the canonical `/portfolio[/0x…]` path for a target address. Returns
+ * `/portfolio` for null / non-address input (own portfolio). Exported so the
+ * bootstrap and tests share one URL-shape source of truth.
+ *
+ * @param {string|null} [address]
+ * @returns {string}
+ */
+export function portfolioPath(address = null) {
+  return typeof address === 'string' && PORTFOLIO_ADDR_RE.test(address)
+    ? `/portfolio/${address.toLowerCase()}`
+    : '/portfolio';
+}
+
 function statesEqual(a, b) {
   return a.tab === b.tab && a.subroute === b.subroute;
 }

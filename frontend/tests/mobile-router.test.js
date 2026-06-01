@@ -4,6 +4,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   TABS,
   parseHash,
+  parsePortfolioPath,
+  portfolioPath,
   navigateTo,
   onTabChange,
   getActiveTab,
@@ -49,6 +51,100 @@ describe('parseHash', () => {
     expect(parseHash('#/chart').tab).toBe('chart');
     expect(parseHash('#/trade').tab).toBe('trade');
     expect(parseHash('#/wallet').tab).toBe('wallet');
+  });
+});
+
+describe('parsePortfolioPath', () => {
+  const ADDR = '0x71ecd1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  it('returns not-a-portfolio for the dashboard root', () => {
+    expect(parsePortfolioPath('/')).toEqual({ isPortfolio: false, address: null, valid: true });
+  });
+
+  it('returns not-a-portfolio for an unrelated path', () => {
+    expect(parsePortfolioPath('/markets')).toEqual({
+      isPortfolio: false,
+      address: null,
+      valid: true,
+    });
+  });
+
+  it('parses bare /portfolio as own portfolio (no address)', () => {
+    expect(parsePortfolioPath('/portfolio')).toEqual({
+      isPortfolio: true,
+      address: null,
+      valid: true,
+    });
+  });
+
+  it('parses /portfolio/ (trailing slash) as own portfolio', () => {
+    expect(parsePortfolioPath('/portfolio/')).toEqual({
+      isPortfolio: true,
+      address: null,
+      valid: true,
+    });
+  });
+
+  it('parses /portfolio/0x… and lowercases the address', () => {
+    expect(parsePortfolioPath(`/portfolio/${ADDR.toUpperCase().replace('0X', '0x')}`)).toEqual({
+      isPortfolio: true,
+      address: ADDR,
+      valid: true,
+    });
+  });
+
+  it('flags /portfolio/<garbage> as a portfolio path but invalid', () => {
+    expect(parsePortfolioPath('/portfolio/not-an-address')).toEqual({
+      isPortfolio: true,
+      address: null,
+      valid: false,
+    });
+  });
+
+  it('rejects a too-short hex segment as invalid', () => {
+    expect(parsePortfolioPath('/portfolio/0xabc')).toEqual({
+      isPortfolio: true,
+      address: null,
+      valid: false,
+    });
+  });
+
+  it('returns not-a-portfolio for non-string / empty input', () => {
+    expect(parsePortfolioPath(undefined)).toEqual({
+      isPortfolio: false,
+      address: null,
+      valid: true,
+    });
+    expect(parsePortfolioPath('')).toEqual({ isPortfolio: false, address: null, valid: true });
+  });
+
+  it('does not match a path that merely starts with /portfolio', () => {
+    expect(parsePortfolioPath('/portfolios')).toEqual({
+      isPortfolio: false,
+      address: null,
+      valid: true,
+    });
+  });
+});
+
+describe('portfolioPath', () => {
+  const ADDR = '0x71ecd1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  it('returns /portfolio for null', () => {
+    expect(portfolioPath(null)).toBe('/portfolio');
+  });
+
+  it('returns /portfolio for a non-address string', () => {
+    expect(portfolioPath('nope')).toBe('/portfolio');
+  });
+
+  it('returns /portfolio/0x… lowercased for a valid address', () => {
+    expect(portfolioPath(ADDR.toUpperCase().replace('0X', '0x'))).toBe(`/portfolio/${ADDR}`);
+  });
+
+  it('round-trips with parsePortfolioPath', () => {
+    const parsed = parsePortfolioPath(portfolioPath(ADDR));
+    expect(parsed).toEqual({ isPortfolio: true, address: ADDR, valid: true });
   });
 });
 
