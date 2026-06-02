@@ -18,13 +18,23 @@
  * compatible with the rest of the codebase (see `watchlist.js`).
  */
 
-/** @typedef {{ accessPriceWei?: string|null, buyerDiscountBps?: number|null, referralBps?: number|null, txHash?: string|null }} ConfigSnap */
+/** @typedef {{ accessPriceWei?: string|null, buyerDiscountBps?: number|null, referralBps?: number|null, feeBps?: number|null, txHash?: string|null }} ConfigSnap */
+
+/**
+ * pitchwc Hook swap fee in basis points (5% = 500). Static protocol constant
+ * served by `/api/v1/config`; seeded once on bootstrap and never updated via
+ * SSE. Defaults to 500 so callers (lib/fee.js) have a sane value before the
+ * REST config has loaded — see `DEFAULT_FEE_BPS`.
+ */
+export const DEFAULT_FEE_BPS = 500;
 
 /** @type {ConfigSnap} */
 let snapshot = {
   accessPriceWei: null,
   buyerDiscountBps: null,
   referralBps: null,
+  // Pre-bootstrap fallback — `merge()` overwrites once /config arrives.
+  feeBps: DEFAULT_FEE_BPS,
   txHash: null,
 };
 
@@ -55,7 +65,7 @@ export function merge(partial) {
   if (!partial || typeof partial !== 'object') return { ...snapshot };
   let changed = false;
   const next = { ...snapshot };
-  for (const key of ['accessPriceWei', 'buyerDiscountBps', 'referralBps', 'txHash']) {
+  for (const key of ['accessPriceWei', 'buyerDiscountBps', 'referralBps', 'feeBps', 'txHash']) {
     if (partial[key] === undefined) continue;
     if (next[key] !== partial[key]) {
       next[key] = partial[key];
@@ -70,6 +80,23 @@ export function merge(partial) {
 /** @returns {ConfigSnap} a snapshot copy. */
 export function get() {
   return { ...snapshot };
+}
+
+/**
+ * The effective pitchwc Hook fee in basis points. Reads the live config-store
+ * value, falling back to `DEFAULT_FEE_BPS` (500) if it's null/missing — e.g.
+ * before /config has loaded, or if a future SSE payload omits the field.
+ *
+ * The accepted range is `[0, 10000)`: a fee of 10000 bps (100%) or more would
+ * make the fee-factor numerator `(10000 - feeBps)` zero/negative and blow up
+ * the BigInt converters in lib/fee.js (divide-by-zero). The backend hardcodes
+ * 500, so this only guards against a malformed/hostile /config payload.
+ *
+ * @returns {number}
+ */
+export function getFeeBps() {
+  const v = snapshot.feeBps;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 10000 ? v : DEFAULT_FEE_BPS;
 }
 
 /**
@@ -88,6 +115,7 @@ export function _resetForTests() {
     accessPriceWei: null,
     buyerDiscountBps: null,
     referralBps: null,
+    feeBps: DEFAULT_FEE_BPS,
     txHash: null,
   };
   listeners.clear();

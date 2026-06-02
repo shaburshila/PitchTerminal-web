@@ -20,23 +20,31 @@
  * (18-decimal fixed point downstream). Number → loses precision past 2^53; we
  * never accept floats here, even for the bps factor.
  *
- * TODO(post-MVP): when the backend exposes `/api/v1/config.feeBps`, read it
- * from there instead of hardcoding. Until then the magic 5% lives ONLY in this
- * file — touch nowhere else.
+ * Fee source: the backend serves the fee via `/api/v1/config.feeBps`, seeded
+ * into `config-store` on bootstrap. We read it at CALL TIME (never freeze it at
+ * module-load) via `feeBps()` so the converters pick up the configured value
+ * once /config has loaded. Until then `config-store.getFeeBps()` returns its
+ * 500 (5%) pre-bootstrap default, so callers are always safe. The magic 5%
+ * still lives in exactly one place (config-store's default) — touch nowhere
+ * else.
  */
 
-/** pitchwc Hook fee in basis points (5% = 500 bps). Hardcoded — see TODO above. */
-export const FEE_BPS = 500;
-
-/** Numerator of the fee factor: (10000 - FEE_BPS). For 5% → 9500. */
-export const FEE_FACTOR_NUMERATOR = 10_000 - FEE_BPS;
+import { getFeeBps } from '../config-store.js';
 
 /** Denominator of the fee factor. Fixed at 10_000 to match basis-point math. */
 export const FEE_FACTOR_DENOMINATOR = 10_000;
 
-const NUMERATOR_BIG = BigInt(FEE_FACTOR_NUMERATOR);
 const DENOMINATOR_BIG = BigInt(FEE_FACTOR_DENOMINATOR);
-const FEE_BPS_BIG = BigInt(FEE_BPS);
+
+/**
+ * Live fee factor numerator: (10000 - feeBps). For 5% → 9500. Computed per call
+ * from the config-store so a configured fee takes effect without a reload.
+ *
+ * @returns {bigint}
+ */
+function numeratorBig() {
+  return BigInt(FEE_FACTOR_DENOMINATOR - getFeeBps());
+}
 
 /**
  * Coerce a wei input to BigInt and assert it's strictly positive. Mirrors the
@@ -97,12 +105,13 @@ function assertSide(side) {
 export function displayToExecution(displayWei, side) {
   assertSide(side);
   const value = coercePositiveWei(displayWei, 'displayWei');
+  const num = numeratorBig();
   if (side === 'limit-buy') {
     // ASK = display / 0.95 = display × 10000 / 9500
-    return (value * DENOMINATOR_BIG) / NUMERATOR_BIG;
+    return (value * DENOMINATOR_BIG) / num;
   }
   // BID = display × 0.95 = display × 9500 / 10000
-  return (value * NUMERATOR_BIG) / DENOMINATOR_BIG;
+  return (value * num) / DENOMINATOR_BIG;
 }
 
 /**
@@ -124,10 +133,11 @@ export function displayToExecution(displayWei, side) {
 export function executionToDisplay(executionWei, side) {
   assertSide(side);
   const value = coercePositiveWei(executionWei, 'executionWei');
+  const num = numeratorBig();
   if (side === 'limit-buy') {
-    return (value * NUMERATOR_BIG) / DENOMINATOR_BIG;
+    return (value * num) / DENOMINATOR_BIG;
   }
-  return (value * DENOMINATOR_BIG) / NUMERATOR_BIG;
+  return (value * DENOMINATOR_BIG) / num;
 }
 
 /**
@@ -150,18 +160,21 @@ export function executionToDisplay(executionWei, side) {
  */
 export function applyFeeToNaiveAmount(naiveWei) {
   const naive = coercePositiveWei(naiveWei, 'naiveWei');
-  const net = (naive * NUMERATOR_BIG) / DENOMINATOR_BIG;
+  const net = (naive * numeratorBig()) / DENOMINATOR_BIG;
   const fee = naive - net;
   return { net, fee, naive };
 }
 
 /**
- * Re-export for compatibility with callers that want a pre-formatted bps
- * constant without computing the fee themselves. e.g. UI breakdown text:
- *   `pitchwc fee: ${(FEE_BPS / 100).toFixed(1)}%`
+ * The live pitchwc fee in basis points, for callers that want to render it
+ * without computing the fee themselves. e.g. UI breakdown text:
+ *   `pitchwc fee: ${(feeBps() / 100).toFixed(1)}%`
  *
- * @returns {number} fee bps as a plain number (safe — always < 2^53)
+ * Reads from `config-store` at call time, so it reflects the configured fee
+ * once /config has loaded (500 default before then). Always < 2^53.
+ *
+ * @returns {number} fee bps as a plain number
  */
 export function feeBps() {
-  return Number(FEE_BPS_BIG);
+  return getFeeBps();
 }

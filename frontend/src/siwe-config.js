@@ -35,6 +35,8 @@ import {
   ApiError,
 } from './api.js';
 import { set as setAccessState } from './access-store.js';
+import { isUserRejected } from './lib/errors.js';
+import { notifyError } from './ui/toast.js';
 
 const SIWE_CHAIN_ID = 8453; // Base mainnet — see project_pitchwc_mainnet_only.md
 const SIWE_STATEMENT = 'Sign in to PitchTerminal.';
@@ -146,6 +148,14 @@ export function buildSiweConfig() {
         } catch {
           /* no-op */
         }
+        // AppKit's modal shows a generic spinner/failure; surface a concrete,
+        // classified message (network/RPC vs backend) so the user knows why
+        // sign-in stalled. Silent on the rare user-rejected case.
+        try {
+          notifyError(err, 'Could not start sign-in. Please try again.');
+        } catch {
+          /* toast is best-effort */
+        }
         throw err;
       }
     },
@@ -158,6 +168,16 @@ export function buildSiweConfig() {
         // option inside its modal. Anything else (network blip, 5xx) is
         // reported the same way — the user can re-tap Sign.
         console.warn('SIWE verifyMessage failed', err);
+        // Don't toast a deliberate decline; for real failures (network/5xx)
+        // give a concrete message so the modal's generic retry isn't the only
+        // signal the user gets.
+        if (!isUserRejected(err)) {
+          try {
+            notifyError(err, 'Sign-in failed. Please try again.');
+          } catch {
+            /* toast is best-effort */
+          }
+        }
         return false;
       }
     },

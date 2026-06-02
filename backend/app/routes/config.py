@@ -10,6 +10,10 @@ Per docs/api-spec.md §3.2:
 * ``?fresh=1`` bypasses the in-process cache and re-reads the snapshot.
 * In-process cache TTL: 60 seconds. Cache key is process-global because the
   payload is identical for all clients.
+* ``feeBps`` is the flat pitchwc Hook swap fee (5% = 500 bps), sourced from the
+  static ``shared.config.FEE_BPS`` constant. Unlike the access-config fields it
+  is NOT dynamic / SSE-updatable — it's a protocol constant exposed here so the
+  frontend reads it from config instead of hardcoding (see frontend lib/fee.js).
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from app.limits import limiter
-from shared.config import config
+from shared.config import FEE_BPS, config
 from shared.db import fetch_one
 
 bp = Blueprint("config", __name__)
@@ -83,6 +87,9 @@ def _build_payload() -> dict[str, Any]:
         "accessPriceWei": access["accessPriceWei"],
         "buyerDiscountBps": access["buyerDiscountBps"],
         "referralBps": access["referralBps"],
+        # Static pitchwc Hook swap fee (5% = 500 bps). Not from the access
+        # snapshot — a protocol constant the frontend used to hardcode.
+        "feeBps": FEE_BPS,
         "walletConnect": {"projectId": config.walletconnect_project_id},
         "limits": {
             "maxSlippageBps": config.max_slippage_bps,

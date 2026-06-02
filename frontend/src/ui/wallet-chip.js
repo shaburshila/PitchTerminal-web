@@ -32,7 +32,7 @@ import {
   tryAutoReconnect,
 } from '../wallet.js';
 import { logout } from '../api.js';
-import { showToast } from './toast.js';
+import { notifyError } from './toast.js';
 
 function el(tag, { className, dataset, attrs, text } = {}) {
   const node = document.createElement(tag);
@@ -195,9 +195,9 @@ export function mountWalletChip(container, opts = {}) {
     try {
       await connectWallet();
     } catch (e) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Failed to connect';
-      showToast(msg, { kind: 'error' });
+      // notifyError classifies network/RPC vs wallet errors and stays silent
+      // if the user simply closed the AppKit picker (rejection).
+      notifyError(e, 'Failed to connect');
     }
   }
 
@@ -233,9 +233,7 @@ export function mountWalletChip(container, opts = {}) {
     try {
       await switchToBase();
     } catch (e) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Switch failed';
-      showToast(msg, { kind: 'error' });
+      notifyError(e, 'Switch failed');
     }
   }
 

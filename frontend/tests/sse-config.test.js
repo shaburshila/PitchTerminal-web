@@ -62,12 +62,13 @@ afterEach(() => {
 // ─── config-store unit ──────────────────────────────────────────────────────
 
 describe('config-store', () => {
-  it('starts with all-null snapshot', () => {
+  it('starts with all-null snapshot (feeBps defaults to 500 pre-bootstrap)', () => {
     const snap = getConfigSnap();
     expect(snap).toEqual({
       accessPriceWei: null,
       buyerDiscountBps: null,
       referralBps: null,
+      feeBps: 500,
       txHash: null,
     });
   });
@@ -81,6 +82,7 @@ describe('config-store', () => {
       accessPriceWei: '1',
       buyerDiscountBps: 2500,
       referralBps: null,
+      feeBps: 500,
       txHash: null,
     });
   });

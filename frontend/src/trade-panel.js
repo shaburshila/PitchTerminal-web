@@ -48,7 +48,8 @@ import { base } from 'viem/chains';
 
 import * as defaultApi from './api.js';
 import { getAccount, onAccountChange, BASE_CHAIN_ID } from './wallet.js';
-import { showToast } from './ui/toast.js';
+import { showToast, notifyError } from './ui/toast.js';
+import { isUserRejected, describeError, categorizeError } from './lib/errors.js';
 import { get as getAccessState, subscribe as subscribeAccessState } from './access-store.js';
 import {
   DEFAULT_TTL_PRESETS as TTL_PRESETS,
@@ -58,18 +59,18 @@ import {
   serializeOrder,
   validateOrderShape,
 } from './eip712.js';
-import { applyFeeToNaiveAmount, FEE_BPS as PITCHWC_FEE_BPS_FROM_LIB } from './lib/fee.js';
+import { applyFeeToNaiveAmount, feeBps as pitchwcFeeBps } from './lib/fee.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const QUOTE_DEBOUNCE_MS = 400;
 const DEFAULT_SLIPPAGE_PCT = 1.0;
 const MAX_SLIPPAGE_PCT = 10.0; // matches LimitOrderExecutor MAX_SLIPPAGE_BPS = 1000
-// pitchwc 5% — informational. The Hook quote already nets it out for market
+// pitchwc fee — informational. The Hook quote already nets it out for market
 // trades; for limit orders we use it to display a breakdown alongside the user
-// input. Funnelled through lib/fee.js so we only have ONE place that knows the
-// magic 500.
-const PITCHWC_FEE_BPS = PITCHWC_FEE_BPS_FROM_LIB;
+// input. Funnelled through lib/fee.js (`pitchwcFeeBps()`), which reads the
+// configured fee from config-store at call time — so we always render the
+// current value (500 default before /config loads), never a frozen constant.
 
 // F2.x — limit-order defaults. The TTL preset list lives in `eip712.js` so the
 // unit tests can verify the canonical shape; we only re-export the default
@@ -537,22 +538,6 @@ async function defaultSignTypedData({ account, typedData }) {
 }
 
 /**
- * MetaMask uses `code: 4001` for user rejection; viem wraps wallet errors as
- * `UserRejectedRequestError` with `code: 4001` too. Mirrors access.js — kept
- * inline rather than imported to avoid cross-module coupling.
- */
-function isUserRejection(err) {
-  if (!err) return false;
-  if (typeof err.code === 'number' && err.code === 4001) return true;
-  const cause = err.cause;
-  if (cause && typeof cause.code === 'number' && cause.code === 4001) return true;
-  if (typeof err.name === 'string' && /UserRejected/i.test(err.name)) return true;
-  const msg = (err.shortMessage || err.message || '').toLowerCase();
-  if (msg.includes('user rejected') || msg.includes('user denied')) return true;
-  return false;
-}
-
-/**
  * Truncate an address `0xabcd…7f9c` for UI labels. Returns `'tokens'` as a
  * safe fallback for falsy/short input so a success toast never reads ": ".
  * Mirrors the helper in access.js — kept inline to avoid cross-module
@@ -564,16 +549,6 @@ function isUserRejection(err) {
 function shortenAddress(addr) {
   if (typeof addr !== 'string' || addr.length < 10) return 'tokens';
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
-
-function errorMessage(err, fallback) {
-  if (!err) return fallback;
-  if (typeof err === 'string') return err;
-  if (typeof err === 'object') {
-    if ('shortMessage' in err && err.shortMessage) return String(err.shortMessage);
-    if ('message' in err && err.message) return String(err.message);
-  }
-  return fallback;
 }
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
@@ -1327,7 +1302,7 @@ export function mountTradePanel(container, options = {}) {
     const minText = formatWei(state.quote.minOutWei, 6);
     quoteOutLine.textContent = `You receive ≈ ${outText}`;
     quoteMinLine.textContent = `Minimum (after slippage): ${minText}`;
-    quoteFeeLine.textContent = `pitchwc fee: ${(PITCHWC_FEE_BPS / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
+    quoteFeeLine.textContent = `pitchwc fee: ${(pitchwcFeeBps() / 100).toFixed(1)}% + slippage ${state.slippagePct}%`;
   }
 
   /**
@@ -1741,7 +1716,7 @@ export function mountTradePanel(container, options = {}) {
     const netStr = formatWei(net, 6);
     const feeStr = formatWei(fee, 6);
     const amountStr = formatNumber(amountNum, 6);
-    const feePct = (PITCHWC_FEE_BPS / 100).toFixed(1);
+    const feePct = (pitchwcFeeBps() / 100).toFixed(1);
     const verb = state.side === 'buy' ? 'Spending' : 'Selling';
     feeHeadlineLine.textContent = `${verb} ${amountStr} ${inSym} → ≈ ${netStr} ${outSym}`;
     feeMathLine.textContent = `naive ${naiveStr} ${outSym}, ${feePct}% fee ${feeStr} ${outSym}`;
@@ -2097,7 +2072,7 @@ export function mountTradePanel(container, options = {}) {
     } catch (err) {
       state.approvePending = false;
       renderCta();
-      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
+      notifyError(err, 'Failed to connect wallet');
       return;
     }
     try {
@@ -2112,9 +2087,9 @@ export function mountTradePanel(container, options = {}) {
       // (in case the wallet sub-allowance got truncated by some odd token).
       await refreshAllowance();
     } catch (err) {
-      if (!isUserRejection(err)) {
-        showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
-      }
+      // notifyError stays silent on user-rejected (the wallet decline), so the
+      // prior `if (!isUserRejection)` guard is now folded into the helper.
+      notifyError(err, 'Approve failed');
     } finally {
       state.approvePending = false;
       renderCta();
@@ -2140,7 +2115,7 @@ export function mountTradePanel(container, options = {}) {
     } catch (err) {
       state.swapPending = false;
       renderCta();
-      showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
+      notifyError(err, 'Failed to connect wallet');
       return;
     }
     const minOut = state.quote.minOutWei;
@@ -2185,9 +2160,8 @@ export function mountTradePanel(container, options = {}) {
       refreshBalance();
       refreshAllowance();
     } catch (err) {
-      if (!isUserRejection(err)) {
-        showToast(errorMessage(err, 'Swap failed'), { kind: 'error' });
-      }
+      // Silent on user-rejected (intentional decline); otherwise toast.
+      notifyError(err, 'Swap failed');
     } finally {
       state.swapPending = false;
       renderCta();
@@ -2242,7 +2216,7 @@ export function mountTradePanel(container, options = {}) {
       signOrder = out.signOrder;
       displayTargetPriceWei = out.displayTargetPriceWei;
     } catch (err) {
-      state.limitError = errorMessage(err, 'Invalid order');
+      state.limitError = describeError(err, 'Invalid order');
       renderLimit();
       return;
     }
@@ -2254,7 +2228,7 @@ export function mountTradePanel(container, options = {}) {
     try {
       validateOrderShape(signOrder);
     } catch (err) {
-      state.limitError = errorMessage(err, 'Invalid order');
+      state.limitError = describeError(err, 'Invalid order');
       renderLimit();
       return;
     }
@@ -2280,7 +2254,7 @@ export function mountTradePanel(container, options = {}) {
       } catch (err) {
         state.limitApprovePending = false;
         renderCta();
-        showToast(errorMessage(err, 'Failed to connect wallet'), { kind: 'error' });
+        notifyError(err, 'Failed to connect wallet');
         return;
       }
       try {
@@ -2297,9 +2271,8 @@ export function mountTradePanel(container, options = {}) {
       } catch (err) {
         state.limitApprovePending = false;
         renderCta();
-        if (!isUserRejection(err)) {
-          showToast(errorMessage(err, 'Approve failed'), { kind: 'error' });
-        }
+        // Silent on user-rejected; toast otherwise.
+        notifyError(err, 'Approve failed');
         return;
       }
       // Hand-off approve→sign: set submitting BEFORE clearing approvePending
@@ -2343,13 +2316,15 @@ export function mountTradePanel(container, options = {}) {
       state.limitTriggerPriceStr = '';
       limitPriceInput.value = '';
     } catch (err) {
-      if (isUserRejection(err)) {
-        // User declined in the wallet — surface a soft notice + clear the
-        // submitting flag, no toast (matches access.js pay-flow UX).
+      if (isUserRejected(err)) {
+        // User declined in the wallet — clear the submitting flag, no toast
+        // and no inline error (matches access.js pay-flow UX).
         state.limitError = null;
       } else {
-        state.limitError = errorMessage(err, 'Failed to place order');
-        showToast(state.limitError, { kind: 'error' });
+        // Inline error mirrors the toast so the message is visible even after
+        // the toast auto-dismisses. notifyError handles the toast + wording.
+        state.limitError = describeError(err, 'Failed to place order');
+        notifyError(err, 'Failed to place order');
       }
     } finally {
       state.limitSubmitting = false;
@@ -2525,11 +2500,17 @@ export function mountTradePanel(container, options = {}) {
         if (configLoaded || destroyed) return;
         applyContracts(cfg);
       })
-      .catch(() => {
+      .catch((err) => {
         if (configLoaded || destroyed) return; // somebody else succeeded, or panel is gone
         if (configAttempt >= CONFIG_RETRY_DELAYS_MS.length) {
-          // Out of retries — surface ONE final toast. Stays disabled.
-          showToast('Failed to load config. Reload the page.', {
+          // Out of retries — surface ONE final toast. Stays disabled. A clear
+          // network/RPC outage gets connectivity wording; anything else gets
+          // the generic "reload" guidance, since the raw error message is
+          // meaningless to a user for a config-load failure.
+          const cat = categorizeError(err);
+          const message =
+            cat.category === 'rpc' ? cat.message : 'Failed to load config. Reload the page.';
+          showToast(message, {
             kind: 'error',
             duration: 8000,
           });

@@ -500,6 +500,7 @@ async function bootstrapMobile(root) {
           accessPriceWei: cfg.accessPriceWei ?? null,
           buyerDiscountBps: cfg.buyerDiscountBps ?? null,
           referralBps: cfg.referralBps ?? null,
+          feeBps: cfg.feeBps ?? null,
         });
       }
       // `autoReconnect: false` — bootstrapMobile owns the single reconnect
@@ -1057,6 +1058,7 @@ async function bootstrapMobile(root) {
               accessPriceWei: cfg.accessPriceWei ?? null,
               buyerDiscountBps: cfg.buyerDiscountBps ?? null,
               referralBps: cfg.referralBps ?? null,
+              feeBps: cfg.feeBps ?? null,
             });
           })
           .catch(() => {});
@@ -1570,6 +1572,7 @@ async function bootstrap() {
             accessPriceWei: cfg.accessPriceWei ?? null,
             buyerDiscountBps: cfg.buyerDiscountBps ?? null,
             referralBps: cfg.referralBps ?? null,
+            feeBps: cfg.feeBps ?? null,
           });
         }
         // `autoReconnect: false` — desktop bootstrap owns the single reconnect
@@ -1716,6 +1719,7 @@ async function bootstrap() {
               accessPriceWei: cfg.accessPriceWei ?? null,
               buyerDiscountBps: cfg.buyerDiscountBps ?? null,
               referralBps: cfg.referralBps ?? null,
+              feeBps: cfg.feeBps ?? null,
             });
           })
           .catch(() => {

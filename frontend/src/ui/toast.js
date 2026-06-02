@@ -20,6 +20,8 @@
  * tests of dependent modules don't need to mock DOM unless they assert UI.
  */
 
+import { categorizeError } from '../lib/errors.js';
+
 const HOST_ID = 'pt-toast-host';
 const DEFAULT_DURATION_MS = 3000;
 
@@ -116,4 +118,29 @@ export function showToast(message, opts = {}) {
     setTimeout(dismiss, duration);
   }
   return dismiss;
+}
+
+/**
+ * Classify `err` via `categorizeError` and surface it as a toast — UNLESS the
+ * classification is `silent` (user-rejected wallet prompts), in which case
+ * nothing is shown. This is the single UI entry-point for error reporting so
+ * every call site gets the same wording + the same "don't shout when the user
+ * deliberately cancelled" behaviour.
+ *
+ * Lives here (not in `lib/errors.js`) so the classifier stays UI-free and
+ * unit-testable without a DOM. Backend "soft" failures (402 premium / 429 rate
+ * limit) render as `warn` (less alarming amber) rather than `error` (red).
+ *
+ * @param {unknown} err
+ * @param {string} [fallback]  Message when the error can't be classified.
+ * @returns {(() => void) | null} The toast dismiss fn, or null when silent.
+ */
+export function notifyError(err, fallback) {
+  const { category, message, silent } = categorizeError(err, fallback);
+  if (silent) return null;
+  // 402/429 are expected, recoverable states — warn (amber), not error (red).
+  const soft =
+    category === 'backend' &&
+    (String(message).includes('premium') || /wait a moment/.test(message));
+  return showToast(message, { kind: soft ? 'warn' : 'error' });
 }

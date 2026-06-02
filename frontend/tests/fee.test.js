@@ -1,24 +1,42 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  FEE_BPS,
-  FEE_FACTOR_NUMERATOR,
   FEE_FACTOR_DENOMINATOR,
   applyFeeToNaiveAmount,
   displayToExecution,
   executionToDisplay,
   feeBps,
 } from '../src/lib/fee.js';
+import { merge as mergeConfig, _resetForTests as resetConfig } from '../src/config-store.js';
 
 const WEI = 10n ** 18n;
 
+// fee.js now reads the fee from config-store at call time; reset between tests
+// so a `merge()` in one case can't leak into the next (most cases rely on the
+// 500 pre-bootstrap default, which `_resetForTests` restores).
+afterEach(() => {
+  resetConfig();
+});
+
 describe('fee constants', () => {
-  it('matches the hardcoded 5% pitchwc fee', () => {
-    expect(FEE_BPS).toBe(500);
-    expect(FEE_FACTOR_NUMERATOR).toBe(9500);
+  it('defaults to the 5% pitchwc fee before /config loads', () => {
     expect(FEE_FACTOR_DENOMINATOR).toBe(10_000);
+    expect(feeBps()).toBe(500);
+  });
+
+  it('reflects a configured fee merged from /config at call time', () => {
+    mergeConfig({ feeBps: 300 });
+    expect(feeBps()).toBe(300);
+    // Converters pick up the new fee — 3% → numerator 9700.
+    expect(displayToExecution(10n * WEI, 'take-profit')).toBe((10n * WEI * 9700n) / 10000n);
+    const { net } = applyFeeToNaiveAmount(1n * WEI);
+    expect(net).toBe((1n * WEI * 9700n) / 10000n);
+  });
+
+  it('falls back to 500 when a config payload omits/nulls feeBps', () => {
+    mergeConfig({ feeBps: null });
     expect(feeBps()).toBe(500);
   });
 });

@@ -34,6 +34,7 @@ class TestConfigShape:
             "accessPriceWei",
             "buyerDiscountBps",
             "referralBps",
+            "feeBps",
             "walletConnect",
             "limits",
             "siwe",
@@ -54,6 +55,8 @@ class TestConfigShape:
         assert isinstance(body["accessPriceWei"], str)
         assert isinstance(body["buyerDiscountBps"], int)
         assert isinstance(body["referralBps"], int)
+        # feeBps is the static pitchwc Hook fee (500 bps) from shared.config.
+        assert body["feeBps"] == 500
 
     def test_addresses_lowercase(self, app) -> None:
         resp = app.test_client().get("/api/v1/config")

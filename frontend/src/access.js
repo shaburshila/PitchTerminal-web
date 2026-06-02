@@ -48,6 +48,7 @@ import {
 import { set as setAccessState } from './access-store.js';
 import { getAccount } from './wallet.js';
 import { showToast } from './ui/toast.js';
+import { isUserRejected, categorizeError } from './lib/errors.js';
 import { shortenAddress } from './utils/address.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -244,35 +245,6 @@ async function getDefaultPaymentClient() {
   if (_defaultPaymentClient) return _defaultPaymentClient;
   _defaultPaymentClient = await buildDefaultPaymentClient();
   return _defaultPaymentClient;
-}
-
-// ─── Wallet-rejection error detection ───────────────────────────────────────
-
-/**
- * MetaMask uses `code: 4001` for user rejection; viem wraps wallet errors as
- * `UserRejectedRequestError` with `code: 4001` too. We treat anything that
- * looks like a rejection as a silent close.
- */
-function isUserRejection(err) {
-  if (!err) return false;
-  if (typeof err.code === 'number' && err.code === 4001) return true;
-  const cause = err.cause;
-  if (cause && typeof cause.code === 'number' && cause.code === 4001) return true;
-  // viem's UserRejectedRequestError class name (no need to import the class).
-  if (typeof err.name === 'string' && /UserRejected/i.test(err.name)) return true;
-  const msg = (err.shortMessage || err.message || '').toLowerCase();
-  if (msg.includes('user rejected') || msg.includes('user denied')) return true;
-  return false;
-}
-
-function errorMessage(err) {
-  if (!err) return 'Transaction failed';
-  if (typeof err === 'string') return err;
-  if (typeof err === 'object') {
-    if ('shortMessage' in err && err.shortMessage) return String(err.shortMessage);
-    if ('message' in err && err.message) return String(err.message);
-  }
-  return 'Transaction failed';
 }
 
 // ─── Pay modal ──────────────────────────────────────────────────────────────
@@ -748,7 +720,7 @@ export function openPayModal(opts = {}) {
     } catch (err) {
       if (closed) return;
       setStatus('');
-      showError(errorMessage(err));
+      showError(categorizeError(err, 'Transaction failed').message);
     }
   })();
 
@@ -770,7 +742,7 @@ export function openPayModal(opts = {}) {
       busy = false;
       cancelBtn.disabled = false;
       updatePayButton();
-      showError(errorMessage(err));
+      showError(categorizeError(err, 'Transaction failed').message);
       return;
     }
 
@@ -877,14 +849,14 @@ export function openPayModal(opts = {}) {
       }
       close({ silent: true });
     } catch (err) {
-      if (isUserRejection(err)) {
+      if (isUserRejected(err)) {
         close({ silent: true });
         return;
       }
       busy = false;
       cancelBtn.disabled = false;
       setStatus('');
-      showError(errorMessage(err));
+      showError(categorizeError(err, 'Transaction failed').message);
       updatePayButton();
     }
   }

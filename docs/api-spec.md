@@ -299,6 +299,7 @@ Bootstrap-конфиг фронта. Доступ FREE.
   "accessPriceWei": "1000000000000000000",
   "buyerDiscountBps": 2500,
   "referralBps": 2500,
+  "feeBps": 500,
   "walletConnect": {
     "projectId": "abc123..."
   },
@@ -321,6 +322,11 @@ Bootstrap-конфиг фронта. Доступ FREE.
 вместе с `accessPriceWei` читаются из снимка `app_state.access_config` (worker
 индексирует события `PriceChanged` / `ReferralSplitUpdated` от
 `PitchTerminalAccess` и обновляет снимок + NOTIFY `pt_config`, см. §8.3).
+
+`feeBps` — фиксированная комиссия pitchwc Hook на своп (5% = 500 bps). В отличие
+от полей выше это статическая протокольная константа (`shared.config.FEE_BPS`),
+НЕ приходит из снимка `access_config` и НЕ обновляется через SSE `event: config`.
+Фронт читает её отсюда вместо хардкода (см. `frontend/src/lib/fee.js`).
 
 **Кэш и invalidation:** эндпоинт кэшируется на 60 секунд на стороне API.
 **Когда worker детектит on-chain изменение** (`setPrice` или
@@ -350,6 +356,7 @@ Rate-limit: 10 / минута / IP.
       "address": "0x...",
       "name": "Player Name",
       "symbol": "PLR",
+      "kind": "player",
       "country": "Brazil",
       "countryAddress": "0x...",
       "role": "captain",
@@ -370,6 +377,7 @@ Rate-limit: 10 / минута / IP.
       "address": "0x...",
       "name": "Brazil",
       "symbol": "BRA",
+      "kind": "country",
       "pricePitch": 0.001234,
       "askPrice": "1298947368421052631",
       "bidPrice": "1172500000000000000",
@@ -384,6 +392,8 @@ Rate-limit: 10 / минута / IP.
 }
 ```
 
+- `kind` ∈ `"player"|"country"` — присутствует на каждой строке (канонический
+  источник истины о типе токена; фронт не угадывает тип по `countryAddress`).
 - `role` ∈ `"best"|"captain"|"rookie"`. У стран поля `role`, `country`,
   `countryAddress` отсутствуют (не null — отсутствуют ключи).
 - `pricePitch` / `priceCountry` — **fee-free MID** цены (= `Hook.currentPrice`).
