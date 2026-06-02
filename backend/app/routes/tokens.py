@@ -133,6 +133,10 @@ def _serialize_token(
         "address": row["address"],
         "name": row["name"],
         "symbol": row["symbol"],
+        # `kind` ∈ {"player","country"} straight from the `tokens` row — the
+        # canonical source of truth so the frontend never has to infer the type
+        # from the presence of `countryAddress` (see chart.js `isPlayerToken`).
+        "kind": row["kind"],
         "pricePitch": float(market["price_pitch"]) / 1e18,
         "askPrice": str(int(ask_wei)) if ask_wei is not None else None,
         "bidPrice": str(int(bid_wei)) if bid_wei is not None else None,

@@ -59,13 +59,16 @@ class TestListTokens:
         assert len(body["countries"]) == 48
 
         # Spec §4.1: players carry name, role, country (NAME), countryAddress.
+        # `kind` is the canonical token-type source of truth (emitted per row).
         for p in body["players"]:
+            assert p["kind"] == "player"
             assert isinstance(p["country"], str) and p["country"] != ""
             assert p["countryAddress"].startswith("0x") and len(p["countryAddress"]) == 42
             assert p["role"] in {"best", "captain", "rookie"}
 
-        # Countries must NOT have player-specific keys.
+        # Countries carry kind="country" but NOT the player-specific keys.
         for c in body["countries"]:
+            assert c["kind"] == "country"
             assert "role" not in c
             assert "country" not in c
             assert "countryAddress" not in c

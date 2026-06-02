@@ -206,16 +206,19 @@ function readCandleColors() {
  * country price (~1.5). Marker / price-line paths don't trigger this,
  * but the candle update in ``applyPrice`` does.
  *
- * Fallback: per api-spec §4.1 ``countryAddress`` is present **only** on
- * player rows ("У стран поля role, country, countryAddress отсутствуют");
- * its presence is a reliable kind=player proxy. Profile.js + my-wallet
- * paths that DO pass ``kind`` keep working unchanged.
+ * Primary signal: ``token.kind`` (∈ {"player","country"}). Every API surface
+ * now carries it — ``/tokens`` (§4.1) emits ``kind`` per row, and the chart
+ * (§4.2), profile, and my-wallet paths already did. The ``countryAddress``
+ * branch below is therefore only a defence-in-depth fallback for any caller
+ * that hands us a token object without ``kind`` (per api-spec §4.1
+ * ``countryAddress`` is present only on player rows, so it remains a reliable
+ * kind=player proxy).
  */
 function isPlayerToken(token) {
   if (!token) return false;
   if (token.kind === 'player') return true;
   if (token.kind === 'country') return false;
-  // Kind missing — sidebar path. Fall back to api-spec invariant.
+  // `kind` absent — defence-in-depth fallback on the api-spec invariant.
   return typeof token.countryAddress === 'string' && token.countryAddress.length > 0;
 }
 
