@@ -43,7 +43,7 @@ import {
   signMessage as wagmiSignMessage,
 } from '@wagmi/core';
 import { base, baseSepolia } from 'viem/chains';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, http, fallback } from 'viem';
 
 // AppKit + WagmiAdapter — the modal owns the picker, the adapter exposes the
 // wagmi `Config` everything else in the app still consumes.
@@ -57,6 +57,25 @@ import { buildSiweConfig, setSiweHooks } from './siwe-config.js';
 
 export const SUPPORTED_CHAINS = Object.freeze([base, baseSepolia]);
 export const BASE_CHAIN_ID = base.id; // 8453
+
+// ─── Public RPC endpoints ────────────────────────────────────────────────────
+//
+// We run on free, public Base RPC only (project policy: no paid/keyed RPC).
+// A single public endpoint is a recurring source of intermittent "RPC error"
+// complaints on prod — public nodes rate-limit and have transient outages.
+// viem's `fallback([...])` transport rotates to the next URL on failure and,
+// with `rank`, periodically re-scores endpoints by latency/stability so the
+// healthiest node leads. These transports back the read path AppKit/wagmi uses
+// when a call can't go through the wallet's own provider; writes still route
+// through the connected wallet.
+//
+// All entries below are public, keyless Base endpoints.
+const BASE_MAINNET_RPCS = [
+  'https://mainnet.base.org',
+  'https://base.llamarpc.com',
+  'https://base-rpc.publicnode.com',
+];
+const BASE_SEPOLIA_RPCS = ['https://sepolia.base.org', 'https://base-sepolia-rpc.publicnode.com'];
 
 /**
  * Connector id labels — kept for back-compat with callers that branch on the
@@ -298,12 +317,22 @@ function buildAppKit(projectId) {
   const wagmiAdapter = new WagmiAdapter({
     projectId,
     networks: [base, baseSepolia],
-    // Use viem's public-RPC defaults — same as the previous setup. The
-    // contract calls in `access.js`/`trade-panel.js` go through the wallet,
-    // not these transports.
+    // Multi-endpoint fallback over public Base RPCs (project policy: no paid
+    // RPC). Previously these were bare `http()` calls that pinned us to viem's
+    // single default public node — when it rate-limited or blipped, reads
+    // surfaced as "RPC error" with no recovery. `fallback` rotates to the next
+    // URL on failure; `rank` re-scores endpoints periodically so the fastest
+    // healthy node leads. Contract writes in `access.js`/`trade-panel.js` still
+    // go through the wallet's own provider, not these transports.
     transports: {
-      [base.id]: http(),
-      [baseSepolia.id]: http(),
+      [base.id]: fallback(
+        BASE_MAINNET_RPCS.map((url) => http(url)),
+        { rank: true },
+      ),
+      [baseSepolia.id]: fallback(
+        BASE_SEPOLIA_RPCS.map((url) => http(url)),
+        { rank: true },
+      ),
     },
   });
 

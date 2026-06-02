@@ -53,6 +53,7 @@ vi.mock('viem', () => ({
     readContract: vi.fn(async () => 0n),
   })),
   http: vi.fn(() => ({})),
+  fallback: vi.fn(() => ({})),
 }));
 
 // AppKit + WagmiAdapter test doubles. The wagmi Config returned by the

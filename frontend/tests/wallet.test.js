@@ -57,6 +57,7 @@ vi.mock('viem/chains', () => ({
 vi.mock('viem', () => ({
   createPublicClient: vi.fn(() => ({})),
   http: vi.fn(() => ({})),
+  fallback: vi.fn(() => ({})),
 }));
 
 // AppKit + WagmiAdapter test doubles. `wagmiConfig` is just an opaque marker
