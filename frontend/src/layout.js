@@ -56,17 +56,10 @@ function buildHeader() {
     }),
   );
   logo.appendChild(el('span', { className: 'pt-header__logo-name', text: 'PitchTerminal' }));
-  logo.appendChild(
-    el('span', {
-      className: 'pt-header__logo-beta',
-      attrs: { 'aria-hidden': 'true' },
-      text: '· beta',
-    }),
-  );
   left.appendChild(logo);
 
   // Help (?) button — re-opens the onboarding modal. Sits immediately after
-  // the "PitchTerminal · beta" wordmark so first-time users find it right next
+  // the "PitchTerminal" wordmark so first-time users find it right next
   // to the brand. Click handler is wired in main.js. Hidden on mobile (see
   // styles/mobile.css) — mobile uses the first-visit auto-open instead.
   const helpBtn = el('button', {

@@ -170,7 +170,7 @@
 /* Header help button ----------------------------------------------------- */
 
 /* Small round chip with a single `?` glyph. Sits immediately after the
- * "PitchTerminal · beta" wordmark in the header's left cluster; compact and
+ * "PitchTerminal" wordmark in the header's left cluster; compact and
  * quiet so it reads as a secondary "what is this?" affordance. */
 .pt-header__action.pt-header__action--help {
   /* Circular footprint, slightly smaller than the other header action chips.

@@ -372,12 +372,6 @@ button {
   line-height: 1;
   letter-spacing: 0;
 }
-.pt-header__logo-beta {
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 13px;
-  letter-spacing: 0;
-}
 .pt-header__logo:hover {
   color: var(--accent);
 }
