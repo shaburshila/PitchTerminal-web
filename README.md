@@ -1,44 +1,52 @@
 # PitchTerminal Web
 
-Некастодиальный веб-терминал для просмотра и торговли токенами игроков и стран
-экосистемы [pitchwc.app](https://pitchwc.app) в сети Base L2.
+A non-custodial web terminal for the player and country token markets of
+[pitchwc.app](https://pitchwc.app) on Base L2.
 
-Проект создавался для продукта, приуроченного к чемпионату мира по футболу 2026.
-Разработка завершена; приложение больше не поддерживается и не работает публично.
-Репозиторий опубликован как технический кейс.
+The terminal was built for a product tied to the 2026 FIFA World Cup. The
+development cycle is complete, the server has been shut down, and the app is
+no longer publicly available. This repository remains available as a product
+and engineering case study.
 
-## Коротко о проекте
+![Original PitchTerminal dashboard](docs/screenshot.png)
+
+_This screenshot shows the original local prototype. The web version retained
+the market-dashboard concept but replaced local private-key trading with
+wallet connection, SIWE authentication, and non-custodial transactions._
+
+## Project facts
 
 | | |
 |---|---|
-| **Роль** | Самостоятельная продуктовая и техническая разработка |
-| **Срок** | 22 мая — 2 июня 2026 года, 12 календарных дней |
-| **Результат** | Рабочий full-stack продукт с desktop- и mobile-интерфейсами |
-| **Объём работы** | 228 коммитов одного автора |
-| **Проверка качества** | 94 тестовых файла; во время разработки использовались CI и автоматический deploy |
+| **Role** | Solo product and engineering work |
+| **Development period** | May 22–June 2, 2026 — 12 calendar days |
+| **Result** | Full-stack product with separate desktop and mobile interfaces |
+| **Development history** | 228 commits by one author during active development |
+| **Quality checks** | 94 test files; CI and automated deployment were used while the project was active |
 
-Я отвечал за продуктовую логику, UX, frontend, backend, смарт-контракты,
-тестирование, инфраструктуру и развёртывание. В разработке использовал AI как
-рабочий инструмент, а сгенерированные изменения проверял тестами и прохождением
-пользовательских сценариев.
+I handled the product flow, UX, frontend, backend, smart contracts, tests,
+infrastructure, and deployment. Claude was used during earlier iterations and
+Codex later in the project. Generated changes were reviewed through tests and
+complete user-flow checks.
 
-## Что умеет терминал
+## What the terminal does
 
-- показывает токены игроков и стран, цены, сделки и держателей;
-- поддерживает поиск, фильтры, сортировку и watchlist;
-- строит линейные и свечные графики с несколькими таймфреймами;
-- подключает пользовательский кошелёк и авторизует через SIWE;
-- отправляет рыночные сделки напрямую из браузера в Base;
-- создаёт и исполняет лимитные ордера с подписью EIP-712;
-- рассчитывает позиции, realized/unrealized PnL, ROI и историю портфеля;
-- обновляет цены, сделки и статусы ордеров через SSE;
-- управляет платным доступом и реферальной механикой onchain;
-- работает в отдельных desktop- и mobile-интерфейсах.
+- lists player and country tokens with prices, trades, and holders;
+- provides search, filters, sorting, and a browser-based watchlist;
+- displays line and candlestick charts across multiple timeframes;
+- connects a user wallet and authenticates the session through SIWE;
+- sends market trades from the browser directly to Base;
+- creates and executes EIP-712 signed limit orders;
+- calculates positions, realized and unrealized PnL, ROI, and portfolio
+  history;
+- streams price, trade, and order updates over SSE;
+- manages paid access and referral rewards onchain;
+- provides dedicated desktop and mobile layouts.
 
-Пользователь подписывает операции своим кошельком. Сервер не хранит приватные
-ключи пользователей и не распоряжается их средствами.
+Users sign transactions with their own wallets. The server does not store user
+private keys or take custody of user funds.
 
-## Архитектура
+## Architecture
 
 ```text
 Browser
@@ -46,16 +54,16 @@ Browser
   └─ wallet/viem ─> Base L2
 
 Background worker
-  ├─ собирает цены и события из Base
-  ├─ исполняет подписанные лимитные ордера
-  └─ сохраняет данные в PostgreSQL
+  ├─ indexes prices and events from Base
+  ├─ executes signed limit orders
+  └─ stores the resulting data in PostgreSQL
 ```
 
-Frontend обращается к API за рыночными и пользовательскими данными, а операции,
-которые требуют подписи, отправляет в блокчейн через кошелёк пользователя.
-Отдельный worker индексирует onchain-события и обслуживает лимитные ордера.
+The frontend reads market and account data through the API. Operations that
+require a signature are sent to Base through the user's wallet. A separate
+worker indexes onchain events and processes limit orders.
 
-## Стек
+## Stack
 
 **Frontend:** JavaScript, Vite, wagmi, viem, Reown AppKit, SIWE,
 Lightweight Charts
@@ -64,52 +72,53 @@ Lightweight Charts
 
 **Blockchain:** Solidity, Foundry, OpenZeppelin, EIP-712, Base L2
 
-**Инфраструктура:** Docker Compose, Caddy, GitHub Actions, Sentry
+**Infrastructure:** Docker Compose, Caddy, GitHub Actions, Sentry
 
-## Проверка качества
+## Testing and delivery
 
-Во время активной разработки использовались отдельные проверки для трёх слоёв
-приложения:
+The active project used separate checks for each application layer:
 
-- backend: pytest, Ruff, Black и mypy;
-- frontend: Vitest, ESLint и Prettier;
-- контракты: Forge build, test и coverage;
-- production deploy запускался только после успешного CI.
+- backend: pytest, Ruff, Black, and mypy;
+- frontend: Vitest, ESLint, and Prettier;
+- smart contracts: Forge build, tests, and coverage;
+- production deployment ran only after a successful CI run.
 
-Тесты покрывают API, SIWE-аутентификацию, расчёт портфеля и PnL,
-realtime-потоки, worker, исполнение ордеров, мобильную навигацию, торговую
-панель и смарт-контракты.
+The test suite covers the API, SIWE authentication, portfolio and PnL
+calculations, realtime streams, background workers, order execution, mobile
+navigation, the trading panel, and smart contracts.
 
-## Структура репозитория
+CI/CD is now disabled because the server is no longer running.
+
+## Repository structure
 
 ```text
-backend/      Flask API, PostgreSQL и background worker
-frontend/     Vite-приложение, desktop/mobile UI, wallet integration
-contracts/    PitchTerminalAccess и LimitOrderExecutor
-infra/        Docker Compose и Caddy
-scripts/      Развёртывание, backup, rollback и smoke checks
-docs/         Архитектура и технические спецификации
+backend/      Flask API, PostgreSQL integration, and background worker
+frontend/     Vite app, desktop/mobile UI, and wallet integration
+contracts/    PitchTerminalAccess and LimitOrderExecutor
+infra/        Docker Compose and Caddy
+scripts/      Deployment, backup, rollback, and smoke checks
+docs/         Architecture and technical specifications
 ```
 
-## Документация
+## Documentation
 
-| Документ | Содержание |
+| Document | Contents |
 |---|---|
-| [Архитектура](docs/architecture.md) | Топология, границы компонентов и принятые решения |
-| [Функциональная спецификация](docs/functional-spec.md) | Экраны, функции и пользовательские сценарии |
-| [API](docs/api-spec.md) | REST- и SSE-контракты |
-| [Схема базы данных](docs/db-schema.sql) | Каноническая схема PostgreSQL |
-| [Смарт-контракты](docs/contracts.md) | Доступ, платежи и исполнение ордеров |
-| [EIP-712](docs/eip712.md) | Формат подписей и расчёты лимитных ордеров |
-| [Runbook](docs/runbook.md) | Развёртывание и эксплуатация |
+| [Architecture](docs/architecture.md) | System topology, component boundaries, and design decisions |
+| [Functional specification](docs/functional-spec.md) | Screens, features, and user flows |
+| [API specification](docs/api-spec.md) | REST and SSE contracts |
+| [Database schema](docs/db-schema.sql) | Canonical PostgreSQL schema |
+| [Smart contracts](docs/contracts.md) | Access payments and limit-order execution |
+| [EIP-712](docs/eip712.md) | Signed order format and price calculations |
+| [Runbook](docs/runbook.md) | Deployment and operations |
 
-## Статус
+## Status
 
-Проект завершён и сохранён как портфолио-кейс. Публичного demo сейчас нет,
-поскольку исходный продукт был ограничен по времени и связан с ЧМ-2026. Сервер
-остановлен, CI/CD отключён.
+Development is complete. The original product had a limited operating window
+connected to the 2026 World Cup, and the public server is no longer running.
+The repository is not actively maintained.
 
-## Лицензия
+## License
 
-Исходный код опубликован для ознакомления. Открытая лицензия не предоставляется;
-все права защищены.
+The source code is published for review. No open-source license is granted; all
+rights are reserved.
