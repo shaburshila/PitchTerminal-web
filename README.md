@@ -1,45 +1,115 @@
-# PitchTerminal-web
+# PitchTerminal Web
 
-Веб-версия PitchTerminal — браузерный просмотрщик и торговая панель для рынков
-токенов игроков и стран [pitchwc.app](https://pitchwc.app) на Base L2.
-**Некастодиальная**: пользователи подключают свой кошелёк, сервер не хранит приватных
-ключей.
+[![CI](https://github.com/shaburshila/PitchTerminal-web/actions/workflows/ci.yml/badge.svg)](https://github.com/shaburshila/PitchTerminal-web/actions/workflows/ci.yml)
 
-> Портативная single-user версия живёт в публичном репозитории `PitchTerminal`.
-> Здесь — приватный fork с веб-архитектурой.
+Некастодиальный веб-терминал для просмотра и торговли токенами игроков и стран
+экосистемы [pitchwc.app](https://pitchwc.app) в сети Base L2.
 
-## Документация
+Проект создавался для продукта, приуроченного к чемпионату мира по футболу 2026.
+Разработка завершена; приложение больше не поддерживается и не работает публично.
+Репозиторий опубликован как технический кейс.
 
-Источники истины для архитектуры и разработки:
+## Коротко о проекте
 
-| | Документ | Что внутри |
-|---|---|---|
-| 📐 | [docs/architecture.md](docs/architecture.md) | Архитектура (HOW): топология, решения, фазы |
-| 🎯 | [docs/functional-spec.md](docs/functional-spec.md) | Функциональная спецификация (WHAT): экраны, UX |
-| 🔌 | [docs/api-spec.md](docs/api-spec.md) | REST + SSE контракты |
-| 🗄️ | [docs/db-schema.sql](docs/db-schema.sql) | Канонический Postgres DDL |
-| 🔐 | [docs/contracts.md](docs/contracts.md) | Спецификация смарт-контрактов |
-| ✍️ | [docs/eip712.md](docs/eip712.md) | EIP-712 формат ордеров, формулы |
-| 🎨 | [docs/conventions.md](docs/conventions.md) | Стиль кода, env vars, Definition of Done |
-| 📋 | [docs/plans/](docs/plans/) | Пошаговые планы для 4 агентов разработки |
+| | |
+|---|---|
+| **Роль** | Самостоятельная продуктовая и техническая разработка |
+| **Срок** | 22 мая — 2 июня 2026 года, 12 календарных дней |
+| **Результат** | Рабочий full-stack продукт с desktop- и mobile-интерфейсами |
+| **Объём работы** | 228 коммитов одного автора |
+| **Проверка качества** | 94 тестовых файла, автоматический CI и deploy после успешных проверок |
+
+Я отвечал за продуктовую логику, UX, frontend, backend, смарт-контракты,
+тестирование, инфраструктуру и развёртывание. В разработке использовал AI как
+рабочий инструмент, а сгенерированные изменения проверял тестами и прохождением
+пользовательских сценариев.
+
+## Что умеет терминал
+
+- показывает токены игроков и стран, цены, сделки и держателей;
+- поддерживает поиск, фильтры, сортировку и watchlist;
+- строит линейные и свечные графики с несколькими таймфреймами;
+- подключает пользовательский кошелёк и авторизует через SIWE;
+- отправляет рыночные сделки напрямую из браузера в Base;
+- создаёт и исполняет лимитные ордера с подписью EIP-712;
+- рассчитывает позиции, realized/unrealized PnL, ROI и историю портфеля;
+- обновляет цены, сделки и статусы ордеров через SSE;
+- управляет платным доступом и реферальной механикой onchain;
+- работает в отдельных desktop- и mobile-интерфейсах.
+
+Пользователь подписывает операции своим кошельком. Сервер не хранит приватные
+ключи пользователей и не распоряжается их средствами.
+
+## Архитектура
+
+```text
+Browser
+  ├─ REST + SSE ──> Flask API ──> PostgreSQL
+  └─ wallet/viem ─> Base L2
+
+Background worker
+  ├─ собирает цены и события из Base
+  ├─ исполняет подписанные лимитные ордера
+  └─ сохраняет данные в PostgreSQL
+```
+
+Frontend обращается к API за рыночными и пользовательскими данными, а операции,
+которые требуют подписи, отправляет в блокчейн через кошелёк пользователя.
+Отдельный worker индексирует onchain-события и обслуживает лимитные ордера.
+
+## Стек
+
+**Frontend:** JavaScript, Vite, wagmi, viem, Reown AppKit, SIWE,
+Lightweight Charts
+
+**Backend:** Python, Flask, PostgreSQL, SQLAlchemy, Alembic, SSE
+
+**Blockchain:** Solidity, Foundry, OpenZeppelin, EIP-712, Base L2
+
+**Инфраструктура:** Docker Compose, Caddy, GitHub Actions, Sentry
+
+## Проверка качества
+
+В репозитории настроены отдельные проверки для трёх слоёв приложения:
+
+- backend: pytest, Ruff, Black и mypy;
+- frontend: Vitest, ESLint и Prettier;
+- контракты: Forge build, test и coverage;
+- production deploy запускается только после успешного CI.
+
+Тесты покрывают API, SIWE-аутентификацию, расчёт портфеля и PnL,
+realtime-потоки, worker, исполнение ордеров, мобильную навигацию, торговую
+панель и смарт-контракты.
 
 ## Структура репозитория
 
-```
-backend/      Python — API (Flask) + worker (event/price/keeper/alerts)
-frontend/    Vanilla JS + Vite + wagmi/viem + WalletConnect + lightweight-charts
-contracts/   Solidity — PitchTerminalAccess + LimitOrderExecutor (Foundry)
-abis/        ABI смарт-контрактов (общие для backend и frontend)
-infra/       Docker Compose, Caddyfile, CI/CD
-scripts/     Backup, smoke-проверка, мониторинг keeper'а
-docs/        Документация (источник истины)
+```text
+backend/      Flask API, PostgreSQL и background worker
+frontend/     Vite-приложение, desktop/mobile UI, wallet integration
+contracts/    PitchTerminalAccess и LimitOrderExecutor
+infra/        Docker Compose и Caddy
+scripts/      Развёртывание, backup, rollback и smoke checks
+docs/         Архитектура и технические спецификации
 ```
 
-## Локальная разработка
+## Документация
 
-(Будет дополнено по мере прогресса фазы 0 — см.
-[docs/plans/README.md](docs/plans/README.md).)
+| Документ | Содержание |
+|---|---|
+| [Архитектура](docs/architecture.md) | Топология, границы компонентов и принятые решения |
+| [Функциональная спецификация](docs/functional-spec.md) | Экраны, функции и пользовательские сценарии |
+| [API](docs/api-spec.md) | REST- и SSE-контракты |
+| [Схема базы данных](docs/db-schema.sql) | Каноническая схема PostgreSQL |
+| [Смарт-контракты](docs/contracts.md) | Доступ, платежи и исполнение ордеров |
+| [EIP-712](docs/eip712.md) | Формат подписей и расчёты лимитных ордеров |
+| [Runbook](docs/runbook.md) | Развёртывание и эксплуатация |
+
+## Статус
+
+Проект завершён и сохранён как портфолио-кейс. Публичного demo сейчас нет,
+поскольку исходный продукт был ограничен по времени и связан с ЧМ-2026.
 
 ## Лицензия
 
-Приватный проект. Все права защищены.
+Исходный код опубликован для ознакомления. Открытая лицензия не предоставляется;
+все права защищены.
