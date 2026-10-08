@@ -8,11 +8,7 @@ development cycle is complete, the server has been shut down, and the app is
 no longer publicly available. This repository remains available as a product
 and engineering case study.
 
-![Original PitchTerminal dashboard](docs/screenshot.png)
-
-_This screenshot shows the original local prototype. The web version retained
-the market-dashboard concept but replaced local private-key trading with
-wallet connection, SIWE authentication, and non-custodial transactions._
+![PitchTerminal trading dashboard](docs/screenshot.png)
 
 ## Project facts
 
