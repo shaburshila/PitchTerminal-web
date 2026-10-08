@@ -43,7 +43,7 @@ limit_orders.json
 .playwright-mcp/
 *.png
 # ...but keep the README screenshot tracked
-!docs/screenshot.png
+!docs/pitchterminal-dashboard.png
 
 # IDE
 .idea/

@@ -8,7 +8,7 @@ development cycle is complete, the server has been shut down, and the app is
 no longer publicly available. This repository remains available as a product
 and engineering case study.
 
-![PitchTerminal trading dashboard](docs/screenshot.png)
+![PitchTerminal trading dashboard](docs/pitchterminal-dashboard.png)
 
 ## Project facts
 
