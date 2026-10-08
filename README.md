@@ -101,12 +101,13 @@ docs/         Architecture and technical specifications
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture.md) | System topology, component boundaries, and design decisions |
-| [Functional specification](docs/functional-spec.md) | Screens, features, and user flows |
-| [API specification](docs/api-spec.md) | REST and SSE contracts |
-| [Database schema](docs/db-schema.sql) | Canonical PostgreSQL schema |
-| [Smart contracts](docs/contracts.md) | Access payments and limit-order execution |
-| [EIP-712](docs/eip712.md) | Signed order format and price calculations |
-| [Runbook](docs/runbook.md) | Deployment and operations |
+| [Product and user flows](docs/functional-spec.md) | Screens, access states, trading, and portfolio behavior |
+| [API reference](docs/api-spec.md) | Implemented REST and SSE endpoints |
+| [Data model](docs/database.md) | PostgreSQL tables and ownership of stored data |
+| [Smart contracts](docs/contracts.md) | Access payments, referrals, and signed limit orders |
+| [EIP-712 order format](docs/eip712.md) | Signed fields, price units, triggers, and output bounds |
+| [Security notes](docs/security.md) | Trust boundaries, controls, and known limits |
+| [Development process](docs/development-process.md) | Scope, AI-assisted workflow, and verification |
 
 ## Status
 

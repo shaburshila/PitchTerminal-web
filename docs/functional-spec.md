@@ -1,224 +1,127 @@
-# Функциональная спецификация PitchTerminal-web
+# Product and user flows
 
-> ЧТО приложение делает — фичи, экраны, пользовательские сценарии. Дополняет
-> `architecture.md` (КАК это построено). Составлено 2026-05-23 по итогам прохода из
-> 10 тем.
->
-> **Принцип:** портативная версия PitchTerminal — это уже работающая функциональная
-> спецификация для большинства фич. Веб-версия берёт её как базу и по каждой области
-> сохраняет / меняет / добавляет / гейтит. Ниже — итог.
+PitchTerminal combined market discovery, trading, limit orders, and portfolio
+tracking for the player and country token markets of pitchwc.app. The product
+had dedicated desktop and mobile layouts.
 
-## Содержание
+This document records the implemented product surface. It does not describe a
+service that is still available.
 
-1. [Уровни доступа](#1-уровни-доступа)
-2. [Экраны и навигация](#2-экраны-и-навигация)
-3. [Просмотр токенов (sidebar)](#3-просмотр-токенов-sidebar)
-4. [График и рыночные данные](#4-график-и-рыночные-данные)
-5. [Нижние вкладки](#5-нижние-вкладки)
-6. [Торговля (маркет-ордера)](#6-торговля-маркет-ордера)
-7. [Лимит-ордера](#7-лимит-ордера)
-8. [Портфолио](#8-портфолио)
-9. [Онбординг и монетизация](#9-онбординг-и-монетизация)
-10. [Реалтайм и пограничные состояния](#10-реалтайм-и-пограничные-состояния)
-11. [Отложено на пост-MVP](#11-отложено-на-пост-mvp)
+## Access states
 
----
+The interface supported three states:
 
-## 1. Уровни доступа
+| State | Available behavior |
+|---|---|
+| Anonymous | Browse tokens, charts, trades, and public market data |
+| Wallet connected | Sign in with Ethereum and view wallet-linked state |
+| Paid or allowlisted | Use premium portfolio and order features |
 
-**Три состояния сессии, два уровня возможностей.**
+Connecting a wallet and signing in were separate actions. Wallet connection
+made transactions possible; SIWE established the server session used by
+account-specific API routes.
 
-Состояния сессии:
-- **Anonymous** — кошелёк не подключён.
-- **Connected** — кошелёк подключён и пройден SIWE-вход, но не оплачено (`hasAccess=false`).
-- **Premium** — подключён, валидная сессия, оплачено (`hasAccess=true`).
+## Market discovery
 
-По возможностям уровня **два**: Connected по возможностям идентичен Anonymous — разница
-лишь в баннере (CTA «Оплатить» вместо «Подключить») и в том, что сервер знает адрес.
+The main screen listed player and country tokens. Users could:
 
-| Функция | Anonymous / Connected | Premium |
-|---|---|---|
-| Графики, списки токенов, поиск, фильтры, change% | ✓ | ✓ |
-| Вкладки Trades, Holders | ✓ | ✓ |
-| Торговля, лимит-ордера, портфолио, вкладки My Wallet / Orders | — | ✓ |
-| Личные оверлеи графика, привязка Telegram | — | ✓ |
+- switch between player and country markets;
+- search by token name or symbol;
+- filter players by role;
+- sort and inspect price changes;
+- maintain a browser-local watchlist;
+- open a token without leaving the terminal layout.
 
-## 2. Экраны и навигация
+The selected token controlled the chart, trade history, holder view, wallet
+position, order list, and trade panel.
 
-Layout портативной версии сохраняется полностью.
+## Charts and market data
 
-- **Главный дашборд** — 3 колонки: левый sidebar (списки токенов) / центр (график,
-  тулбар, stats-бар, нижние вкладки) / правая панель (торговая).
-- **Профиль кошелька** — отдельный вид, подменяет центр+право; открывается чипом кошелька
-  в шапке. Клик по токену возвращает на дашборд.
-- **Шапка** — элементы кошелька: «Подключить кошелёк» (Anonymous) либо чип кошелька с
-  адресом и индикатором сети (Connected/Premium); чип открывает профиль.
+Each market exposed line and candlestick views across multiple timeframes. The
+chart included the latest indexed price and could display the connected
+wallet's trades and average entry data.
 
-**Гейтинг для не-premium:**
-- **Верхний баннер** — постоянная полоса для не-premium: кнопка оплаты + ссылка «Скачать
-  портативную версию».
-- **Премиум-зоны** (торговая панель, профиль, вкладки My Wallet и Orders) — показываются,
-  но **размыты (blur)**, с иконкой замка, подписью и кнопкой оплаты в оверлее. Пользователь
-  видит, что заперто, — это подталкивает к оплате.
-- Подпись в оверлее: «Требуется оплата» / «Платный функционал» — **не «подписка»** (модель
-  — разовая оплата навсегда).
+Market data came from indexed chain events. A temporary worker or RPC outage
+could make the interface stale without changing the underlying onchain state.
 
-**Мобильные устройства** — поэтапно: (A) десктоп-first → (B) базовая адаптивность →
-(C) отдельный мобильный layout, если будут время и силы.
+## Market trading
 
-## 3. Просмотр токенов (sidebar)
+The trade panel supported buy and sell flows.
 
-Бесплатно для всех, чистые рыночные данные.
+1. The user selected a market and side.
+2. The interface validated the amount and displayed the available balance.
+3. The wallet requested transaction approval where needed.
+4. The user reviewed and signed the market transaction.
+5. The browser submitted it directly to Base.
+6. Indexed trade and balance updates returned through SSE or a later REST
+   refresh.
 
-- **Вкладки** Players / Countries; **поиск** по имени и символу.
-- **Селектор периода change%** — all / 1d / 12h / 6h / 1h / 15m.
-- **Фильтр ролей** на вкладке Players — Best / Captain / Rookie.
-- **Строка токена** — имя, символ, цена (в PITCH), change% за период (роль — для игроков).
-- **Селектор сортировки** *(добавлено)* — по цене / change% / объёму, с переключателем
-  направления.
-- **Watchlist** *(добавлено)* — избранные токены через звёздочку + фильтр «только
-  избранные». Хранится в localStorage браузера → без бэкенда, работает для всех уровней.
+The backend did not hold a user key or submit market trades on the user's
+behalf.
 
-## 4. График и рыночные данные
+## Limit orders
 
-График — бесплатная флагманская часть, не размывается.
+The interface supported limit buys and take-profit orders.
 
-- **FREE:** типы (линия/свечи), таймфреймы (1m/5m/15m/1h/4h/1d), переключатель единиц
-  Country/PITCH (у стран скрыт), stats-бар, маркеры **чужих** сделок. График показывает
-  рыночную цену без учёта комиссии.
-- **PREMIUM:** личные оверлеи — маркеры **своих** сделок (стрелки B/S) и две линии средней
-  цены входа. Их тумблеры в тулбаре для не-premium скрыты.
-- **Без технических индикаторов** (MA/RSI и т.п.) — токены здесь спекулятивные,
-  bonding-curve; технический анализ не отражал бы реальности.
+1. The user selected the trigger price, input amount, slippage, and expiry.
+2. The frontend created the canonical EIP-712 payload.
+3. The wallet signed the order.
+4. The API stored the signed order.
+5. The keeper monitored armed orders.
+6. The executor submitted an eligible order to the fixed market router.
 
-## 5. Нижние вкладки
+Users could list and cancel their own orders. The contract also allowed an
+owner to invalidate a nonce directly.
 
-Четыре вкладки под графиком, все по выбранному токену.
+Execution was not guaranteed. It depended on the trigger price, expiry,
+allowance, balance, keeper availability, current router behavior, and the
+transaction succeeding on Base.
 
-| Вкладка | Содержимое | Уровень |
-|---|---|---|
-| **Trades** | История сделок (время, сторона, объём, цена эффективная и рыночная, адрес, свои подсвечены) | FREE |
-| **Holders** | Холдеры (адрес, баланс, доля, ранг) | FREE |
-| **My Wallet** | PnL по токену для подключённого кошелька | PREMIUM |
-| **Orders** | Лимит-ордера по токену + персональный kill-switch | PREMIUM |
+## Portfolio
 
-My Wallet и Orders для не-premium размыты. Кросс-токенные сводки — в профиле (§8).
+The portfolio combined indexed trades with current token balances and market
+prices. It displayed:
 
-## 6. Торговля (маркет-ордера)
+- token balances and current values;
+- realized and unrealized profit and loss;
+- ROI and cost basis;
+- per-token positions;
+- paginated wallet trade history;
+- portfolio history derived from indexed activity.
 
-Правая панель, режим Market (переключатель Market/Limit).
+Because calculations used indexed events, an incomplete index could affect the
+displayed history while onchain balances remained authoritative.
 
-- **Поля:** Buy/Sell, сумма, живая котировка, slippage, баланс. Для игроков оплата идёт
-  токеном страны, для стран — PITCH.
-- **Кнопки долей** *(добавлено)* — 25 / 50 / 75 / Max от баланса.
-- **Разбивка комиссии до сделки** *(добавлено)* — «платишь X → получишь ≈Y, эффективная
-  цена Z». 5%-комиссия подписывается явно как **комиссия протокола pitchwc, не нашего
-  терминала** — PitchTerminal с каждой сделки не берёт ничего.
-- **Некастодиальный поток:** проверка сети (Base) → попап `approve` при необходимости →
-  попап `swap` → ожидание receipt → фидбэк успех/ошибка.
-- **Premium-гейт:** панель размыта для не-premium; вне сети Base — заблокирована с
-  предложением переключиться.
-- Покупка токена игрока требует наличия токена его страны — панель показывает это явно.
+## Paid access and referrals
 
-## 7. Лимит-ордера
+Paid access was purchased through PitchTerminalAccess using the configured
+PITCH token. The contract supported:
 
-Авто-исполняемые ордера, режим Limit правой панели.
+- a configurable access price with a hard maximum;
+- an optional buyer discount and referral reward;
+- owner-managed grants and revocations;
+- protection against self-referral and invalid referral targets.
 
-- **Создание:** сторона — limit-buy (Buy+Limit, триггер при цене ≤ цели) или take-profit
-  (Sell+Limit, триггер при цене ≥ цели); стоп-лосса нет. Поля: целевая цена (с живой
-  подсказкой и предупреждением о мгновенном срабатывании), сумма (фиксируется при
-  создании), slippage, **TTL** — «без срока» либо 15м / 30м / 1ч / 3ч / 6ч / 12ч / 24ч /
-  3 суток / 7 суток.
-- **Создание ордера бесплатно и мгновенно** — это подпись EIP-712-сообщения, не
-  транзакция.
-- **Approve контракту-исполнителю** — отдельная on-chain транзакция, нужна один раз
-  на каждую пару `(input-токен × executor)`. UI до подписи ордера проверяет
-  `allowance(input, executor)` и, если её не хватает, предлагает попап `approve`.
-  Какой токен approve'ить — зависит от типа ордера:
+The profile flow allowed users to view or manage a referral code tied to their
+wallet.
 
-  | Тип ордера | venue | Input-токен (approve этого токена) |
-  |---|---|---|
-  | Limit-buy игрока | player | country-токен этого игрока |
-  | Take-profit игрока | player | сам player-токен |
-  | Limit-buy страны | country | PITCH |
-  | Take-profit страны | country | сам country-токен |
+## Realtime behavior
 
-  Дефолт — **max-approve** (один approve навсегда на эту пару). Кнопка «Approve»
-  в UI явно подписана с указанием токена («Approve BRA to enable limit orders»).
-- **Вкладка Orders:** список ордеров по токену (тип, цель, сумма, slippage, отсчёт TTL,
-  статус). Статусы: open → executing → filled / failed; cancelled; expired. Отмена
-  ордера; персональный kill-switch ставит на паузу все свои ордера. Кросс-токенный список
-  — в профиле.
+The SSE connection delivered price, trade, balance, and order changes. The UI
+could recover by reconnecting and fetching current state over REST. A lost SSE
+connection affected freshness, not transaction custody.
 
-## 8. Портфолио
+## Desktop and mobile
 
-Отдельный вид, открывается чипом кошелька. Premium (для не-premium — размытая витрина).
+Desktop used a multi-column terminal layout with the market list, chart,
+tables, and trade panel visible together. Mobile used dedicated navigation and
+modal flows rather than shrinking the desktop layout.
 
-Считается по **подключённому** кошельку. Содержимое наследуется из портативной версии:
-сводка (стоимость, realized/unrealized PnL, ROI в PITCH), позиции открытые и закрытые,
-все сделки, статистика (win rate, объём, комиссии, лучшая/худшая), аллокация (по странам /
-ролям / игроки-vs-страны), балансы (ETH + PITCH + токены стран), график стоимости портфеля
-во времени. Здесь же — **кросс-токенный список всех лимит-ордеров** пользователя.
+Both layouts shared the same API, wallet session, market state, and order
+model.
 
-## 9. Онбординг и монетизация
+## Product status
 
-**Путь пользователя:** первый визит — полный бесплатный дашборд без принуждения →
-«Подключить кошелёк» (подключение + подпись SIWE как единый вход) → состояние Connected →
-«Оплатить 1 PITCH» → `approve` (попап 1) + `buyAccess` (попап 2) → ожидание receipt →
-мгновенная разблокировка → Premium.
-
-**Повторный вход:** доступ навсегда, переплачивать не нужно; истёкшая сессия — одна
-переподпись SIWE.
-
-**Если нет PITCH:** большинство приходит уже с PITCH. На крайний случай окно оплаты
-показывает нехватку и даёт ссылку на Uniswap с предзаполненным PITCH как получаемым
-токеном. Встроенного свопа нет.
-
-**Точки входа в оплату:** верхний баннер + кнопка в каждом blur-оверлее — все открывают
-один поток оплаты. Ссылка «Скачать портативную версию» — в баннере и в окне оплаты.
-
-**Реферальная программа (двухсторонняя).** Любой пользователь может поделиться
-ссылкой вида `https://pitchterminal.app/?ref=0xWALLET` или (если он claim'нул
-читаемый handle) `https://pitchterminal.app/?ref=alex42`. Когда новый пользователь
-переходит по ссылке и оплачивает доступ — **покупатель получает скидку 25%**
-(платит 0.75 PITCH вместо 1), **реферрер получает 25% от полной цены кешбэком**
-(0.25 PITCH), treasury — 50% (0.5 PITCH). Все три доли отсчитываются от полной
-`price` и переводятся в той же on-chain транзакции. Self-link (реферрер =
-покупатель), self-contract (ссылка на адрес самого Access-контракта) и
-zero-address обрабатываются как «без реферала» — покупатель платит полную цену,
-treasury получает полную цену, скидки нет. Frontend парсит `?ref=` при первом
-визите и хранит в localStorage до следующего клика по другой ref-ссылке
-(последний выигрывает). UI оплаты явно показывает: «Цена: 1 PITCH · Реферал-
-скидка: −0.25 PITCH · К оплате: 0.75 PITCH», чтобы покупатель видел экономию.
-
-**Claim читаемого handle.** В профиле кошелька (§8) — секция «Реферальная
-ссылка»: показывает ссылку с адресом по умолчанию, плюс кнопка «Получить
-читаемое имя» открывает модалку с инпутом (`[a-z0-9_-]{4,32}`). После
-успешного claim'а ссылка переключается на handle-вариант. Один кошелёк — один
-handle; можно сменить (атомарный `PUT`) или освободить.
-
-**Привязка Telegram** — пост-MVP (см. §11).
-
-## 10. Реалтайм и пограничные состояния
-
-**Реалтайм через SSE:** канал `prices` (~5с) — живое обновление графика, цен в списке,
-stats-бара; канал `events` (~5с) — новые сделки и маркеры; канал `orders` (premium) —
-живые статусы ордеров. При обрыве — авто-переподключение.
-
-**Пограничные состояния** обрабатываются осознанно: загрузка (скелетоны); пустые состояния
-(нет сделок / холдеров / позиций / ордеров / результатов поиска — с понятной подписью);
-не та сеть (индикатор + блокировка); ошибки сделки (реверт / отклонённый попап / нехватка
-баланса — сообщение + повтор); `failed`-ордер показывает статус; обрыв SSE — индикатор
-«переподключение».
-
-**Индикатор свежести данных** *(добавлено)* — API отдаёт метку «обновлено в…»; при
-устаревании фронт показывает «данные могут быть устаревшими» — защита от торговли по
-протухшей цене, если worker/RPC забарахлили.
-
-## 11. Отложено на пост-MVP
-
-Подробности — в `todo-post-mvp.md`:
-- **Quick-buy «zap»** — однокликовая покупка токена игрока (PITCH → страна → игрок).
-- **Защитный статус `review`** для лимит-ордеров.
-- **Telegram-уведомления** — целиком, включая контрол привязки Telegram в профиле
-  (premium-only).
+The development cycle is complete. The server was shut down after the product's
+limited operating window, and the application is not maintained. The
+repository remains available as a record of the product and engineering work.
